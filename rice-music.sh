@@ -1,14 +1,36 @@
 #!/usr/bin/env bash
 # musicalist (~/.local/share/rice-apps/music): Super+M = rice-music (ein/aus).
 #   rice-music [toggle|show|hide|play-pause|next|prev|search:<begriff+mit+plus>]  – sofort
-#   rice-music --daemon                                  – Hintergrund-Prozess starten (hyprland.lua)
+#   rice-music --daemon                                  – Hintergrund-Prozess starten (Autostart)
 dir=$HOME/.local/share/rice-apps/music
-fifo=$XDG_RUNTIME_DIR/rice-music.fifo
-start() {
-    LD_PRELOAD=/usr/lib/libgtk4-layer-shell.so setsid -f "$dir/venv/bin/python" "$dir/musicd.py" "$@" \
-        >"$XDG_RUNTIME_DIR/rice-music.log" 2>&1 </dev/null
+run=${XDG_RUNTIME_DIR:-/tmp/musicalist-$UID}
+mkdir -p "$run" 2>/dev/null
+fifo=$run/rice-music.fifo
+
+# gtk4-layer-shell (nur für die Vorschau-Karte) – liegt je nach Distribution woanders; fehlt sie, startet
+# musicalist ohne Vorschau.
+layer_shell() {
+    local p
+    for p in /usr/lib/libgtk4-layer-shell.so.0 /usr/lib64/libgtk4-layer-shell.so.0 \
+             /usr/lib/*-linux-gnu/libgtk4-layer-shell.so.0 /usr/local/lib/libgtk4-layer-shell.so.0 \
+             /usr/local/lib64/libgtk4-layer-shell.so.0 /usr/lib/libgtk4-layer-shell.so; do
+        [[ -e $p ]] && { echo "$p"; return; }
+    done
 }
-{ read -r pid < "$XDG_RUNTIME_DIR/rice-music.pid"; } 2>/dev/null
+
+start() {
+    local py=$dir/venv/bin/python
+    if [[ ! -x $py ]]; then
+        echo "musicalist ist nicht (vollständig) installiert – bitte ./install.sh im Quellordner ausführen." >&2
+        command -v notify-send >/dev/null && notify-send musicalist "Nicht vollständig installiert – ./install.sh ausführen."
+        exit 1
+    fi
+    local pre; pre=$(layer_shell)
+    # nur unter Wayland vorladen (unter X11 hilft es nichts)
+    [[ -n $WAYLAND_DISPLAY && -n $pre ]] && export LD_PRELOAD=$pre${LD_PRELOAD:+:$LD_PRELOAD}
+    XDG_RUNTIME_DIR=$run setsid -f "$py" "$dir/musicd.py" "$@" >"$run/rice-music.log" 2>&1 </dev/null
+}
+{ read -r pid < "$run/rice-music.pid"; } 2>/dev/null
 running() { [[ -n $pid && -p $fifo ]] && kill -0 "$pid" 2>/dev/null; }
 if [[ $1 == --daemon ]]; then
     running && { kill "$pid"; sleep 0.6; }

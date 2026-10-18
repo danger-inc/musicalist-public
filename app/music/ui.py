@@ -5,10 +5,14 @@ import json, os, re, socket, subprocess, threading, time, urllib.request
 
 import gi
 gi.require_version("GdkPixbuf", "2.0")
-gi.require_version("Gtk4LayerShell", "1.0")
 gi.require_version("Graphene", "1.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Graphene, Gtk, Pango, PangoCairo
-from gi.repository import Gtk4LayerShell as Layer
+try:   # nur für die Vorschau-Karte; ohne gtk4-layer-shell (oder unter GNOME/X11) läuft der Player trotzdem
+    gi.require_version("Gtk4LayerShell", "1.0")
+    from gi.repository import Gtk4LayerShell as Layer
+except (ImportError, ValueError):
+    Layer = None
+import shutil
 
 import tui
 from tui import label, hbox, vbox, esc
@@ -45,7 +49,7 @@ window.preview-trigger { background-color: rgba(0, 0, 0, 0.01); }
 window.preview { background: none; backdrop-filter: blur(10px); }
 .pcard { background-color: alpha(@background, 0.6); border: 2px solid @primary; border-radius: 15px;
     padding: 11px 14px 14px; color: @foreground; }   /* oben 3 px weniger: Schrift bringt eigenen Freiraum mit */
-.pcard * { font-family: "JetBrainsMono Nerd Font", monospace; font-weight: bold; }
+.pcard * { font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", "Notes Icons", monospace; font-weight: bold; }
 .pcard label { font-size: 12px; }
 .pcard .np-title { font-size: 15px; }
 .pcard .np-artist { font-size: 12px; }
@@ -271,6 +275,8 @@ noise_reduction = 70
     def want(self, who, on):
         (self.users.add if on else self.users.discard)(who)
         if self.users and self.proc is None:
+            if not shutil.which("cava"):
+                return                      # cava fehlt → Spektrum bleibt einfach leer
             self.proc = tui.spawn_watch(["cava", "-p", self.cfg], stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL, text=True)
             threading.Thread(target=self.read, args=(self.proc,), daemon=True).start()
@@ -395,11 +401,12 @@ def coll_row(glyph, title, sub, on_open):
 # ---------- Hauptfenster ----------
 class MusicWindow(tui.TuiWindow):
     APP_ID = "de.invincible.Music"
+    ESC_CLOSES = False          # Esc soll den Player nicht zumachen (nur Super+M / q / ✕)
 
     def __init__(self, app, player, cava, srcs):
         super().__init__(app, "󰝚 musicalist", [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"),
                                               ("search", "suche", "󰍉"), ("lib", "bibliothek", "󰋑"),
-                                              ("lyrics", "text", "󰗊")],
+                                              ("lyrics", "text", "󰗊"), ("settings", "einstellungen", "󰒓")],
                          size=(900, 700), icons_only=True, hints=(("leer", "play"), ("n/p", "weiter/zurück"), ("/", "suche"),
                                                  ("l", "♥")))
         self.p, self.cava, self.srcs = player, cava, srcs
@@ -420,6 +427,7 @@ class MusicWindow(tui.TuiWindow):
         self.build_search()
         self.build_lib()
         self.build_lyrics()
+        self.build_settings()
         self.spec = Spectrum(rows=2, cell=9, height=34)
         self.spec.set_margin_top(6)
         self.spec.set_tooltip_text("live-spektrum (cava)")
@@ -438,6 +446,30 @@ class MusicWindow(tui.TuiWindow):
         self.update_state()
         self.update_queue()
         self.refresh_account()
+
+    # ---------- einstellungen ----------
+    def build_settings(self):
+        page = vbox(spacing=8)
+        page.set_margin_top(6)
+        panel = tui.Panel("einstellungen")
+        self.hover_chk = tui.Check("vorschau-karte am unteren bildschirmrand (hover)", engine.setting("hover"),
+                                   self.set_hover,
+                                   tooltip="Maus an den unteren Bildschirmrand → kleine Karte mit Titel und Knöpfen")
+        panel.body.append(self.hover_chk)
+        if preview_supported():
+            hint = "braucht wayland mit layer-shell (hyprland, sway …). bei problemen einfach aus lassen."
+        else:
+            hint = "hier nicht verfügbar: braucht gtk4-layer-shell und einen wayland-compositor mit layer-shell."
+            self.hover_chk.set_sensitive(False)
+        panel.body.append(label(hint, "dim", wrap=True, xalign=0))
+        page.append(panel)
+        self.add_page("settings", page)
+        self.on_hover_changed = None       # setzt musicd: schaltet die Vorschau live ein/aus
+
+    def set_hover(self, on):
+        engine.set_setting("hover", on)
+        if self.on_hover_changed:
+            self.on_hover_changed(on)
 
     # ---------- jetzt ----------
     def build_now(self):
@@ -711,15 +743,15 @@ class MusicWindow(tui.TuiWindow):
             self.acct_lbl.set_label("󰀄 ○")
             self.acct_lbl.set_tooltip_text("Nicht angemeldet")
             self.login_body.append(label(
-                "melde dich in zen bei music.youtube.com an und klicke dann hier. der player übernimmt die "
-                "anmeldung aus zen – dein passwort sieht er nie. ohne anmeldung gehen suche und abspielen trotzdem.",
+                "melde dich in zen oder firefox bei music.youtube.com an und klicke dann hier. der player übernimmt die "
+                "anmeldung aus dem browser – dein passwort sieht er nie. ohne anmeldung gehen suche und abspielen trotzdem.",
                 "dim", wrap=True))
-            self.login_body.append(hbox(tui.Button("󰈹 mit zen anmelden", self.login), spacing=8))
+            self.login_body.append(hbox(tui.Button("󰈹 mit zen/firefox anmelden", self.login), spacing=8))
             tui.clear(self.coll)
             self.coll_panel.set_visible(False)
 
     def login(self):
-        self.say("lese anmeldung aus zen …", seconds=30)
+        self.say("lese anmeldung aus dem browser …", seconds=30)
 
         def done(res):
             if isinstance(res, Exception):
@@ -1123,6 +1155,23 @@ class MusicWindow(tui.TuiWindow):
 
 
 # ---------- Vorschau unten mittig ----------
+def preview_supported():
+    """Vorschau-Karte braucht gtk4-layer-shell (geladen per LD_PRELOAD) und einen Compositor mit Layer-Shell."""
+    try:
+        return Layer is not None and Layer.is_supported()
+    except Exception:
+        return False
+
+
+class NoPreview:
+    """Ersatz, wenn die Vorschau nicht geht – gleiche Schnittstelle, tut nichts."""
+    def hide(self):
+        pass
+
+    def set_enabled(self, on):
+        pass
+
+
 def cursor_pos():
     """Zeigerposition (logische Pixel) direkt vom Hyprland-Socket – None, wenn das nicht klappt."""
     sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
@@ -1230,10 +1279,26 @@ class Preview:
 
         self.p.listeners.append(self.on_player)
         cava.listeners.append(self.on_spectrum)
-        self.trigger.present()
+        self.enabled = False
+        self.set_enabled(engine.setting("hover"))
+
+    def set_enabled(self, on):
+        """Vorschau an/aus (Einstellungen). Aus = kein Auslöse-Streifen am Bildschirmrand."""
+        self.enabled = bool(on)
+        if self.enabled:
+            self.trigger.present()
+        else:
+            if self.show_id is not None:
+                GLib.source_remove(self.show_id)
+                self.show_id = None
+            self.watch_id = None
+            self.hide_now()
+            self.trigger.set_visible(False)
 
     # ----- ein/aus -----
     def arm(self):
+        if not self.enabled:
+            return
         self.cancel_hide()
         if self.show_id is None and not self.card.get_visible():
             self.show_id = GLib.timeout_add(140, self.show)  # kurz verweilen: kein Aufpoppen im Vorbeiziehen

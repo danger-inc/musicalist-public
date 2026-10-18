@@ -34,7 +34,11 @@ class App(Gtk.Application):
         self.cava = ui.Cava()
         self.sources = sources.Sources()
         self.win = ui.MusicWindow(self, self.player, self.cava, self.sources)
-        self.preview = ui.Preview(self, self.player, self.cava, lambda: self.command("show"), self.sources)
+        if ui.preview_supported():
+            self.preview = ui.Preview(self, self.player, self.cava, lambda: self.command("show"), self.sources)
+        else:
+            self.preview = ui.NoPreview()
+        self.win.on_hover_changed = self.preview.set_enabled
         self.player.mpris.on_raise = lambda: self.command("show")
         if os.path.exists(FIFO):
             os.unlink(FIFO)

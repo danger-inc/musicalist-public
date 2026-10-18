@@ -14,6 +14,31 @@ AUTH_DIR = os.path.join(HERE, "auth")
 BROWSER_JSON = os.path.join(AUTH_DIR, "browser.json")   # Anmeldung für ytmusicapi
 COOKIES_TXT = os.path.join(AUTH_DIR, "cookies.txt")      # Anmeldung für yt-dlp
 STATE = os.path.join(HERE, "state.json")
+SETTINGS = os.path.join(HERE, "settings.json")
+DEFAULT_SETTINGS = {"hover": False}       # Vorschau-Karte am Bildschirmrand: standardmäßig aus
+
+
+def setting(key):
+    try:
+        with open(SETTINGS) as f:
+            return json.load(f).get(key, DEFAULT_SETTINGS.get(key))
+    except (OSError, ValueError, AttributeError):
+        return DEFAULT_SETTINGS.get(key)
+
+
+def set_setting(key, value):
+    try:
+        with open(SETTINGS) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    data[key] = value
+    try:
+        with open(SETTINGS + ".tmp", "w") as f:
+            json.dump(data, f)
+        os.replace(SETTINGS + ".tmp", SETTINGS)
+    except OSError:
+        pass
 RUNTIME = GLib.get_user_runtime_dir()
 MPV_SOCK = RUNTIME + "/rice-music-mpv.sock"
 UA = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
@@ -65,7 +90,9 @@ def browser_profiles():
     found = []
     # Zen liegt je nach Version unter ~/.config/zen (XDG) oder ~/.zen, als Flatpak unter ~/.var/app
     for base in ("~/.config/zen", "~/.zen", "~/.var/app/app.zen_browser.zen/.zen",
-                 "~/.var/app/app.zen_browser.zen/config/zen", "~/.mozilla/firefox", "~/.librewolf"):
+                 "~/.var/app/app.zen_browser.zen/config/zen", "~/.mozilla/firefox", "~/.librewolf",
+                 "~/.config/mozilla/firefox", "~/snap/firefox/common/.mozilla/firefox",
+                 "~/.var/app/org.mozilla.firefox/.mozilla/firefox", "~/.var/app/io.gitlab.librewolf-community/.librewolf"):
         found += glob.glob(os.path.expanduser(base + "/*/cookies.sqlite"))
     return found
 
@@ -104,8 +131,8 @@ def login_from_browser():
                 best = (last, rows)
     if best is None:
         if not browser_profiles():
-            raise RuntimeError("kein zen-profil gefunden (gesucht in ~/.config/zen, ~/.zen, flatpak)")
-        raise RuntimeError("keine youtube-anmeldung in zen gefunden – dort erst bei music.youtube.com einloggen")
+            raise RuntimeError("kein zen- oder firefox-profil gefunden")
+        raise RuntimeError("keine youtube-anmeldung im browser gefunden – dort erst bei music.youtube.com einloggen")
     rows = best[1]
     os.makedirs(AUTH_DIR, mode=0o700, exist_ok=True)
     os.chmod(AUTH_DIR, 0o700)
@@ -272,6 +299,25 @@ class Music:
 
 
 # ---------- Stream-Adressen ----------
+def js_runtimes():
+    """JavaScript für yt-dlp (YouTube-Signaturen): nodejs ≥ 20 vom System, sonst deno aus der eigenen Umgebung
+    (pip-Paket „deno“, kommt mit install.sh) oder vom System. Ubuntu 24.04 hat z. B. nur nodejs 18."""
+    import sys
+    node = shutil.which("node")
+    if node:
+        try:
+            out = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=5).stdout
+            if int(out.strip().lstrip("v").split(".")[0]) >= 20:
+                return {"node": {}}
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    deno = os.path.join(os.path.dirname(sys.executable), "deno")
+    deno = deno if os.access(deno, os.X_OK) else shutil.which("deno")
+    if deno:
+        return {"deno": {"path": deno}}
+    return {"node": {}}
+
+
 class Resolver:
     """Stream-Adressen über yt-dlp. Zwei getrennte Wege, damit sich nichts gegenseitig blockiert:
     - fast: ohne Anmeldung (~1,5 s, Opus ~130 kbps) – für den Titel, den man gerade anklickt
@@ -295,7 +341,7 @@ class Resolver:
         key = (kind, cookies)
         if key not in self.ydls:
             opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "format": "bestaudio/best",
-                    "js_runtimes": {"node": {}}, "skip_download": True}
+                    "js_runtimes": js_runtimes(), "skip_download": True}
             if cookies:
                 opts["cookiefile"] = cookies
             self.ydls[key] = yt_dlp.YoutubeDL(opts)

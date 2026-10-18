@@ -12,18 +12,48 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango, PangoCairo
 
 import glass
 
+
+def load_icon_font():
+    """Mitgelieferte Symbolschrift (fonts/notes-icons.ttf, Familie "Notes Icons") nur für diesen Prozess laden –
+    so erscheinen die Icons auch ohne (passende) Nerd Font auf dem System. Pango ≥ 1.56 kann das selbst,
+    sonst über fontconfig."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    for path in (os.path.join(here, "fonts", "notes-icons.ttf"),
+                 os.path.join(os.path.dirname(here), "fonts", "notes-icons.ttf")):
+        if os.path.exists(path):
+            break
+    else:
+        return False
+    try:
+        fm = PangoCairo.FontMap.get_default()
+        if hasattr(fm, "add_font_file"):
+            return bool(fm.add_font_file(path))
+    except Exception:
+        pass
+    try:
+        import ctypes, ctypes.util
+        fc = ctypes.CDLL(ctypes.util.find_library("fontconfig") or "libfontconfig.so.1")
+        fc.FcConfigGetCurrent.restype = ctypes.c_void_p
+        fc.FcConfigAppFontAddFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        return bool(fc.FcConfigAppFontAddFile(fc.FcConfigGetCurrent(), path.encode()))
+    except Exception:
+        return False
+
+
+load_icon_font()
+
 MATUGEN_CSS = os.path.expanduser("~/.cache/matugen/colors.css")
 FALLBACK = """@define-color background #1a120d; @define-color foreground #f0dfd7;
 @define-color primary #ffb68e; @define-color on_primary #532200; @define-color secondary #e5bfa9;
 @define-color tertiary #cdc98f; @define-color surface_container #271e19; @define-color outline #9e8d84;
 @define-color color9 #ffb68e;"""
-FONT = "JetBrainsMono Nerd Font"
+FONT = "JetBrainsMono Nerd Font, JetBrains Mono, Notes Icons, monospace"
 SUP = "⁰¹²³⁴⁵⁶⁷⁸⁹"
 
 CSS = """
 window.tui { color: @foreground; }
 window.tui:not(.glass) { background-color: @background; }
-window.tui * { font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace; font-weight: bold; }
+window.tui * { font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", "Notes Icons", monospace; font-weight: bold; }
 window.tui label { font-size: 13px; }
 
 .topbar { padding: 10px 14px 6px 14px; }
@@ -224,8 +254,10 @@ def _die_with_parent():
 
 
 def spawn_watch(cmd, **kw):
-    import subprocess
-    return subprocess.Popen(cmd, preexec_fn=_die_with_parent, **kw)
+    import subprocess, sys
+    if sys.platform.startswith("linux"):
+        kw["preexec_fn"] = _die_with_parent
+    return subprocess.Popen(cmd, **kw)
 
 
 def background(fn, *args, done=None):
@@ -597,17 +629,20 @@ class Spark(Gtk.Label):
 # ---------- Fenster ----------
 class TuiWindow(Gtk.ApplicationWindow):
     """Rahmenloses Glas-Fenster: Kopfzeile mit Marke + Tabs, Inhalt (Stack), Statuszeile.
-    Tasten: 1–9 Tab, Esc schließen, Strg+R neu laden (self.on_refresh)."""
+    Tasten: 1–9 Tab, Esc schließen (außer ESC_CLOSES = False), Strg+R neu laden (self.on_refresh)."""
+    ESC_CLOSES = True
 
     def __init__(self, app, brand, tabs, size=(760, 600), hints=(), icons_only=False):
-        super().__init__(application=app, title=brand, hide_on_close=True)
+        # Schließen = verstecken (App läuft weiter, nächster Start ist sofort da). Windows hat kein D-Bus, ein
+        # neuer Start fände die versteckte Instanz nicht – dort wirklich schließen.
+        super().__init__(application=app, title=brand, hide_on_close=os.name != "nt")
         # Alle drei Apps laufen in einem Prozess (rice-tui.py); jedes Fenster bekommt trotzdem
         # seine eigene Wayland-App-ID (Hyprland-Fensterregel, Icon).
         # GTK setzt die App-ID bei jedem Einblenden selbst; direkt danach (vor dem ersten Bild) überschreiben
         self.connect("map", self._on_map)
         self.connect("unmap", lambda *_: self.on_hide())
         self.set_default_size(*size)
-        self.set_decorated(False)  # Hyprland zeichnet Rahmen und Rundung
+        getattr(glass, "frame_window", lambda w: w.set_decorated(False))(self)   # Kachel-WM: rahmenlos
         self.add_css_class("pb-window")
         self.add_css_class("tui")
         self.theme = Theme.get()
@@ -656,7 +691,7 @@ class TuiWindow(Gtk.ApplicationWindow):
         self.status.set_selectable(True)  # Fehlermeldungen lassen sich markieren und kopieren
         bottom = hbox(self.status, spacing=12)
         self.hint_box = hbox(spacing=12)
-        for k, v in (("1-%d" % len(tabs), "tab"),) + tuple(hints) + (("esc", "zu"),):
+        for k, v in (("1-%d" % len(tabs), "tab"),) + tuple(hints) + ((("esc", "zu"),) if self.ESC_CLOSES else ()):
             self.hint_box.append(hbox(label(k, "accent"), label(v, "dim"), spacing=5))
         bottom.append(self.hint_box)
         self.compact = None
@@ -760,7 +795,7 @@ class TuiWindow(Gtk.ApplicationWindow):
         if kv == Gdk.KEY_Escape:
             if in_entry:
                 self.set_focus(None)
-            else:
+            elif self.ESC_CLOSES:
                 self.close()
             return True
         if state & Gdk.ModifierType.CONTROL_MASK and kv in (Gdk.KEY_r, Gdk.KEY_R):
