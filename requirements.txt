@@ -1,0 +1,4 @@
+ytmusicapi>=1.10
+yt-dlp
+yt-dlp-ejs
+requests

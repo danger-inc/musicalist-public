@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=musicalist
+Comment=YouTube Music im Terminal-Look
+Exec=@EXEC@ show
+Icon=multimedia-audio-player
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=de.invincible.Music
