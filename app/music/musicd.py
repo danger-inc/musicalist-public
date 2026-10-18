@@ -72,9 +72,11 @@ class App(Gtk.Application):
                 w.set_visible(False)
             else:
                 self.preview.hide()
+                getattr(tui.glass, "bring_here", lambda w: None)(w)   # auf aktuellen Arbeitsbereich holen
                 w.present()
         elif cmd == "show" or cmd.startswith("show:"):  # show:lyrics öffnet direkt einen Tab
             self.preview.hide()
+            getattr(tui.glass, "bring_here", lambda w: None)(w)   # auf aktuellen Arbeitsbereich holen
             w.present()
             if ":" in cmd:
                 w.show_tab(cmd.split(":", 1)[1])
@@ -89,6 +91,7 @@ class App(Gtk.Application):
         elif cmd.startswith("search:"):  # rice-music search:daft+punk
             w.query.set_text(cmd[7:].replace("+", " "))
             self.preview.hide()
+            getattr(tui.glass, "bring_here", lambda w: None)(w)   # auf aktuellen Arbeitsbereich holen
             w.present()
             w.show_tab("search")
             w.do_search()
