@@ -23,10 +23,10 @@ basics_missing() {
 if { (( UPDATE )) && basics_missing && say "Es fehlen Systempakete – werden nachinstalliert …"; } \
    || ask "Systempakete installieren (GTK4, mpv, cava, playerctl …)?"; then
     pkg_install \
-        "gtk4 gtk4-layer-shell python python-gobject python-cairo mpv cava playerctl adwaita-icon-theme" \
-        "python3 python3-venv python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-gtk4layershell-1.0 libgtk4-layer-shell0 mpv cava playerctl adwaita-icon-theme" \
-        "python3 python3-gobject python3-cairo gtk4 gtk4-layer-shell mpv cava playerctl adwaita-icon-theme" \
-        "python3 python3-gobject python3-gobject-cairo python3-gobject-Gdk typelib-1_0-Gtk-4_0 typelib-1_0-Gtk4LayerShell-1_0 mpv cava playerctl adwaita-icon-theme" \
+        "gtk4 gtk4-layer-shell python python-gobject python-cairo mpv cava playerctl adwaita-icon-theme libpulse" \
+        "python3 python3-venv python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-gtk4layershell-1.0 libgtk4-layer-shell0 mpv cava playerctl adwaita-icon-theme pulseaudio-utils" \
+        "python3 python3-gobject python3-cairo gtk4 gtk4-layer-shell mpv cava playerctl adwaita-icon-theme pulseaudio-utils" \
+        "python3 python3-gobject python3-gobject-cairo python3-gobject-Gdk typelib-1_0-Gtk-4_0 typelib-1_0-Gtk4LayerShell-1_0 mpv cava playerctl adwaita-icon-theme pulseaudio-utils" \
         || warn "Paketinstallation nicht vollständig – weiter."
 fi
 echo
@@ -68,13 +68,14 @@ refresh_desktop
 echo
 say "Prüfe …"
 check_gtk || true
-for t in mpv cava playerctl; do
+for t in mpv cava playerctl pactl; do
     if command -v "$t" >/dev/null 2>&1; then echo "  $t: ok"
     else
         case $t in
             mpv) warn "  mpv: FEHLT – ohne mpv kein Ton (Paket „mpv“)";;
             cava) echo "  cava: fehlt – nur das Spektrum bleibt leer";;
             playerctl) echo "  playerctl: fehlt – optional";;
+            pactl) echo "  pactl: fehlt – nur „andere quellen“ bleibt leer";;
         esac
     fi
 done
