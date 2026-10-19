@@ -421,6 +421,7 @@ class MusicWindow(tui.TuiWindow):
 
         self.acct_lbl = label("", "dim")
         self.header_extra.append(self.acct_lbl)
+        self.add_changelog("musicalist", os.path.dirname(os.path.realpath(__file__)))
 
         self.build_now()
         self.build_queue()

@@ -44,8 +44,8 @@ fi
 
 say "Kopiere musicalist nach $DIR …"
 mkdir -p "$DIR" "$RICE/fonts" "$BIN" "$APPS" "$ICONS"
-cp -f "$SRC"/app/music/*.py "$DIR/"
-cp -f "$SRC/app/tui.py" "$SRC/app/glass.py" "$RICE/"             # gemeinsame Bausteine der Suite
+cp -f "$SRC"/app/music/*.py "$SRC"/app/music/VERSION "$SRC"/app/music/CHANGELOG.md "$DIR/"
+cp -f "$SRC/app/tui.py" "$SRC/app/glass.py" "$SRC/app/changelog.py" "$RICE/"             # gemeinsame Bausteine der Suite
 cp -f "$SRC"/app/fonts/* "$RICE/fonts/"                           # Symbolschrift (Icons ohne Nerd Font)
 
 say "Python-Umgebung (ytmusicapi, yt-dlp) …"

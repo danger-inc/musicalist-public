@@ -92,6 +92,7 @@ button.check:hover, button.check:focus-visible { background-color: alpha(@primar
 button.flat { padding: 0 4px; border-radius: 4px; color: @primary; }
 button.flat:hover, button.flat:focus-visible { background-color: alpha(@primary, 0.18); }
 button.flat.off { color: alpha(@foreground, 0.55); }
+button.flat.news { color: @primary; border: 1px solid alpha(@primary, 0.55); }
 
 .panel { margin: 2px 0; }
 .pbody { border: 1px solid alpha(@primary, 0.45); border-top-width: 0; border-radius: 0 0 6px 6px;
@@ -243,8 +244,19 @@ def vbox(*children, spacing=4, **kw):
 
 
 def clear(box):
+    """Alle Kinder entfernen und freigeben (die entfernten Widgets sind danach nicht mehr verwendbar)."""
+    gone = []
     while (c := box.get_first_child()):
         box.remove(c)
+        gone.append(c)
+    release_later(*gone)
+
+
+def release_later(*widgets):
+    """Entfernte Widgets kurz danach freigeben (siehe release_tree). Das Wurzel-Widget behält seine Attribute,
+    falls noch Code darauf zeigt – nur seine Handler und alles darunter werden gelöst."""
+    if widgets:
+        GLib.idle_add(lambda: ([release_tree(w, keep_root_dict=True) for w in widgets], False)[1])
 
 
 def _die_with_parent():
@@ -282,6 +294,128 @@ def bars(level, steps=4):
 def battery(pct, cells=5):
     n = round(pct * cells / 100)
     return f"<span>{'▰' * n}</span><span alpha='35%'>{'▱' * (cells - n)}</span> {pct}%"
+
+
+def _track_handlers():
+    """GObject.connect merkt sich je Objekt die IDs der Python-Handler, damit release_tree genau diese trennt.
+    (Alle Handler zu löschen träfe auch GTK-eigene – GTK warnt dann beim Abbau „no handler with id“.)"""
+    from gi.repository import GObject
+    if getattr(GObject.Object, "_tracks_handlers", False):
+        return
+    for name in ("connect", "connect_after"):
+        orig = getattr(GObject.Object, name)
+
+        def wrapped(self, *args, _orig=orig, **kw):
+            hid = _orig(self, *args, **kw)
+            try:
+                self.__dict__.setdefault("_py_handler_ids", []).append(hid)
+            except AttributeError:
+                pass
+            return hid
+        setattr(GObject.Object, name, wrapped)
+    GObject.Object._tracks_handlers = True
+
+
+_track_handlers()
+
+
+def _drop_handlers(obj):
+    from gi.repository import GObject
+    ids = obj.__dict__.pop("_py_handler_ids", None) if hasattr(obj, "__dict__") else None
+    for hid in ids or ():
+        try:
+            if GObject.signal_handler_is_connected(obj, hid):
+                obj.disconnect(hid)
+        except Exception:
+            pass
+
+
+def release_tree(root, keep_root_dict=False):
+    """Widget-Baum eines geschlossenen Fensters/Tabs wirklich freigeben.
+    PyGObject-Falle: Signal-Handler, Zeichenfunktionen und Attribute der Kind-Widgets zeigen per Lambda/
+    gebundener Methode auf Fenster/Tab zurück. Diese Kreise laufen über C-Referenzen, die Pythons GC nicht
+    sieht – ohne Aufräumen bleibt alles samt Bildern für immer im Speicher. Getrennt werden nur die eigenen
+    (Python-)Handler, GTK-interne bleiben. Danach ist der Baum unbrauchbar."""
+    from gi.repository import GObject
+    nodes, stack = [], [root]
+    while stack:
+        w = stack.pop()
+        nodes.append(w)
+        c = w.get_first_child()
+        while c is not None:
+            stack.append(c)
+            c = c.get_next_sibling()
+    for w in nodes:
+        objs = [w]
+        try:
+            ctrls = w.observe_controllers()
+            objs += [ctrls.get_item(i) for i in range(ctrls.get_n_items())]
+        except Exception:
+            pass
+        # keine Modelle: die können mehrere Fenster teilen
+        for getter in ("get_adjustment", "get_hadjustment", "get_vadjustment", "get_buffer", "get_factory",
+                       "get_popover", "get_sorter"):
+            fn = getattr(w, getter, None)
+            if fn is None:
+                continue
+            try:
+                o = fn()
+            except Exception:
+                continue
+            if isinstance(o, GObject.Object):
+                objs.append(o)
+        if isinstance(w, Gtk.ColumnView):                    # Spalten haben eigene Zellen-Fabriken
+            cols = w.get_columns()
+            for i in range(cols.get_n_items()):
+                col = cols.get_item(i)
+                objs += [col, col.get_factory()]
+        if hasattr(w, "list_actions") and hasattr(w, "lookup_action"):     # eigene Aktionen (win.* …)
+            try:
+                objs += [w.lookup_action(n) for n in w.list_actions()]
+            except Exception:
+                pass
+        try:
+            for prefix in w.list_action_prefixes():
+                grp = w.get_action_group(prefix)
+                if grp is not None and hasattr(grp, "lookup_action"):
+                    objs += [grp.lookup_action(n) for n in grp.list_actions()]
+        except Exception:
+            pass
+        for o in objs:
+            if o is not None:
+                _drop_handlers(o)
+        if isinstance(w, Gtk.DrawingArea):
+            try:
+                w.set_draw_func(None)
+            except Exception:
+                pass
+        if isinstance(w, (Gtk.FlowBox, Gtk.ListBox)):
+            for setter in ("set_sort_func", "set_filter_func"):
+                try:
+                    getattr(w, setter)(None)
+                except Exception:
+                    pass
+        d = getattr(w, "__dict__", None)
+        if d and not (keep_root_dict and w is root):
+            d.clear()
+    # zuletzt die Listen leeren: GTK baut die (jetzt handlerlosen) Zeilen ab
+    for w in nodes:
+        if isinstance(w, (Gtk.ListView, Gtk.GridView, Gtk.ColumnView)):
+            try:
+                w.set_model(None)
+            except Exception:
+                pass
+
+
+def trim_memory():
+    """Freigegebenen Speicher an das System zurückgeben (glibc behält ihn sonst für spätere Anfragen)."""
+    import gc
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass                       # kein glibc (z. B. Windows/musl): egal
 
 
 # ---------- Widgets ----------
@@ -476,7 +610,9 @@ def sync_rows(box, items, key, make, update):
     keys = [key(i) for i in items]
     for k in list(rows):
         if k not in keys:
-            box.remove(rows.pop(k))
+            row = rows.pop(k)
+            box.remove(row)
+            release_later(row)
     prev = None
     for k, item in zip(keys, items):
         row = rows.get(k)
@@ -812,6 +948,48 @@ class TuiWindow(Gtk.ApplicationWindow):
                 self.close()
                 return True
         return False
+
+    def add_changelog(self, key, folder, brand=None):
+        """Versions-Knopf „v1.2.0“ oben rechts → Changelog-Fenster (folder enthält VERSION + CHANGELOG.md).
+        Nach einem Update steht beim ersten Zeigen einmal ein Hinweis in der Statuszeile."""
+        try:
+            version = open(os.path.join(folder, "VERSION")).read().strip()
+        except OSError:
+            version = ""
+        path = os.path.join(folder, "CHANGELOG.md")
+        brand = brand or key
+        b = Gtk.Button(label=f"v{version}" if version else "changelog", tooltip_text="changelog – was ist neu?",
+                       valign=Gtk.Align.CENTER, focus_on_click=False)
+        b.add_css_class("flat")
+        b.add_css_class("off")
+
+        def show(*_):
+            import changelog
+            changelog.open_window(self, brand, path, key=key, version=version or None)
+            b.remove_css_class("news")
+        b.connect("clicked", show)
+        self.header_extra.append(b)
+        self.changelog_btn = b
+        try:
+            import changelog
+            if version and changelog.check_new(key, version):
+                b.add_css_class("news")
+                b.remove_css_class("off")
+                b.set_label(f"󰋚 v{version}")
+
+                def tell(*_):
+                    self.say(f"neu in v{version} – klick oben rechts auf „v{version}“ für den changelog", seconds=12)
+                    if self._news_id:
+                        self.disconnect(self._news_id)
+                        self._news_id = None
+                self._news_id = self.connect("map", lambda *_: GLib.timeout_add(500, lambda: (tell(), False)[1]))
+                if self.get_mapped():
+                    tell()
+        except Exception as e:
+            import sys
+            print("changelog:", e, file=sys.stderr)
+
+    _news_id = None
 
     def say(self, text, error=False, seconds=6):
         """Meldung in der Statuszeile (▸ ok / ✗ fehler). Fehler stehen zusätzlich im Log (stderr)."""
