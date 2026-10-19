@@ -13,7 +13,15 @@ ICONS="$HOME/.local/share/icons/hicolor/scalable/apps"
 UPDATE=0; [[ "${1:-}" == "--update" ]] && UPDATE=1
 
 say "== musicalist installieren =="
-if ask "Systempakete installieren (GTK4, mpv, cava, playerctl …)?"; then
+# Fehlt Wichtiges (z. B. weil eine ältere Installation bei apt abgebrochen ist), installiert auch
+# ./update.sh die Systempakete nach – sonst fragt nur die normale Installation.
+basics_missing() {
+    command -v mpv >/dev/null 2>&1 || return 0
+    python3 -c 'import ensurepip, gi; gi.require_version("Gtk", "4.0")' 2>/dev/null || return 0
+    return 1
+}
+if { (( UPDATE )) && basics_missing && say "Es fehlen Systempakete – werden nachinstalliert …"; } \
+   || ask "Systempakete installieren (GTK4, mpv, cava, playerctl …)?"; then
     pkg_install \
         "gtk4 gtk4-layer-shell python python-gobject python-cairo mpv cava playerctl adwaita-icon-theme" \
         "python3 python3-venv python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-gtk4layershell-1.0 libgtk4-layer-shell0 mpv cava playerctl adwaita-icon-theme" \
@@ -33,7 +41,7 @@ cp -f "$SRC/app/tui.py" "$SRC/app/glass.py" "$RICE/"             # gemeinsame Ba
 cp -f "$SRC"/app/fonts/* "$RICE/fonts/"                           # Symbolschrift (Icons ohne Nerd Font)
 
 say "Python-Umgebung (ytmusicapi, yt-dlp) …"
-if [ ! -x "$DIR/venv/bin/python" ] || ! "$DIR/venv/bin/python" -c "import gi" 2>/dev/null; then
+if [ ! -x "$DIR/venv/bin/python" ] || ! "$DIR/venv/bin/python" -c "import gi, pip" 2>/dev/null; then
     rm -rf "$DIR/venv"
     if ! python3 -m venv --system-site-packages "$DIR/venv"; then
         warn "Konnte keine Python-Umgebung anlegen. Debian/Ubuntu/Mint: sudo apt install python3-venv – dann ./install.sh erneut."
