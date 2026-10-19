@@ -641,7 +641,7 @@ class TuiWindow(Gtk.ApplicationWindow):
         # GTK setzt die App-ID bei jedem Einblenden selbst; direkt danach (vor dem ersten Bild) überschreiben
         self.connect("map", self._on_map)
         self.connect("unmap", lambda *_: self.on_hide())
-        self.set_default_size(*size)
+        self.set_default_size(*getattr(glass, "fit_size", lambda w, h: (w, h))(*size))   # passt auf kleine Bildschirme
         getattr(glass, "frame_window", lambda w: w.set_decorated(False))(self)   # Kachel-WM: rahmenlos
         self.add_css_class("pb-window")
         self.add_css_class("tui")
