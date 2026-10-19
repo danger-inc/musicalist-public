@@ -17,7 +17,8 @@ Python-Umgebung für ytmusicapi/yt-dlp an (`~/.local/share/rice-apps/music/venv`
 übersprungen und am Ende genannt – der Rest wird trotzdem installiert.
 
 Starten: `musicalist` oder über das Anwendungsmenü. Nochmal aufrufen blendet das Fenster ein/aus;
-die Musik läuft weiter, wenn das Fenster zu ist (ganz beenden: `./uninstall.sh` oder abmelden).
+✕ / `q` beendet musicalist ganz, die Musik stoppt. Soll sie bei geschlossenem Fenster weiterlaufen:
+Tab 6 „einstellungen“ → „beim schließen im hintergrund weiterspielen“.
 
 ## Läuft auf
 
@@ -52,7 +53,7 @@ hochgeladen.
 ## Tasten
 
 Leertaste Play/Pause · n/p weiter/zurück · ←/→ spulen · +/− Lautstärke · l ♥ · / Suche · 1–6 Tabs ·
-q schließt das Fenster (Esc nicht – damit man es nicht aus Versehen zumacht).
+q schließt (Esc nicht – damit man es nicht aus Versehen zumacht).
 
 ## Hyprland (optional)
 

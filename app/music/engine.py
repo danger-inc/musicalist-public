@@ -15,7 +15,8 @@ BROWSER_JSON = os.path.join(AUTH_DIR, "browser.json")   # Anmeldung für ytmusic
 COOKIES_TXT = os.path.join(AUTH_DIR, "cookies.txt")      # Anmeldung für yt-dlp
 STATE = os.path.join(HERE, "state.json")
 SETTINGS = os.path.join(HERE, "settings.json")
-DEFAULT_SETTINGS = {"hover": False}       # Vorschau-Karte am Bildschirmrand: standardmäßig aus
+DEFAULT_SETTINGS = {"hover": False,       # Vorschau-Karte am Bildschirmrand: standardmäßig aus
+                    "background": False}  # Fenster zu → weiterspielen? Standard: nein, ganz beenden
 
 
 def setting(key):
@@ -819,6 +820,7 @@ class Mpris:
         self.p = player
         self.conn = None
         self.on_raise = None
+        self.on_quit = None
         self.info = Gio.DBusNodeInfo.new_for_xml(MPRIS_XML)
         Gio.bus_own_name(Gio.BusType.SESSION, "org.mpris.MediaPlayer2.musicalist", Gio.BusNameOwnerFlags.NONE,
                          self.acquired, None, None)
@@ -846,7 +848,7 @@ class Mpris:
     def props(self, iface):
         p = self.p
         if iface == "org.mpris.MediaPlayer2":
-            return {"CanQuit": GLib.Variant("b", False), "CanRaise": GLib.Variant("b", True),
+            return {"CanQuit": GLib.Variant("b", True), "CanRaise": GLib.Variant("b", True),
                     "HasTrackList": GLib.Variant("b", False), "Identity": GLib.Variant("s", "musicalist"),
                     "DesktopEntry": GLib.Variant("s", "de.invincible.Music"),
                     "SupportedUriSchemes": GLib.Variant("as", []), "SupportedMimeTypes": GLib.Variant("as", [])}
@@ -876,7 +878,7 @@ class Mpris:
         p = self.p
         args = params.unpack()
         act = {"Next": p.next, "Previous": p.prev, "Pause": p.pause, "PlayPause": p.toggle, "Play": p.play,
-               "Stop": p.pause, "Raise": lambda: self.on_raise and self.on_raise(), "Quit": lambda: None,
+               "Stop": p.pause, "Raise": lambda: self.on_raise and self.on_raise(), "Quit": lambda: self.on_quit and GLib.idle_add(self.on_quit),
                "OpenUri": lambda: self.open_uri(args[0])}
         if method == "Seek":
             p.seek(args[0] / 1e6, relative=True)

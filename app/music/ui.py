@@ -462,6 +462,14 @@ class MusicWindow(tui.TuiWindow):
             hint = "hier nicht verfügbar: braucht gtk4-layer-shell und einen wayland-compositor mit layer-shell."
             self.hover_chk.set_sensitive(False)
         panel.body.append(label(hint, "dim", wrap=True, xalign=0))
+        self.bg_chk = tui.Check("beim schließen im hintergrund weiterspielen", engine.setting("background"),
+                                lambda on: engine.set_setting("background", on),
+                                tooltip="Aus: ✕ / q beendet musicalist ganz, die Musik stoppt.\n"
+                                        "An: das Fenster verschwindet nur, die Musik läuft weiter.")
+        self.bg_chk.set_margin_top(10)
+        panel.body.append(self.bg_chk)
+        panel.body.append(label("aus: ✕ / q beendet musicalist, die musik stoppt. an: nur das fenster geht zu.",
+                                "dim", wrap=True, xalign=0))
         page.append(panel)
         self.add_page("settings", page)
         self.on_hover_changed = None       # setzt musicd: schaltet die Vorschau live ein/aus
@@ -520,6 +528,7 @@ class MusicWindow(tui.TuiWindow):
         opts = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=8, row_spacing=6,
                            max_children_per_line=12, homogeneous=False, halign=Gtk.Align.START)
         opts.add_css_class("opts")
+        self.ctl_opts = opts
         for w in (self.shuffle_btn, self.repeat_btn, self.auto_chk,
                   hbox(label("󰕾", "accent"), self.vol, self.vol_lbl, spacing=8)):
             opts.append(w)
@@ -1030,6 +1039,26 @@ class MusicWindow(tui.TuiWindow):
             w.set_visible(level == 0 and (w is not self.album or bool(self.album.get_label())))
         self.title.set_lines(1 if level >= 2 else 2)
 
+    @staticmethod
+    def _fit_flow(flow, fallback):
+        """Knopfreihen (FlowBox) nebeneinander halten, solange sie passen. GTK 4.14 (Ubuntu 24.04) stapelt sie
+        sonst untereinander, und sie ragen aus dem Kasten heraus."""
+        width = flow.get_parent().get_width() or fallback
+        spacing = flow.get_column_spacing()
+        n = used = 0
+        c = flow.get_first_child()
+        while c is not None:
+            if c.get_visible():
+                need = c.measure(Gtk.Orientation.HORIZONTAL, -1)[1] + (spacing if n else 0)
+                if used + need > width:
+                    break
+                used += need
+                n += 1
+            c = c.get_next_sibling()
+        n = max(1, n)
+        if flow.get_min_children_per_line() != n:
+            flow.set_min_children_per_line(n)
+
     def relayout(self):
         self._relayout_id = None
         W, H = self.get_width(), self.get_height()
@@ -1046,6 +1075,8 @@ class MusicWindow(tui.TuiWindow):
         self.cover.set_valign(Gtk.Align.CENTER)
 
         inner = W - 28                                   # Inhalt ohne Fensterränder
+        for flow in (self.np_acts, self.ctl_opts):
+            self._fit_flow(flow, inner - 60)
         avail = H - self.topbar.get_height() - self.statusbar.get_height() - 6 - 8 - 4   # Spektrum-Abstand, Seitenrand, Luft
         now = self.current_tab() == "now"
         if now:

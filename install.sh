@@ -31,8 +31,16 @@ if { (( UPDATE )) && basics_missing && say "Es fehlen Systempakete – werden na
 fi
 echo
 
-# alten Hintergrundprozess beenden (startet am Ende neu)
-{ read -r pid < "${XDG_RUNTIME_DIR:-/tmp/musicalist-$UID}/rice-music.pid" && kill "$pid"; } 2>/dev/null || true
+# alten Hintergrundprozess beenden – notfalls hart (alte Versionen konnten unter GNOME hängen);
+# lief er, wird er am Ende neu gestartet
+was_running=0
+{ read -r pid < "${XDG_RUNTIME_DIR:-/tmp/musicalist-$UID}/rice-music.pid" && kill "$pid" && was_running=1; } 2>/dev/null || true
+if command -v pgrep >/dev/null 2>&1 && pgrep -u "$(id -u)" -f "rice-apps/music/musicd.py" >/dev/null; then
+    was_running=1
+    pkill -u "$(id -u)" -f "rice-apps/music/musicd.py" || true
+    sleep 1
+    pkill -9 -u "$(id -u)" -f "rice-apps/music/musicd.py" 2>/dev/null || true
+fi
 
 say "Kopiere musicalist nach $DIR …"
 mkdir -p "$DIR" "$RICE/fonts" "$BIN" "$APPS" "$ICONS"
@@ -71,6 +79,7 @@ for t in mpv cava playerctl; do
     fi
 done
 "$DIR/venv/bin/python" -c "import ytmusicapi, yt_dlp" && echo "  ytmusicapi/yt-dlp: ok"
+GI_TYPELIB_PATH=$(ls -d /usr/local/lib/girepository-1.0 /usr/local/lib*/*/girepository-1.0 2>/dev/null | paste -sd: -)${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH} \
 "$DIR/venv/bin/python" - <<'PY'
 try:
     import gi
@@ -81,7 +90,7 @@ except Exception:
 PY
 echo
 
-[ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && { "$BIN/rice-music" --daemon || true; }
+(( was_running )) && [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && { "$BIN/rice-music" --daemon || true; }
 path_hint
 say "Fertig!  Starten mit:  musicalist   (oder über das Anwendungsmenü)"
 echo "Tastenkürzel/Autostart für Hyprland & Co.: siehe README.   Aktualisieren: ./update.sh   Entfernen: ./uninstall.sh"
