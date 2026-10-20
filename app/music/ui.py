@@ -1,4 +1,4 @@
-# musicalist – Oberfläche: Hauptfenster (Tabs jetzt/warteschlange/suche/bibliothek/text) und die
+# musicalist – Oberfläche: Hauptfenster (Tabs jetzt/warteschlange/bibliothek/lyrics/visuals/suchen) und die
 # Vorschau-Karte unten mittig (erscheint, wenn die Maus an den unteren Bildschirmrand in der Mitte fährt).
 # Alles im TUI-Stil aus ../tui.py: Cover als Braille-Pixelbild, Spektrum aus ▁▂▃▅▇ (cava), ■-Regler.
 import json, os, re, socket, subprocess, threading, time, urllib.request
@@ -19,6 +19,9 @@ from tui import label, hbox, vbox, esc
 import engine
 from engine import fmt
 import sources
+import swipe
+import verlauf
+import visuals
 
 RUNTIME = GLib.get_user_runtime_dir()
 
@@ -62,7 +65,24 @@ window.preview { background: none; backdrop-filter: blur(10px); }
 .pcard button.plike:hover label { color: @foreground; }
 .pcard .src-sep { border-top: 1px solid alpha(@primary, 0.25); padding-top: 10px; }
 .pcard button.mini { padding: 0 4px; }
-""" + sources.CSS
+/* Kopfleiste im aktuellen -ist-Stil (wie notist): umrandete Symbolknöpfe, aktiver Tab mit Namen */
+button.npchip { background: none; border: 1px solid transparent; box-shadow: none; padding: 1px 8px;
+    border-radius: 4px; color: alpha(@foreground, 0.75); min-height: 0; outline: none; }
+button.npchip:hover { border-color: alpha(@primary, 0.55); background-color: alpha(@primary, 0.10); color: @foreground; }
+button.npchip .accent { color: @primary; }
+button.ibtn, menubutton.ibtn > button { min-width: 0; min-height: 0; padding: 1px 7px; }
+menubutton.ibtn { padding: 0; }
+menubutton.ibtn > button { background: none; border: none; box-shadow: none; color: inherit; }
+popover.kpop > contents { padding: 6px 4px; min-width: 250px; }
+popover.kpop .kp-head { color: @primary; font-size: 13px; margin: 2px 10px 0 10px; }
+popover.kpop .kp-sub { color: alpha(@foreground, 0.6); font-size: 11px; margin: 0 10px 4px 10px; }
+popover.kpop .kp-rub { color: @secondary; font-size: 11px; margin: 6px 10px 2px 10px; }
+popover.kpop .kp-line { border-top: 1px solid alpha(@primary, 0.3); margin: 0 2px; min-height: 0; }
+popover.kpop button.opt .kp-key { color: alpha(@foreground, 0.45); font-size: 11px; }
+popover.kpop button.opt:hover .kp-key { color: @on_primary; }
+popover.kpop button.opt.danger { color: @tertiary; }
+popover.kpop button.opt.danger:hover { background-color: @tertiary; color: @background; }
+""" + sources.CSS + visuals.CSS + verlauf.CSS
 TICKS = " ▁▂▃▄▅▆▇█"
 
 
@@ -127,6 +147,21 @@ def braille(pb, cols, rows):
             line.append(chr(0x2800 + bits))
         lines.append("".join(line))
     return "\n".join(lines)
+
+
+def halftone(url, n):
+    """Cover → n×n Helligkeiten 0–1 (Histogramm-Ausgleich wie dither(), aber stufenlos) für visuals „orbit“."""
+    pb = fetch_pixbuf(big_thumb(url)).scale_simple(n, n, GdkPixbuf.InterpType.BILINEAR)
+    px, stride, nch = pb.get_pixels(), pb.get_rowstride(), pb.get_n_channels()
+    lum = [[0.299 * px[y * stride + x * nch] + 0.587 * px[y * stride + x * nch + 1] + 0.114 * px[y * stride + x * nch + 2]
+            for x in range(n)] for y in range(n)]
+    flat = sorted(v for row in lum for v in row)
+    total = len(flat)
+    rank, first = {}, {}
+    for i, v in enumerate(flat):
+        first.setdefault(v, i)
+        rank[v] = (first[v] + i) / 2 / total
+    return [[rank[v] for v in row] for row in lum]
 
 
 def placeholder(cols, rows):
@@ -401,12 +436,13 @@ def coll_row(glyph, title, sub, on_open):
 # ---------- Hauptfenster ----------
 class MusicWindow(tui.TuiWindow):
     APP_ID = "de.invincible.Music"
+    TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"),
+            ("lyrics", "lyrics", "󰗊"), ("visuals", "visuals", "󱑽"), ("search", "suchen", "󰍉"),
+            ("settings", "einstellungen", "󰒓")]   # einstellungen: kein Tab, sondern ⚙ oben rechts
     ESC_CLOSES = False          # Esc soll den Player nicht zumachen (nur Super+M / q / ✕)
 
     def __init__(self, app, player, cava, srcs):
-        super().__init__(app, "󰝚 musicalist", [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"),
-                                              ("search", "suche", "󰍉"), ("lib", "bibliothek", "󰋑"),
-                                              ("lyrics", "text", "󰗊"), ("settings", "einstellungen", "󰒓")],
+        super().__init__(app, "󰝚 musicalist", [(t, n, i) for t, n, i in self.TABS],
                          size=(900, 700), icons_only=True, hints=(("leer", "play"), ("n/p", "weiter/zurück"), ("/", "suche"),
                                                  ("l", "♥")))
         self.p, self.cava, self.srcs = player, cava, srcs
@@ -419,21 +455,42 @@ class MusicWindow(tui.TuiWindow):
         self.lyric_lines = []
         self.detail_tracks = []
 
-        self.acct_lbl = label("", "dim")
-        self.header_extra.append(self.acct_lbl)
+        self.tier = 0                  # 0 breit … 3 sehr schmal (Achtel-Kachel), setzt on_resize
+        self.focus_mode = False
+        self.detail_key, self.detail_names = None, {}
+        self._shorten = []             # (knopf, lang, kurz) – schmale Fenster bekommen die kurze Beschriftung
+        self.build_header()
         self.add_changelog("musicalist", os.path.dirname(os.path.realpath(__file__)))
+        self.header_extra.reorder_child_after(self.changelog_btn, self.np_chip)
 
         self.build_now()
         self.build_queue()
         self.build_search()
         self.build_lib()
         self.build_lyrics()
+        self.build_visuals()
         self.build_settings()
         self.spec = Spectrum(rows=2, cell=9, height=34)
         self.spec.set_margin_top(6)
         self.spec.set_tooltip_text("live-spektrum (cava)")
         self.content.append(self.spec)
+
+        # 2-Finger-Zurück (swipe.py, Seitenstapel): Kette endet immer auf Seite 1 „jetzt“
+        self.nav_back, self.nav_cur, self._nav_id, self._nav_skip = [], ("tab", "now"), None, False
+        self.content.remove(self.stack)
+        self.swipe = swipe.SwipeBack(self.stack, self.nav_can_back, self.nav_go_back,
+                                     blocked=lambda w: isinstance(w, tui.Meter),
+                                     where=self.nav_where, target=self.nav_target)
+        self.content.prepend(self.swipe.widget)
+        # Hörverlauf-Leiste am rechten Rand (verlauf.py) um den ganzen Inhalt
+        root = self.get_child()
+        root.remove(self.content)
+        self.drawer = verlauf.HistoryDrawer(self, self.content, player,
+                                            lambda: bool(engine.setting("history_pinned")),
+                                            lambda on: engine.set_setting("history_pinned", on))
+        root.insert_child_after(self.drawer.widget, self.topbar)
         self.show_tab("now")
+        self.update_tab_labels()
 
         keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self.on_key)
@@ -448,10 +505,241 @@ class MusicWindow(tui.TuiWindow):
         self.update_queue()
         self.refresh_account()
 
+    # ---------- Kopfleiste ----------
+    def build_header(self):
+        """[󰝚 musicalist] ¹󰝚 jetzt ²󰲸 ³󰋑 ⁴󰗊 ⁵󱑽 ⁶󰍉 ……… [󰝚 titel · künstler] v1.2 [󰀄 ●] [󰒓] [◐] ✕"""
+        top = self.topbar.get_child()
+        self.brand_lbl = top.get_first_child()
+        # Kopfleiste darf schmaler werden als ihr Inhalt (Achtel-Kachel) – set_tier() räumt dann auf.
+        # Ohne das bestimmt sie die Mindestbreite des Fensters (~500 px), Hyprland und GTK streiten → Ruckeln.
+        self.topbar.set_child(None)
+        self.topbar.set_child(Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+                                                 vscrollbar_policy=Gtk.PolicyType.NEVER, propagate_natural_width=True,
+                                                 propagate_natural_height=True, child=top))
+        self.glass_btn = next((w for w in self._children(top) if isinstance(w, tui.glass.GlassToggle)), None)
+        for tid, b in self.tab_btns:
+            if tid == "settings":
+                b.set_visible(False)
+        first = self.hint_box.get_first_child()
+        if first is not None and first.get_first_child() is not None:
+            first.get_first_child().set_label(f"1-{len(self.TABS) - 1}")
+        # was läuft – nur wenn nicht auf Seite 1 und genug Platz
+        self.np_chip = Gtk.Button(focus_on_click=False, tooltip_text="läuft – zu ¹ jetzt")
+        self.np_chip.add_css_class("npchip")
+        self.np_chip_lbl = label("", ellipsize=True)
+        self.np_chip_lbl.set_max_width_chars(30)
+        self.np_chip.set_child(hbox(label("󰝚", "accent"), self.np_chip_lbl, spacing=6))
+        self.np_chip.connect("clicked", lambda *_: self.show_tab("now"))
+        self.header_extra.append(self.np_chip)
+        # Konto
+        self.acct_lbl = label("󰀄 ○")
+        self.acct_btn = Gtk.MenuButton(child=self.acct_lbl, tooltip_text="konto", valign=Gtk.Align.CENTER)
+        self.acct_btn.add_css_class("tbtn")
+        self.acct_btn.add_css_class("ibtn")
+        pop = Gtk.Popover(has_arrow=False)
+        pop.add_css_class("tpop")
+        pop.add_css_class("kpop")
+        self.acct_box = vbox(spacing=1)
+        pop.set_child(self.acct_box)
+        pop.connect("show", lambda *_: self.fill_account_menu())
+        self.acct_btn.set_popover(pop)
+        self.acct_pop = pop
+        self.header_extra.append(self.acct_btn)
+        self.gear_btn = tui.Button("󰒓", lambda: self.show_tab("settings"), tooltip="einstellungen (,)")
+        self.gear_btn.add_css_class("ibtn")
+        self.header_extra.append(self.gear_btn)
+
+    def add_page(self, tid, widget, scroll=True):
+        """Wie tui.TuiWindow.add_page, aber waagerecht EXTERNAL statt NEVER: die Seite zwingt dem Fenster
+        keine Mindestbreite auf (schmale Kacheln), set_tier() sorgt dafür, dass der Inhalt trotzdem passt."""
+        if scroll:
+            widget = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.EXTERNAL, child=widget, vexpand=True)
+        tui.TuiWindow.add_page(self, tid, widget, scroll=False)
+
+    @staticmethod
+    def _children(w):
+        c = w.get_first_child()
+        while c is not None:
+            yield c
+            c = c.get_next_sibling()
+
+    def fill_account_menu(self):
+        """Kontomenü im Stil des notist-Dateimenüs. Der Kontoname wird bewusst nie gezeigt."""
+        box = self.acct_box
+        tui.clear(box)
+        on = self.account is not None
+        box.append(label("󰀄  konto", "kp-head"))
+        box.append(label("● angemeldet · youtube music" if on else "○ nicht angemeldet – suche geht trotzdem",
+                         "kp-sub", wrap=True))
+
+        def rub(text):
+            line = Gtk.Box()
+            line.add_css_class("kp-line")
+            box.append(line)
+            if text:
+                box.append(label(text, "kp-rub"))
+
+        def item(icon, text, fn, key="", danger=False):
+            b = Gtk.Button(focus_on_click=False)
+            b.add_css_class("opt")
+            if danger:
+                b.add_css_class("danger")
+            b.set_child(hbox(label(icon, xalign=0.5), label(text, hexpand=True), label(key, "kp-key"), spacing=10))
+            b.connect("clicked", lambda *_: (self.acct_pop.popdown(), fn()))
+            box.append(b)
+
+        rub("anmeldung")
+        if on:
+            item("󰑐", "anmeldung neu einlesen", self.login)
+        else:
+            item("󰍂", "mit zen / firefox anmelden", self.login)
+        rub("bibliothek")
+        if on:
+            item("󰋑", "lieblingssongs", lambda: self.open_detail("playlist", "LM"))
+        item("󰲸", "playlists & sammlung", self.lib_home, "³")
+        item("󰋚", "hörverlauf", self.drawer.toggle, "h")
+        rub("")
+        item("󰒓", "einstellungen", lambda: self.show_tab("settings"), ",")
+        item("↗", "youtube music im browser", lambda: subprocess.Popen(["xdg-open", "https://music.youtube.com"],
+                                                                         start_new_session=True))
+        if on:
+            item("󰍃", "abmelden", self.do_logout, danger=True)
+
+    def update_tab_labels(self):
+        """Aktiver Tab mit Namen (wie notist), die anderen nur Symbol; sehr schmal: alle nur Symbol."""
+        cur = self.current_tab()
+        for tid, (name_lbl, icon_lbl) in self.tab_names.items():
+            name_lbl.set_visible(tid == cur and self.tier < 2)
+            name_lbl.set_margin_start(5)
+        chip = self.p.current is not None and cur != "now" and self.tier == 0 and not self.focus_mode
+        self.np_chip.set_visible(chip)
+
+    def set_tier(self, tier):
+        if tier == self.tier:
+            return
+        self.tier = tier
+        self.brand_lbl.set_label("󰝚" if tier >= 2 else "󰝚 musicalist")
+        self.changelog_btn.set_visible(tier == 0)
+        if self.glass_btn is not None:
+            self.glass_btn.set_visible(tier < 3)
+        self.gear_btn.set_visible(tier < 3)
+        for b, long, short in self._shorten:
+            b.set_label(short if tier >= 2 else long)
+        for chk in (self.hover_chk, self.bg_chk):
+            chk.text.set_wrap(tier >= 1)
+        self.set_ctl_narrow(tier >= 2)
+        self.visuals.set_narrow(tier >= 2)
+        self.drawer.set_narrow(tier >= 2)
+        self.update_track_labels()
+        self.update_tab_labels()
+
+    def _sh(self, btn, long, short):
+        self._shorten.append((btn, long, short))
+        return btn
+
+    # ---------- Navigation (2-Finger-Zurück) ----------
+    TAB_SUP = {"now": "¹ ", "queue": "² ", "lib": "³ ", "lyrics": "⁴ ", "visuals": "⁵ ", "search": "⁶ ", "settings": ""}
+
+    def nav_loc(self):
+        tab = self.current_tab() or "now"
+        if tab == "lib" and self.lib_stack.get_visible_child_name() == "detail" and self.detail_key:
+            return ("detail",) + self.detail_key
+        return ("tab", tab)
+
+    def nav_title(self, loc):
+        if loc[0] == "detail":
+            return self.detail_names.get(loc[1:], {"album": "album", "artist": "künstler",
+                                                    "history": "verlauf"}.get(loc[1], "playlist"))
+        names = {t: n for t, n, _i in self.TABS}
+        return self.TAB_SUP.get(loc[1], "") + names.get(loc[1], loc[1])
+
+    def nav_where(self):
+        loc = self.nav_loc()
+        return loc, self.nav_title(loc)
+
+    def nav_note(self):
+        if self._nav_id is None and hasattr(self, "nav_back"):
+            self._nav_id = GLib.idle_add(self.nav_commit)
+
+    def nav_commit(self):
+        self._nav_id = None
+        loc = self.nav_loc()
+        skip, self._nav_skip = self._nav_skip, False
+        if loc == self.nav_cur:
+            return False
+        if loc == ("tab", "now"):
+            self.nav_back = []                 # Seite 1 ist immer das Ende der Zurück-Kette
+        elif not skip and (not self.nav_back or self.nav_back[-1] != self.nav_cur):
+            self.nav_back.append(self.nav_cur)
+            del self.nav_back[:-40]
+        self.nav_cur = loc
+        return False
+
+    def nav_can_back(self):
+        return self.nav_loc() != ("tab", "now") and not self.focus_mode
+
+    def _nav_next(self, pop):
+        cur = self.nav_loc()
+        stack = self.nav_back if pop else list(self.nav_back)
+        while stack:
+            loc = stack.pop()
+            if loc != cur:
+                return loc
+        return ("tab", "now")
+
+    def nav_target(self):
+        loc = self._nav_next(pop=False)
+        return loc, self.nav_title(loc)
+
+    def nav_go_back(self):
+        loc = self._nav_next(pop=True)
+        self._nav_skip = True
+        if loc[0] == "detail":
+            self.open_detail(loc[1], loc[2])
+        else:
+            if loc[1] == "lib":
+                self.lib_stack.set_visible_child_name("home")
+            self.show_tab(loc[1])
+        self.nav_note()
+
+    def lib_home(self):
+        self.lib_stack.set_visible_child_name("home")
+        self.show_tab("lib")
+        self.nav_note()
+
+    # ---------- visuals ----------
+    def build_visuals(self):
+        self.visuals = visuals.Visuals(self.p, self.cava, halftone, lambda: engine.setting("visual"),
+                                       lambda m: engine.set_setting("visual", m), lambda _x: self.toggle_focus())
+        self.visuals.set_margin_top(4)
+        self.add_page("visuals", self.visuals, scroll=False)
+        self.visuals.update_track()
+
+    def toggle_focus(self, on=None):
+        """Vollbild nur mit der Visualisierung (f, Esc zurück)."""
+        on = (not self.focus_mode) if on is None else on
+        if on == self.focus_mode:
+            return
+        self.focus_mode = on
+        if on and self.current_tab() != "visuals":
+            self.show_tab("visuals")
+        for w in (self.topbar, self.statusbar):
+            w.set_visible(not on)
+        self.visuals.bar.set_visible(not on)
+        self.visuals.full_btn.set_visible(not on)
+        self.visuals.hint.set_label("esc zurück" if on else "v modus · f vollbild")
+        (self.fullscreen if on else self.unfullscreen)()
+        self.schedule_relayout()
+        self.update_tab_labels()
+
     # ---------- einstellungen ----------
     def build_settings(self):
         page = vbox(spacing=8)
         page.set_margin_top(6)
+        # ganz oben: Konto (Status + Anmeldung neu einlesen) – der Kontoname wird nie gezeigt
+        self.set_acct = vbox(spacing=8)
+        page.append(tui.Panel("󰀄 konto", self.set_acct))
+        self.fill_settings_account()
         panel = tui.Panel("einstellungen")
         self.hover_chk = tui.Check("vorschau-karte am unteren bildschirmrand (hover)", engine.setting("hover"),
                                    self.set_hover,
@@ -474,6 +762,22 @@ class MusicWindow(tui.TuiWindow):
         page.append(panel)
         self.add_page("settings", page)
         self.on_hover_changed = None       # setzt musicd: schaltet die Vorschau live ein/aus
+
+    def fill_settings_account(self):
+        box = getattr(self, "set_acct", None)
+        if box is None:
+            return
+        tui.clear(box)
+        if self.account is not None:
+            box.append(hbox(label("● angemeldet · youtube music", "accent", hexpand=True, ellipsize=True),
+                            tui.Button("󰑐 anmeldung neu einlesen", self.login,
+                                       tooltip="Anmeldung erneut aus Zen/Firefox übernehmen"),
+                            tui.Button("abmelden", self.do_logout, danger=True), spacing=8))
+        else:
+            box.append(hbox(label("○ nicht angemeldet", "dim", hexpand=True),
+                            tui.Button("󰍂 mit zen / firefox anmelden", self.login), spacing=8))
+        box.append(label("liest die anmeldung aus deinem browser (music.youtube.com) – nötig, wenn likes, "
+                         "bibliothek oder radio nicht mehr gehen.", "dim", wrap=True, xalign=0))
 
     def set_hover(self, on):
         engine.set_setting("hover", on)
@@ -533,9 +837,10 @@ class MusicWindow(tui.TuiWindow):
         for w in (self.shuffle_btn, self.repeat_btn, self.auto_chk,
                   hbox(label("󰕾", "accent"), self.vol, self.vol_lbl, spacing=8)):
             opts.append(w)
-        ctl = vbox(hbox(self.prev_btn, self.play_btn, self.next_btn, self.pos_lbl, self.seek, self.dur_lbl,
-                        spacing=8),
-                   opts, spacing=10)
+        self.seek_box = hbox(self.pos_lbl, self.seek, self.dur_lbl, spacing=8, hexpand=True)
+        self.ctl_row = hbox(self.prev_btn, self.play_btn, self.next_btn, self.seek_box, spacing=8)
+        ctl = vbox(self.ctl_row, opts, spacing=10)
+        self.ctl_box = ctl
         self.ctl_panel = tui.Panel("steuerung", ctl)
         page.append(self.ctl_panel)
 
@@ -556,6 +861,27 @@ class MusicWindow(tui.TuiWindow):
         self._relayout_id = None
         self.add_page("now", page)
 
+    def set_ctl_narrow(self, narrow):
+        """Sehr schmal: Zeitleiste in eine eigene Zeile unter Zurück/Play/Weiter."""
+        inrow = self.seek_box.get_parent() is self.ctl_row
+        if narrow and inrow:
+            self.ctl_row.remove(self.seek_box)
+            self.ctl_box.insert_child_after(self.seek_box, self.ctl_row)
+        elif not narrow and not inrow:
+            self.ctl_box.remove(self.seek_box)
+            self.ctl_row.append(self.seek_box)
+
+    def update_track_labels(self):
+        t = self.p.current
+        narrow = self.tier >= 2
+        liked = bool(t and t.get("liked"))
+        self.like_btn.set_label(("󰋑" if liked else "󰋕") + ("" if narrow else " gefällt mir"))
+        self.radio_btn.set_label("󰐹" if narrow else "󰐹 radio")
+        self.web_btn.set_label("↗" if narrow else "↗ browser")
+        self.shuffle_btn.set_label("󰒝" if narrow else "󰒝 mischen")
+        if t is not None:
+            self.np_chip_lbl.set_label(f"{t['title']} · {t['artist']}")
+
     def on_seek(self, v):
         if self.p.dur:
             self.p.seek(v / 1000 * self.p.dur)
@@ -572,7 +898,10 @@ class MusicWindow(tui.TuiWindow):
 
     def on_spectrum(self, vals):
         if self.get_visible():
-            self.spec.set_vals(vals)
+            if self.current_tab() == "visuals":
+                self.visuals.on_spectrum(vals)
+            else:
+                self.spec.set_vals(vals)
 
     def on_sources(self, items):
         if self.src_panel.get_visible() != bool(items):
@@ -585,10 +914,11 @@ class MusicWindow(tui.TuiWindow):
         page.set_margin_top(6)
         self.queue_panel = tui.Panel("warteschlange")
         self.queue_box = vbox(spacing=0)
-        self.queue_empty = label("leer – unter ³suche titel auswählen", "empty", xalign=0.5)
+        self.queue_empty = label("leer – unter ⁶suchen titel auswählen", "empty", xalign=0.5)
         self.queue_panel.body.append(hbox(label("", hexpand=True),
-                                          tui.Button("󰒝 mischen", self.p.shuffle_queue),
-                                          tui.Button("󰐹 radio auffüllen", self.p.extend_radio),
+                                          self._sh(tui.Button("󰒝 mischen", self.p.shuffle_queue), "󰒝 mischen", "󰒝"),
+                                          self._sh(tui.Button("󰐹 radio auffüllen", self.p.extend_radio),
+                                                     "󰐹 radio auffüllen", "󰐹 radio"),
                                           tui.Button("leeren", lambda: self.p.clear(), danger=True)))
         self.queue_panel.body.append(self.queue_box)
         self.queue_panel.body.append(self.queue_empty)
@@ -710,11 +1040,13 @@ class MusicWindow(tui.TuiWindow):
         self.detail_panel = tui.Panel("")
         self.detail_box = vbox(spacing=0)
         self.detail_panel.body.append(hbox(
-            tui.Button("‹ zurück", lambda: self.lib_stack.set_visible_child_name("home")),
+            self._sh(tui.Button("‹ zurück", self.lib_home), "‹ zurück", "‹"),
             label("", hexpand=True),
-            tui.Button("󰐊 abspielen", lambda: self.p.play_tracks(self.detail_tracks)),
-            tui.Button("󰒝 zufällig", lambda: self.p.play_tracks(self.detail_tracks, shuffle=True)),
-            tui.Button("+ alle anhängen", lambda: [self.p.add(t) for t in self.detail_tracks]), spacing=8))
+            self._sh(tui.Button("󰐊 abspielen", lambda: self.p.play_tracks(self.detail_tracks)), "󰐊 abspielen", "󰐊"),
+            self._sh(tui.Button("󰒝 zufällig", lambda: self.p.play_tracks(self.detail_tracks, shuffle=True)),
+                       "󰒝 zufällig", "󰒝"),
+            self._sh(tui.Button("+ alle anhängen", lambda: [self.p.add(t) for t in self.detail_tracks]),
+                       "+ alle anhängen", "+ alle"), spacing=8))
         self.detail_panel.body.append(self.detail_box)
         detail.append(self.detail_panel)
         self.lib_stack.add_named(detail, "detail")
@@ -741,6 +1073,7 @@ class MusicWindow(tui.TuiWindow):
             self.load_library()
 
     def fill_login(self):
+        self.fill_settings_account()
         tui.clear(self.login_body)
         if self.account:
             # Kontoname wird bewusst nirgends angezeigt – nur der Status
@@ -799,8 +1132,10 @@ class MusicWindow(tui.TuiWindow):
         tui.background(self.p.music.library, done=done)
 
     def open_detail(self, kind, ident):
+        self.detail_key = (kind, ident)
         self.show_tab("lib")
         self.lib_stack.set_visible_child_name("detail")
+        self.nav_note()
         self.detail_panel.set_title("lädt …")
         tui.clear(self.detail_box)
         fn = {"playlist": self.p.music.playlist, "album": self.p.music.album,
@@ -812,6 +1147,7 @@ class MusicWindow(tui.TuiWindow):
                 self.detail_panel.set_title("fehler")
                 return
             title, tracks = res
+            self.detail_names[(kind, ident)] = title
             self.detail_tracks = tracks
             total = sum(t["duration"] or 0 for t in tracks)
             self.detail_panel.set_title(f"{esc(title)} <span alpha='60%'>{len(tracks)} · {fmt(total)}</span>",
@@ -975,9 +1311,13 @@ class MusicWindow(tui.TuiWindow):
         t = self.p.current
         self.cover.show(t["thumb"] if t else None)
         self.title.set_label(t["title"] if t else "nichts läuft")
-        self.artist.set_label(t["artist"] if t else "super+m · ³suche")
+        self.artist.set_label(t["artist"] if t else "super+m · ⁶suchen")
         self.album.set_label(t["album"] if t else "")
-        self.like_btn.set_label("󰋑 gefällt mir" if t and t.get("liked") else "󰋕 gefällt mir")
+        self.update_track_labels()
+        if hasattr(self, "visuals"):
+            self.visuals.update_track()
+        if hasattr(self, "np_chip"):
+            self.update_tab_labels()
         (self.like_btn.add_css_class if t and t.get("liked") else self.like_btn.remove_css_class)("on")
         for b in (self.like_btn, self.radio_btn, self.web_btn):
             b.set_sensitive(t is not None)
@@ -1009,8 +1349,11 @@ class MusicWindow(tui.TuiWindow):
         self.pos_lbl.set_label(fmt(p.pos))
         self.dur_lbl.set_label(fmt(dur))
         self.seek.set_value(int(p.pos / dur * 1000) if dur else 0)
-        if self.current_tab() == "lyrics":
+        tab = self.current_tab()
+        if tab == "lyrics":
             self.sync_lyrics()
+        elif tab == "visuals":
+            self.visuals.update_pos()
 
     # ---------- Fenster ----------
     def on_show(self):
@@ -1120,7 +1463,7 @@ class MusicWindow(tui.TuiWindow):
             GLib.timeout_add(60, self.fix_overflow, row_h, upcoming)
         else:
             self.spec.set_height(max(self.SPEC_MIN, min(96, int(H * 0.09))))
-        self.spec.set_visible(H >= 300)
+        self.spec.set_visible(H >= 300 and self.current_tab() != "visuals" and not self.focus_mode)
         return False
 
     def fix_overflow(self, row_h, upcoming):
@@ -1145,20 +1488,37 @@ class MusicWindow(tui.TuiWindow):
         return False
 
     def on_compact(self, compact):
-        self.acct_lbl.set_visible(not compact)
+        pass
 
     def on_resize(self, width, height):
+        # Stufen: so passt musicalist auch in eine Achtel-Kachel (360 px) – vorher war das Fenster
+        # mindestens ~530 px breit, Hyprland und GTK stritten dann um die Größe (ruckeln).
+        self.set_tier(0 if width >= 820 else 1 if width >= 600 else 2 if width >= 440 else 3)
         self.schedule_relayout()
         if self.current_tab() == "lyrics":
             self.center_lyric(jump=True)
 
     def tab_changed(self, tab):
         self.schedule_relayout()
+        self.nav_note()
+        self.update_tab_labels()
+        if tab == "visuals":
+            self.visuals.update_track()
         if tab == "lyrics":
             self.load_lyrics()
             GLib.timeout_add(60, lambda: self.sync_lyrics(jump=True) and False)
         if tab == "search":
             GLib.idle_add(lambda: self.query.grab_focus() and False)
+
+    def _key(self, c, kv, code, state):
+        """Vor tui.TuiWindow._key (das Esc sonst immer schluckt): Vollbild/Leiste schließen."""
+        if kv == Gdk.KEY_Escape and getattr(self, "focus_mode", False):
+            self.toggle_focus(False)
+            return True
+        if kv == Gdk.KEY_Escape and hasattr(self, "drawer") and self.drawer.is_open():
+            self.drawer.close()
+            return True
+        return tui.TuiWindow._key(self, c, kv, code, state)
 
     def on_key(self, _c, kv, _code, state):
         focus = self.get_focus()
@@ -1175,6 +1535,14 @@ class MusicWindow(tui.TuiWindow):
             self.p.like()
         elif kv == Gdk.KEY_slash:
             self.show_tab("search")
+        elif kv == Gdk.KEY_h:
+            self.drawer.toggle()
+        elif kv == Gdk.KEY_comma:
+            self.show_tab("settings")
+        elif kv == Gdk.KEY_f and self.current_tab() == "visuals":
+            self.toggle_focus()
+        elif kv == Gdk.KEY_v and self.current_tab() == "visuals":
+            self.visuals.cycle()
         elif kv in (Gdk.KEY_Left, Gdk.KEY_Right) and not isinstance(focus, tui.Meter):
             self.p.seek(-5 if kv == Gdk.KEY_Left else 5, relative=True)
         elif kv in (Gdk.KEY_plus, Gdk.KEY_KP_Add, Gdk.KEY_equal):

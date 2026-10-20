@@ -15,8 +15,11 @@ BROWSER_JSON = os.path.join(AUTH_DIR, "browser.json")   # Anmeldung für ytmusic
 COOKIES_TXT = os.path.join(AUTH_DIR, "cookies.txt")      # Anmeldung für yt-dlp
 STATE = os.path.join(HERE, "state.json")
 SETTINGS = os.path.join(HERE, "settings.json")
+HISTORY = os.path.join(HERE, "history.json")   # eigener Hörverlauf (nur lokal, wird nie veröffentlicht)
 DEFAULT_SETTINGS = {"hover": False,       # Vorschau-Karte am Bildschirmrand: standardmäßig aus
-                    "background": False}  # Fenster zu → weiterspielen? Standard: nein, ganz beenden
+                    "background": False,  # Fenster zu → weiterspielen? Standard: nein, ganz beenden
+                    "visual": "orbit",    # Modus der Seite „visuals“
+                    "history_pinned": False}  # Hörverlauf-Leiste rechts angeheftet
 
 
 def setting(key):
@@ -458,6 +461,54 @@ class Mpv:
 
 
 # ---------- Player ----------
+class History:
+    """Lokaler Hörverlauf für die Verlaufsleiste: neueste zuerst, je Eintrag Titel + Zeitpunkt."""
+    KEEP = 400
+
+    def __init__(self):
+        try:
+            with open(HISTORY) as f:
+                self.items = [x for x in json.load(f) if isinstance(x, dict) and x.get("videoId")]
+        except (OSError, ValueError):
+            self.items = []
+        self._save_id = None
+
+    def add(self, t):
+        if not t or not t.get("videoId"):
+            return False
+        now = time.time()
+        top = self.items[0] if self.items else None
+        if top and top["videoId"] == t["videoId"] and now - top.get("at", 0) < 600:
+            top["at"] = now                     # gleicher Titel gleich wieder (wiederholen/neu laden) = ein Eintrag
+        else:
+            keep = {k: t.get(k) for k in ("videoId", "title", "artist", "album", "duration", "thumb")}
+            keep["at"] = now
+            self.items.insert(0, keep)
+            del self.items[self.KEEP:]
+        if self._save_id is None:
+            self._save_id = GLib.timeout_add_seconds(3, self.save)
+        return True
+
+    def remove(self, i):
+        if 0 <= i < len(self.items):
+            del self.items[i]
+            self.save()
+
+    def clear(self):
+        self.items = []
+        self.save()
+
+    def save(self):
+        self._save_id = None
+        try:
+            with open(HISTORY + ".tmp", "w") as f:
+                json.dump(self.items, f, ensure_ascii=False)
+            os.replace(HISTORY + ".tmp", HISTORY)
+        except OSError:
+            pass
+        return False
+
+
 class Player:
     """Warteschlange + Wiedergabe. listeners bekommen (was) bei Änderungen:
     'track' (anderer Titel), 'state' (Pause/Laden), 'pos' (Zeit), 'queue', 'volume', 'error:<text>'."""
@@ -466,6 +517,7 @@ class Player:
         self.music = Music()
         self.resolver = Resolver()
         self.listeners = []
+        self.history = History()
         self.queue, self.index = [], -1
         self.pos, self.dur, self.paused, self.loading, self.volume = 0.0, 0.0, True, False, 70
         self.repeat, self.shuffle, self.autoplay = "aus", False, True
@@ -685,6 +737,8 @@ class Player:
         self.stream_info = None
         self.emit("track")
         self.emit("state")
+        # In den Verlauf erst nach 5 s echter Wiedergabe (Durchskippen zählt nicht) – siehe on_mpv „time-pos“
+        self._hist = {"t": t, "played": 0.0, "last": None}
 
         def done(res):
             if gen != self.gen:  # inzwischen anderer Titel gewählt
@@ -725,6 +779,15 @@ class Player:
             name, val = msg.get("name"), msg.get("data")
             if name == "time-pos" and val is not None:
                 self.pos = val
+                h = getattr(self, "_hist", None)
+                if h is not None and not self.paused and not self.loading:
+                    if h["last"] is not None and 0 < val - h["last"] < 1.5:   # Sprünge (Spulen) zählen nicht
+                        h["played"] += val - h["last"]
+                    h["last"] = val
+                    if h["played"] >= 5 and h["t"] is self.current:
+                        self._hist = None
+                        if self.history.add(h["t"]):
+                            self.emit("history")
                 self.emit("pos")
             elif name == "duration" and val:
                 self.dur = val
