@@ -990,6 +990,28 @@ class TuiWindow(Gtk.ApplicationWindow):
         except Exception as e:
             import sys
             print("changelog:", e, file=sys.stderr)
+        # neuere Version auf GitHub? → Knopf „󰚰 v1.2.0 → v1.3.0“ + einmal Hinweis in der Statuszeile
+        try:
+            import changelog
+
+            def has_update(latest):
+                b.add_css_class("news")
+                b.remove_css_class("off")
+                b.set_label(f"󰚰 v{version} → v{latest}")
+                b.set_tooltip_text(changelog.update_text(latest) + " · klick: changelog")
+                if self.get_mapped():
+                    self.say(changelog.update_text(latest), seconds=12)
+                else:
+                    hid = [None]
+
+                    def later(*_):
+                        self.disconnect(hid[0])
+                        GLib.timeout_add(700, lambda: (self.say(changelog.update_text(latest), seconds=12), False)[1])
+                    hid[0] = self.connect("map", later)
+            getattr(changelog, "check_update", lambda *a: None)(key, version, has_update)
+        except Exception as e:
+            import sys
+            print("update-check:", e, file=sys.stderr)
 
     _news_id = None
 
