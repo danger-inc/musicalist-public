@@ -483,7 +483,7 @@ class MusicWindow(tui.TuiWindow):
                                      where=self.nav_where, target=self.nav_target)
         self.content.prepend(self.swipe.widget)
         # Hörverlauf-Leiste am rechten Rand (verlauf.py) um den ganzen Inhalt
-        root = self.get_child()
+        root = self.root
         root.remove(self.content)
         self.drawer = verlauf.HistoryDrawer(self, self.content, player,
                                             lambda: bool(engine.setting("history_pinned")),

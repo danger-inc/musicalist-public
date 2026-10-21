@@ -839,7 +839,9 @@ class TuiWindow(Gtk.ApplicationWindow):
         self.content.set_margin_end(14)
         self.content.append(self.stack)
         self.topbar, self.statusbar = handle, bottom  # für Apps, die ihren Platz selbst einteilen
-        self.set_child(vbox(handle, self.content, bottom, spacing=0))
+        # .root = echter Inhalt; get_child() kann die Glas-Unterlage (Overlay, glass.underlay) liefern
+        self.root = vbox(handle, self.content, bottom, spacing=0)
+        self.set_child(self.root)
 
         keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self._key)
