@@ -1,5 +1,18 @@
 # musicalist – Änderungen
 
+## 1.4.0 (2026-10-21)
+- **Rechtsklick auf jeden Titel** (jetzt, warteschlange, suche, bibliothek, hörverlauf): abspielen, als nächstes, anhängen, radio, **zu playlist hinzufügen**, gefällt mir, künstler/album öffnen, link kopieren – in der Warteschlange auch verschieben und entfernen.
+- **Zu Playlist hinzufügen** geht jetzt überall: Knopf **󰐒 playlist** beim laufenden Titel, Taste `a`, 󰐒 in jeder Suchzeile, „󰐒 als playlist“ für die ganze Warteschlange. Die zuletzt benutzte Playlist steht oben, neue Playlists lassen sich direkt anlegen.
+- **Suche schneller**: Ergebnisse kommen schon beim Tippen (eine Anfrage statt zwei, ~0,4 s statt ~1,6 s) und bleiben 10 Minuten gemerkt. Darunter erscheinen **Vorschläge – der erste groß**, `Tab` übernimmt ihn. Oben steht der **beste Treffer** als großer Kasten.
+- **Schneller abspielen**: Liegt die Maus kurz auf einem Titel, wird er schon vorbereitet – der Klick spielt dann sofort.
+- **Lyrics passen jetzt zum Gesang**: Songtexte kommen zuerst von LRCLIB mit Zeitstempeln, die zur Länge genau dieses Titels passen (YouTubes Zeitstempel lagen teils mehrere Sekunden daneben). Texte ohne Zeitstempel werden nicht mehr „geraten“ markiert. Feinjustieren mit `[` und `]`.
+- **Lyrics laden vorab**: beim Titelwechsel (auch für den nächsten Titel), nicht erst beim Klick auf ⁴ lyrics.
+- **Kein Rauschen mehr in Kopfhörern**: Das Spektrum hielt den Audio-Ausgang auch bei Pause wach – es läuft jetzt nur noch, solange Musik spielt.
+- **Visuals „linien“ und „matrix“ laufen flüssig**: linien wandern stufenlos statt in Sprüngen, matrix zeichnet rund 10× schneller.
+- **Hörverlauf abschaltbar** (einstellungen → hörverlauf führen) und dort auch löschbar.
+- **Tastenhinweise auch im halben Fenster**, `?` zeigt die komplette Liste aller Tasten.
+- **Steuern, auch wenn musicalist zu ist**: `Super+Alt+N` / `Super+Alt+P` = weiter/zurück, `Super+Alt+Leertaste` = play/pause. In der Hover-Vorschau gehen jetzt auch `n` / `p`.
+
 ## 1.3.0 (2026-10-20)
 - **Neue Seite ⁵ visuals**: große Live-Visualisierung zur Musik, im Look der Suite – *orbit* (Cover als Punktraster mit Spektrum-Strahlen), *säulen*, *linien* und *matrix*. `v` wechselt den Modus, `f` = Vollbild (Esc zurück).
 - **Hörverlauf-Leiste**: Maus an den linken Fensterrand → einzeilige Zeitachse der zuletzt gehörten Titel, nach Tagen sortiert. Ein Titel landet dort nach 5 s Wiedergabe. Klick spielt, + / » hängt an. Mit 󰐃 anheften, `h` öffnet und schließt sie.

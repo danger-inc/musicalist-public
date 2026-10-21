@@ -105,6 +105,7 @@ class HistoryDrawer:
         self.win, self.p = win, player
         self.is_pinned, self.set_pinned = is_pinned, set_pinned
         self.narrow = False
+        self.enabled = True          # Einstellung „hörverlauf führen“ – aus: keine Kante, keine Leiste
         self._close_id = None
         self.widget = Gtk.Box(vexpand=True, hexpand=True)
         self.pin_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_RIGHT, transition_duration=160,
@@ -178,8 +179,16 @@ class HistoryDrawer:
     def is_open(self):
         return self.rev.get_reveal_child()
 
+    def set_enabled(self, on):
+        self.enabled = bool(on)
+        if not on:
+            self.close()
+        self._apply(animate=False)
+
     def open(self):
         self._cancel_close()
+        if not self.enabled:
+            return
         if self.is_pinned() and not self.narrow:
             return
         if not self.is_open():
@@ -231,12 +240,12 @@ class HistoryDrawer:
             self._apply()
 
     def _apply(self, animate=True):
-        show = self.is_pinned() and not self.narrow
+        show = self.is_pinned() and not self.narrow and self.enabled
         self.pin_rev.set_transition_duration(160 if animate else 0)
         if show:
             self._fill(self.pin_list)
         self.pin_rev.set_reveal_child(show)
-        self.edge.set_visible(not show)
+        self.edge.set_visible(not show and self.enabled)
 
     # ---------- Inhalt ----------
     def _on_player(self, what):
@@ -245,6 +254,14 @@ class HistoryDrawer:
                 self._fill(self.list)
             if self.pin_rev.get_reveal_child():
                 self._fill(self.pin_list)
+
+    def _remove(self, it):
+        items = self.p.history.items
+        for i, x in enumerate(items):
+            if x is it:
+                self.p.history.remove(i)
+                break
+        self._on_player("history")
 
     def _clear(self):
         self.p.history.clear()
@@ -307,6 +324,9 @@ class HistoryDrawer:
             acts.append(mb)
         acts.set_visible(False)
         row = hbox(b, acts, spacing=0)
+        songs = getattr(self.win, "songs", None)
+        if songs is not None:          # Rechtsklick-Menü wie überall + Vorwärmen beim Überfahren
+            songs.attach(row, t, lambda: [("✕", "aus dem verlauf entfernen", lambda: self._remove(it), True)])
         mo = Gtk.EventControllerMotion()
         mo.connect("enter", lambda c, x, y: c.get_widget().get_last_child().set_visible(True))
         mo.connect("leave", lambda c: c.get_widget().get_last_child().set_visible(False))

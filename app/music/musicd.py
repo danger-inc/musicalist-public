@@ -52,6 +52,11 @@ class App(Gtk.Application):
         self.cava = ui.Cava()
         self.sources = sources.Sources()
         self.win = ui.MusicWindow(self, self.player, self.cava, self.sources)
+        # Spektrum (cava) nur, solange wirklich Musik läuft – sonst hält es den Ausgang wach (Kopfhörer rauschen)
+        p = self.player
+        p.listeners.append(lambda what: what in ("state", "track") and
+                           self.cava.set_playing(p.started and not p.paused and p.current is not None))
+        self.cava.set_playing(p.started and not p.paused and p.current is not None)
         if ui.preview_supported():
             self.preview = ui.Preview(self, self.player, self.cava, lambda: self.command("show"), self.sources)
         else:

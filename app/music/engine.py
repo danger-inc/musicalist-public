@@ -19,7 +19,8 @@ HISTORY = os.path.join(HERE, "history.json")   # eigener Hörverlauf (nur lokal,
 DEFAULT_SETTINGS = {"hover": False,       # Vorschau-Karte am Bildschirmrand: standardmäßig aus
                     "background": False,  # Fenster zu → weiterspielen? Standard: nein, ganz beenden
                     "visual": "orbit",    # Modus der Seite „visuals“
-                    "history_pinned": False}  # Hörverlauf-Leiste rechts angeheftet
+                    "history_pinned": False,  # Hörverlauf-Leiste angeheftet
+                    "history": True}          # Hörverlauf führen (aus = nichts wird gemerkt, Leiste weg)
 
 
 def setting(key):
@@ -81,7 +82,9 @@ def track(d):
     if isinstance(thumbs, dict):
         thumbs = thumbs.get("thumbnails", [])
     album = d.get("album")
+    artist_id = next((a.get("id") for a in arts if a.get("id")), None) or d.get("artistId")
     return {"videoId": d["videoId"], "title": d.get("title") or "?",
+            "artistId": artist_id, "albumId": (album.get("id") if isinstance(album, dict) else None) or d.get("albumId"),
             "artist": ", ".join(a["name"] for a in arts if a.get("name")) or d.get("author", ""),
             "album": album.get("name", "") if isinstance(album, dict) else (album or ""),
             "duration": d.get("duration_seconds") or secs(d.get("duration") or d.get("length") or 0),
@@ -244,12 +247,35 @@ class Music:
         self._yt = None
 
     def search(self, q, kind):
+        # limit 20: passt in eine Antwort (~0,4 s) – 40 braucht eine zweite Anfrage und dauert ~1,6 s
         flt = {"songs": "songs", "alben": "albums", "playlists": "playlists", "künstler": "artists",
                "videos": "videos"}[kind]
-        return self.yt.search(q, filter=flt, limit=40)
+        return self.yt.search(q, filter=flt, limit=20)
+
+    def top_result(self, q):
+        """Bester Treffer der ungefilterten Suche (Titel, Künstler, Album …) oder None."""
+        for r in self.yt.search(q, limit=1):
+            if r.get("category") == "Top result":
+                return r
+        return None
 
     def suggestions(self, q):
         return self.yt.get_search_suggestions(q)
+
+    def add_to_playlist(self, pid, vids):
+        """True = hinzugefügt, False = war schon drin."""
+        res = self.yt.add_playlist_items(pid, vids, duplicates=False)
+        if isinstance(res, dict) and res.get("status") == "STATUS_SUCCEEDED":
+            return True
+        if isinstance(res, dict) and "duplicate" in json.dumps(res).lower():
+            return False
+        raise RuntimeError(str(res)[:160])
+
+    def create_playlist(self, title, vids):
+        pid = self.yt.create_playlist(title, "", privacy_status="PRIVATE", video_ids=vids)
+        if not isinstance(pid, str):
+            raise RuntimeError(str(pid)[:160])
+        return pid
 
     def playlist(self, pid):
         if pid == "LM":  # Lieblingssongs
@@ -282,6 +308,10 @@ class Music:
         pls = self.yt.get_library_playlists(limit=100)
         return [{"id": p["playlistId"], "title": p["title"], "count": p.get("count", "")} for p in pls]
 
+    def editable_playlists(self):
+        """Eigene Playlists (in die man Titel legen kann) – ohne Lieblingssongs/Episoden."""
+        return [p for p in self.library() if p["id"] not in ("LM", "SE")]
+
     def history(self):
         return [t for t in map(track, self.yt.get_history()) if t]
 
@@ -290,16 +320,146 @@ class Music:
         return [t for t in map(track, d.get("tracks", [])) if t]
 
     def lyrics(self, vid):
+        """Songtext von YouTube Music: {"lyrics": [(sek, text)] oder str, "source"} oder None."""
         w = self.yt.get_watch_playlist(videoId=vid, limit=1)
         if not w.get("lyrics"):
             return None
         try:
-            return self.yt.get_lyrics(w["lyrics"], timestamps=True)
+            res = self.yt.get_lyrics(w["lyrics"], timestamps=True)
         except Exception:  # noqa: BLE001 – ältere Antworten ohne Zeitstempel
-            return self.yt.get_lyrics(w["lyrics"])
+            res = self.yt.get_lyrics(w["lyrics"])
+        if not res or not res.get("lyrics"):
+            return None
+        lyr = res["lyrics"]
+        if not isinstance(lyr, str):
+            lyr = [(ln.start_time / 1000, ln.text) for ln in lyr]
+        return {"lyrics": lyr, "source": (res.get("source") or "youtube music").lower()}
 
     def rate(self, vid, like):
         self.yt.rate_song(vid, "LIKE" if like else "INDIFFERENT")
+
+
+# ---------- Songtexte ----------
+import re as _re
+
+_LRC = _re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\](.*)")
+# Zusätze, die bei der Suche stören (Länge prüft LRCLIB ohnehin): „(Radio Edit)“, „- Remastered 2011“, „(feat. X)“
+_NOISE = _re.compile(r"\s*[\(\[](?:feat\.?|ft\.?|with|radio edit|remaster(?:ed)?[^\)\]]*|official[^\)\]]*|"
+                     r"explicit|clean|single version|album version|edit)[^\)\]]*[\)\]]|\s+-\s+remaster(?:ed)?.*$",
+                     _re.I)
+
+
+def parse_lrc(text):
+    out = []
+    for line in (text or "").splitlines():
+        m = _LRC.match(line.strip())
+        if m:
+            out.append((int(m.group(1)) * 60 + float(m.group(2)), m.group(3).strip()))
+    return out
+
+
+class Lyrics:
+    """Songtexte mit Zeitstempeln: zuerst LRCLIB (frei, Zeitstempel passen zur Länge des Titels, ±2 s),
+    sonst YouTube Music. Ergebnisse bleiben im Speicher; preload() holt sie schon beim Titelwechsel –
+    nicht erst beim Klick auf „lyrics“. Ergebnis: {"lyrics": [(sek, text)] | str, "source", "synced"} oder None."""
+    API = "https://lrclib.net/api"
+
+    def __init__(self, music):
+        self.music = music
+        self.cache = {}            # videoId → Ergebnis (None = keins)
+        self.lock = threading.Lock()
+        self.waiting = {}          # videoId → threading.Event (läuft gerade)
+
+    def _get_json(self, path, params):
+        import urllib.parse, urllib.request
+        url = f"{self.API}/{path}?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(url, headers={"User-Agent": "musicalist (https://github.com/danger-inc/musicalist)"})
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=6) as r:
+                    return json.load(r)
+            except Exception as e:  # noqa: BLE001
+                code = getattr(e, "code", None)
+                if code == 404:
+                    return None
+                if code in (429, 503) and attempt < 2:   # überlastet: kurz warten
+                    time.sleep(0.8 * (attempt + 1))
+                    continue
+                raise
+        return None
+
+    def lrclib(self, t, dur):
+        title = _NOISE.sub("", t["title"]).strip() or t["title"]
+        artist = (t.get("artist") or "").split(",")[0].split(" & ")[0].strip()
+        found = self._get_json("search", {"track_name": title, "artist_name": artist}) or []
+        if not found and artist:
+            found = self._get_json("search", {"q": f"{artist} {title}"}) or []
+        best = None
+        for r in found:
+            if not (r.get("syncedLyrics") or r.get("plainLyrics")) or r.get("instrumental"):
+                continue
+            diff = abs((r.get("duration") or 0) - dur) if dur else 0
+            if dur and diff > 2.5:
+                continue                        # andere Fassung → Zeitstempel würden nicht passen
+            score = (0 if r.get("syncedLyrics") else 1, diff)
+            if best is None or score < best[0]:
+                best = (score, r)
+        if not best:
+            return None
+        r = best[1]
+        if r.get("syncedLyrics"):
+            lines = parse_lrc(r["syncedLyrics"])
+            if lines:
+                return {"lyrics": lines, "source": "lrclib", "synced": True}
+        return {"lyrics": r["plainLyrics"], "source": "lrclib", "synced": False}
+
+    def fetch(self, t, dur=0):
+        """Blockiert (nur im Thread). Mehrfachaufrufe für denselben Titel warten auf den ersten."""
+        vid = t["videoId"]
+        with self.lock:
+            if vid in self.cache:
+                return self.cache[vid]
+            ev = self.waiting.get(vid)
+            mine = ev is None
+            if mine:
+                ev = self.waiting[vid] = threading.Event()
+        if not mine:
+            ev.wait(30)
+            return self.cache.get(vid)
+        res = None
+        try:
+            dur = dur or t.get("duration") or 0
+            try:
+                res = self.lrclib(t, dur)
+            except Exception as e:  # noqa: BLE001
+                log(f"lrclib: {str(e)[:100]}")
+            if not res or not res["synced"]:
+                try:
+                    yt = self.music.lyrics(vid)
+                except Exception as e:  # noqa: BLE001
+                    yt = None
+                    log(f"lyrics yt: {str(e)[:100]}")
+                if yt:
+                    yt["synced"] = not isinstance(yt["lyrics"], str)
+                    if yt["synced"] or not res:
+                        res = yt
+        finally:
+            with self.lock:
+                self.cache[vid] = res
+                if len(self.cache) > 200:
+                    self.cache.pop(next(iter(self.cache)))
+                self.waiting.pop(vid, None)
+            ev.set()
+        return res
+
+    def cached(self, vid):
+        return self.cache.get(vid, False)      # False = noch nicht geladen
+
+    def preload(self, tracks):
+        """Im Hintergrund nacheinander laden (aktueller Titel zuerst)."""
+        todo = [t for t in tracks if t and t["videoId"] not in self.cache]
+        if todo:
+            threading.Thread(target=lambda: [self.fetch(t) for t in todo], daemon=True).start()
 
 
 # ---------- Stream-Adressen ----------
@@ -330,11 +490,15 @@ class Resolver:
 
     def __init__(self):
         self.cache = {}
-        self.locks = {"fast": threading.Lock(), "hq": threading.Lock()}
+        self.locks = {"fast": threading.Lock(), "warm": threading.Lock(), "hq": threading.Lock()}
         self.ydls = {}
         self.queue_lock = threading.Lock()
         self.wanted = []
         self.worker = None
+        self.inflight = {}          # videoId → threading.Event: wird gerade (schnell) aufgelöst
+        self.warm_lock = threading.Lock()
+        self.warm_next = None       # Hover: zuletzt gewünschter Titel (neuester gewinnt)
+        self.warm_busy = False
 
     def reset(self):
         self.ydls = {}
@@ -360,11 +524,32 @@ class Resolver:
             info = self.ydl(kind).extract_info(f"https://music.youtube.com/watch?v={vid}", download=False)
         res = {"url": info["url"], "ua": (info.get("http_headers") or {}).get("User-Agent", UA),
                "abr": info.get("abr"), "codec": info.get("acodec", ""), "duration": info.get("duration"),
-               "kind": kind}
+               "kind": "hq" if kind == "hq" else "fast"}
         old = self.cached(vid)
-        if not (old and old.get("kind") == "hq" and kind == "fast"):
+        if not (old and old.get("kind") == "hq" and kind != "hq"):
             self.cache[vid] = (time.time() + 4 * 3600, res)
         return res
+
+    def _fast(self, vid, kind="fast"):
+        """Schneller Weg; läuft für denselben Titel schon einer (z. B. vom Überfahren), auf den warten.
+        kind "warm" = eigenes yt-dlp-Objekt fürs Überfahren, damit ein Klick auf einen anderen Titel nie wartet."""
+        with self.queue_lock:
+            ev = self.inflight.get(vid)
+            mine = ev is None
+            if mine:
+                ev = self.inflight[vid] = threading.Event()
+        if not mine:
+            ev.wait(20)
+            hit = self.cached(vid)
+            if hit:
+                return hit
+            return self._extract(vid, kind)
+        try:
+            return self._extract(vid, kind)
+        finally:
+            with self.queue_lock:
+                self.inflight.pop(vid, None)
+            ev.set()
 
     def get(self, vid):
         """Für sofortiges Abspielen: Zwischenspeicher, sonst der schnelle Weg (Notfall: hq)."""
@@ -372,11 +557,36 @@ class Resolver:
         if hit:
             return hit
         try:
-            return self._extract(vid, "fast")
+            return self._fast(vid)
         except Exception:  # noqa: BLE001 – z. B. altersbeschränkt: mit Anmeldung versuchen
             if not os.path.exists(COOKIES_TXT):
                 raise
             return self._extract(vid, "hq")
+
+    def warm(self, vid):
+        """Maus liegt auf einem Titel: Adresse schon mal (schnell) holen – der Klick spielt dann sofort.
+        Immer nur einer gleichzeitig; kommt ein neuer Wunsch, gewinnt der neueste."""
+        if not vid or self.cached(vid) or vid in self.inflight:
+            return
+        with self.warm_lock:
+            self.warm_next = vid
+            if self.warm_busy:
+                return
+            self.warm_busy = True
+
+        def loop():
+            while True:
+                with self.warm_lock:
+                    v, self.warm_next = self.warm_next, None
+                    if v is None:
+                        self.warm_busy = False
+                        return
+                if not self.cached(v):
+                    try:
+                        self._fast(v, "warm")
+                    except Exception as e:  # noqa: BLE001
+                        log(f"vorwärmen {v}: {str(e)[:100]}")
+        threading.Thread(target=loop, daemon=True).start()
 
     def prefetch(self, vids):
         """Im Hintergrund nacheinander vorladen (neueste Wunschliste gewinnt)."""
@@ -516,6 +726,7 @@ class Player:
     def __init__(self):
         self.music = Music()
         self.resolver = Resolver()
+        self.lyrics = Lyrics(self.music)
         self.listeners = []
         self.history = History()
         self.queue, self.index = [], -1
@@ -725,6 +936,15 @@ class Player:
         tui.background(self.music.rate, t["videoId"], on,
                        done=lambda r: isinstance(r, Exception) and self.emit(f"error:like: {r}"))
 
+    def rate(self, t, on):
+        """Beliebigen Titel liken/entliken (Rechtsklick-Menü); gleiche Titel in der Warteschlange mit."""
+        for x in [t] + self.queue:
+            if x.get("videoId") == t.get("videoId"):
+                x["liked"] = on
+        self.emit("track")
+        tui.background(self.music.rate, t["videoId"], on,
+                       done=lambda r: isinstance(r, Exception) and self.emit(f"error:like: {r}"))
+
     # ----- Laden -----
     def load(self, resume=0):
         t = self.current
@@ -737,8 +957,12 @@ class Player:
         self.stream_info = None
         self.emit("track")
         self.emit("state")
-        # In den Verlauf erst nach 5 s echter Wiedergabe (Durchskippen zählt nicht) – siehe on_mpv „time-pos“
-        self._hist = {"t": t, "played": 0.0, "last": None}
+        # In den Verlauf erst nach 5 s echter Wiedergabe (Durchskippen zählt nicht) – siehe on_mpv „time-pos“.
+        # Hörverlauf in den Einstellungen aus → gar nichts merken.
+        self._hist = {"t": t, "played": 0.0, "last": None} if setting("history") else None
+        # Songtext schon jetzt holen (dieser + nächster Titel), nicht erst beim Öffnen von „lyrics“
+        nxt = self.queue[self.index + 1] if self.index + 1 < len(self.queue) else None
+        self.lyrics.preload([t, nxt])
 
         def done(res):
             if gen != self.gen:  # inzwischen anderer Titel gewählt

@@ -9,6 +9,8 @@
 import math, time
 from collections import deque
 
+import cairo
+
 import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk, Pango, PangoCairo
@@ -39,6 +41,7 @@ def _mix(a, b, t):
 
 class Canvas(Gtk.DrawingArea):
     BINS = 64
+    TRAIL_DT = 0.07
 
     def __init__(self, owner):
         super().__init__(hexpand=True, vexpand=True)
@@ -48,8 +51,11 @@ class Canvas(Gtk.DrawingArea):
         self.target = [0.0] * self.BINS
         self.peaks = [0.0] * self.BINS
         self.hold = [0.0] * self.BINS        # Haltezeit der Spitzen (matrix)
-        self.trail = deque(maxlen=26)        # linien: frühere Spektren
+        self.trail = deque(maxlen=26)        # linien: frühere Spektren als (nummer, werte)
         self.trail_t = 0.0
+        self.trail_n = 0
+        self._lin = None                     # linien: vorberechnete Stützstellen je Breite
+        self._tiles = {}                     # matrix: Punkt-Kachel je (abstand, radius)
         self.bass = 0.0
         self.t0 = time.monotonic()
         self.last = self.t0
@@ -98,9 +104,10 @@ class Canvas(Gtk.DrawingArea):
             else:
                 self.peaks[i] = max(0.0, self.peaks[i] - dt * 0.55)
         self.bass += (sum(self.vals[:6]) / 6 - self.bass) * (1 - math.exp(-dt * 12))
-        if now - self.trail_t >= 0.07:
+        if now - self.trail_t >= self.TRAIL_DT:
             self.trail_t = now
-            self.trail.appendleft(list(self.vals))
+            self.trail_n += 1
+            self.trail.appendleft((self.trail_n, list(self.vals)))
         # Stille: nur noch langsam weiterdrehen (spart Strom), sonst jedes Bild
         if not quiet or now - self.last_draw > (0.1 if self.mode == "orbit" else 0.5):
             self.last_draw = now
@@ -258,44 +265,80 @@ class Canvas(Gtk.DrawingArea):
                 cr.fill()
 
     def _draw_linien(self, cr, w, h, col):
+        """Gestaffelte Linien. Die Linien wandern stufenlos nach hinten (Bruchteil seit der letzten Aufnahme),
+        vorne liegt das Live-Spektrum – früher sprangen sie alle 70 ms eine ganze Zeile weiter (Ruckeln)."""
         p, fg, bg = col["primary"], col["foreground"], col["background"]
         info_h = self.owner.info_height()
-        lines = list(self.trail) or [self.vals]
-        m = len(lines)
         margin = max(40.0, w * 0.14)
         span = w - 2 * margin
-        pts = 72
+        pts = 56
         bottom = h - info_h - 30
-        spacing = max(6.0, (bottom - 60) / (self.trail.maxlen + 4))
+        maxlen = self.trail.maxlen
+        spacing = max(6.0, (bottom - 60) / (maxlen + 4))
         amp = spacing * 5.5
+        if self._lin is None or self._lin[0] != (pts, self.BINS):
+            us = [q / pts for q in range(pts + 1)]
+            idx = []
+            for u in us:
+                f = abs(u - 0.5) * 2 * (self.BINS - 1)          # Mitte = Bass
+                a = int(f)
+                idx.append((a, min(self.BINS - 1, a + 1), f - a, math.exp(-((u - 0.5) / 0.26) ** 2)))
+            self._lin = ((pts, self.BINS), us, idx)
+        _key, us, idx = self._lin
+        phase = min(1.0, (time.monotonic() - self.trail_t) / self.TRAIL_DT)
+        lines = [(0.0, -1, self.vals)] + [(k + phase, n, v) for k, (n, v) in enumerate(self.trail)]
+        xs = [margin + u * span for u in us]
         # hinten (alt, oben) zuerst, vorne (neu, unten) zuletzt – jede Linie verdeckt die dahinter
-        for k in range(m - 1, -1, -1):
-            vals = lines[k]
-            y0 = bottom - k * spacing
-            age = k / max(1, self.trail.maxlen - 1)
+        for off, n, vals in reversed(lines):
+            if off > maxlen - 1:
+                continue
+            y0 = bottom - off * spacing
+            age = off / (maxlen - 1)
+            fade = min(1.0, (maxlen - 1 - off) / 2.0)          # hinterste Linie blendet weich aus
+            wob = self._wobble(n, us)
             cr.new_path()
             cr.move_to(margin, y0)
-            for q in range(pts + 1):
-                u = q / pts
-                d = abs(u - 0.5) * 2                      # Mitte = Bass
-                f = d * (len(vals) - 1)
-                a = int(f)
-                b = min(len(vals) - 1, a + 1)
-                v = vals[a] + (vals[b] - vals[a]) * (f - a)
-                env = math.exp(-((u - 0.5) / 0.26) ** 2)    # Ränder flach
-                wob = 0.03 * math.sin(u * 37 + k * 1.7)     # leichte Unruhe, auch bei Stille
-                cr.line_to(margin + u * span, y0 - (v * env + abs(wob) * env) * amp)
+            for q, (a, b, fr, env) in enumerate(idx):
+                v = vals[a] + (vals[b] - vals[a]) * fr
+                cr.line_to(xs[q], y0 - (v + wob[q]) * env * amp)
             cr.line_to(margin + span, y0)
-            path = cr.copy_path()
-            cr.set_source_rgba(bg.red, bg.green, bg.blue, 0.94)
-            cr.fill()
-            cr.append_path(path)
-            cr.set_line_width(1.6 if k == 0 else 1.2)
-            if k == 0:
+            cr.set_source_rgba(bg.red, bg.green, bg.blue, 0.94 * fade)
+            cr.fill_preserve()
+            cr.set_line_width(1.6 if off < 0.5 else 1.2)
+            if n < 0:
                 cr.set_source_rgba(p.red, p.green, p.blue, 1.0)
             else:
-                cr.set_source_rgba(*_mix(p, fg, age * 0.6), max(0.12, 0.85 - age * 0.8))
+                cr.set_source_rgba(*_mix(p, fg, age * 0.6), max(0.12, 0.85 - age * 0.8) * fade)
             cr.stroke()
+
+    def _wobble(self, n, us):
+        """Leichte Unruhe je Linie (auch bei Stille) – einmal je Aufnahme berechnet, nicht jedes Bild."""
+        cache = self.__dict__.setdefault("_wob", {})
+        key = (n % 997, len(us))
+        wob = cache.get(key)
+        if wob is None:
+            wob = [abs(0.03 * math.sin(u * 37 + n * 1.7)) for u in us]
+            if len(cache) > 64:
+                cache.clear()
+            cache[key] = wob
+        return wob
+
+    def _tile(self, pitch, r):
+        """Ein Punkt als wiederholbares Muster (A8-Maske) – statt tausender einzelner Kreise pro Bild."""
+        key = (pitch, round(r, 2))
+        pat = self._tiles.get(key)
+        if pat is None:
+            surf = cairo.ImageSurface(cairo.FORMAT_A8, pitch, pitch)
+            c = cairo.Context(surf)
+            c.arc(pitch / 2, pitch / 2, r, 0, 2 * math.pi)
+            c.fill()
+            pat = cairo.SurfacePattern(surf)
+            pat.set_extend(cairo.EXTEND_REPEAT)
+            pat.set_filter(cairo.FILTER_NEAREST)
+            if len(self._tiles) > 8:
+                self._tiles.clear()
+            self._tiles[key] = pat
+        return pat
 
     def _draw_matrix(self, cr, w, h, col):
         p, ter, fg, sec = col["primary"], col["tertiary"], col["foreground"], col["secondary"]
@@ -304,27 +347,49 @@ class Canvas(Gtk.DrawingArea):
         n = max(8, int((w - 30) // pitch))
         top, bottom = 52, h - info_h - 24
         rows = max(4, int((bottom - top) // pitch))
-        x0 = (w - n * pitch) / 2 + pitch / 2
+        left = round((w - n * pitch) / 2)            # ganze Pixel: Muster und Raster liegen deckungsgleich
+        bottom = round(bottom)
+        gtop = bottom - rows * pitch
         r = pitch * 0.34
+        # unbeleuchtete Punkte: ein Muster über das ganze Raster
+        small, big = self._tile(pitch, r * 0.7), self._tile(pitch, r)
+        for pat in (small, big):
+            pat.set_matrix(cairo.Matrix(x0=-left, y0=-gtop))
+        cr.save()
+        cr.rectangle(left, gtop, n * pitch, rows * pitch)
+        cr.clip()
+        cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.06)
+        cr.mask(small)
+        cr.restore()
+        # beleuchtete Säulen: Rechtecke als Ausschnitt, Farbverlauf unten → oben durch die Punkt-Maske
+        peaks = []
+        cr.save()
+        cr.new_path()
+        any_lit = False
         for i in range(n):
             v, pk = self._sym(i, n)
             lit = int(v * rows + 0.5)
             pr = int(pk * rows + 0.5)
-            x = x0 + i * pitch
-            for j in range(rows):
-                y = bottom - j * pitch - pitch / 2
-                if j < lit:
-                    t = j / rows
-                    cr.set_source_rgba(*_mix(p, ter, t), 0.55 + 0.45 * (j + 1) / max(1, lit))
-                    rad = r
-                elif j == pr - 1 and pr > lit:
-                    cr.set_source_rgba(sec.red, sec.green, sec.blue, 0.9)
-                    rad = r
-                else:
-                    cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.06)
-                    rad = r * 0.7
-                cr.arc(x, y, rad, 0, 2 * math.pi)
-                cr.fill()
+            x = left + i * pitch
+            if lit:
+                cr.rectangle(x, bottom - lit * pitch, pitch, lit * pitch)
+                any_lit = True
+            if pr > lit:
+                peaks.append((x + pitch / 2, bottom - (pr - 1) * pitch - pitch / 2))
+        if any_lit:
+            cr.clip()
+            grad = cairo.LinearGradient(0, bottom, 0, gtop)
+            grad.add_color_stop_rgba(0, p.red, p.green, p.blue, 0.75)
+            grad.add_color_stop_rgba(1, ter.red, ter.green, ter.blue, 1.0)
+            cr.set_source(grad)
+            cr.mask(big)
+        cr.restore()
+        if peaks:
+            cr.set_source_rgba(sec.red, sec.green, sec.blue, 0.9)
+            for x, y in peaks:
+                cr.new_sub_path()
+                cr.arc(x, y, r, 0, 2 * math.pi)
+            cr.fill()
 
 
 class Visuals(Gtk.Overlay):
