@@ -62,6 +62,11 @@ class App(Gtk.Application):
         else:
             self.preview = ui.NoPreview()
         self.win.on_hover_changed = self.preview.set_enabled
+        # Anzeige dauerhaft auf dem Hintergrundbild (Einstellung, Standard aus)
+        self.desk = ui.Preview(self, self.player, self.cava, lambda: self.command("show"), self.sources, desk=True) \
+            if ui.preview_supported() else ui.NoPreview()
+        self.win.on_desk_changed = self.desk.apply_desk
+        self.desk.apply_desk()
         self.player.mpris.on_raise = lambda: self.command("show")
         self.player.mpris.on_quit = self.stop
         self.win.connect("close-request", self.on_close)

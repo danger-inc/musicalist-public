@@ -20,7 +20,10 @@ DEFAULT_SETTINGS = {"hover": False,       # Vorschau-Karte am Bildschirmrand: st
                     "background": False,  # Fenster zu → weiterspielen? Standard: nein, ganz beenden
                     "visual": "orbit",    # Modus der Seite „visuals“
                     "history_pinned": False,  # Hörverlauf-Leiste angeheftet
-                    "history": True}          # Hörverlauf führen (aus = nichts wird gemerkt, Leiste weg)
+                    "history": True,          # Hörverlauf führen (aus = nichts wird gemerkt, Leiste weg)
+                    "yt_history": True,       # Wiedergaben an YouTube melden (Verlauf, Statistik, Empfehlungen)
+                    "desk": False,            # Anzeige dauerhaft auf dem Hintergrundbild
+                    "desk_pos": "bottom"}     # wo: bottom / bottom-left / bottom-right / top-right / top-left
 
 
 def setting(key):
@@ -295,6 +298,62 @@ class Music:
                 t["thumb"] = t["thumb"] or thumb
                 out.append(t)
         return d.get("title", ""), out
+
+    def artist(self, cid):
+        """Künstlerseite: Name, Abonnenten, Top-Titel, Alben, Singles, ähnliche Künstler."""
+        d = self.yt.get_artist(cid)
+        songs = d.get("songs") or {}
+        tracks = [t for t in map(track, songs.get("results", [])) if t]
+
+        def coll(key):
+            return [{"id": r.get("browseId"), "title": r.get("title") or "?",
+                     "sub": str(r.get("year") or r.get("subscribers") or "")}
+                    for r in (d.get(key) or {}).get("results", []) if r.get("browseId")]
+        return {"name": d.get("name", ""), "subscribers": d.get("subscribers") or "", "tracks": tracks,
+                "all_songs": songs.get("browseId"), "albums": coll("albums"), "singles": coll("singles"),
+                "related": coll("related"), "radio": d.get("radioId"), "shuffle": d.get("shuffleId")}
+
+    def watch_list(self, pid):
+        """Mix/Radio-Playlist (RDEM…) – geht nicht über get_playlist."""
+        d = self.yt.get_watch_playlist(playlistId=pid, limit=50)
+        return "radio", [t for t in map(track, d.get("tracks", [])) if t]
+
+    def artist_id(self, name):
+        """Künstler-ID per Suche (für Titel, die ohne ID gespeichert wurden)."""
+        name = (name or "").split(",")[0].strip()
+        for r in self.yt.search(name, filter="artists", limit=3) if name else []:
+            if r.get("browseId"):
+                return r["browseId"]
+        return None
+
+    # ----- Wiedergaben an YouTube melden (wie die Website: Verlauf, „diesen Monat gehört“, Empfehlungen) -----
+    CPNA = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+
+    def report_start(self, vid):
+        """Wiedergabe beginnen (videostatsPlaybackUrl) → landet im YouTube-Verlauf. Gibt die Daten für
+        die Hörzeit-Meldungen zurück."""
+        yt = self.yt                  # meldet erst an (setzt authed)
+        if not self.authed:
+            return None
+        song = yt.get_song(vid)
+        pt = song.get("playbackTracking") or {}
+        url = (pt.get("videostatsPlaybackUrl") or {}).get("baseUrl")
+        if not url:
+            return None
+        cpn = "".join(random.choice(self.CPNA) for _ in range(16))
+        r = self.yt._send_get_request(url, {"ver": 2, "c": "WEB_REMIX", "cpn": cpn})
+        if r.status_code not in (200, 204):
+            raise RuntimeError(f"youtube-verlauf: http {r.status_code}")
+        return {"cpn": cpn, "wt": (pt.get("videostatsWatchtimeUrl") or {}).get("baseUrl")}
+
+    def report_watch(self, rep, st, et, length, final=False):
+        """Gehörte Zeit melden (videostatsWatchtimeUrl, Abschnitt st–et in Sekunden)."""
+        if not rep or not rep.get("wt") or et <= st:
+            return
+        self.yt._send_get_request(rep["wt"], {
+            "ver": 2, "c": "WEB_REMIX", "cpn": rep["cpn"], "st": f"{st:.3f}", "et": f"{et:.3f}",
+            "cmt": f"{et:.3f}", "len": f"{length:.3f}", "state": "paused" if final else "playing",
+            "volume": 100, "muted": 0, "final": 1 if final else 0})
 
     def artist_songs(self, cid):
         d = self.yt.get_artist(cid)
@@ -848,7 +907,46 @@ class Player:
         if not self.paused:
             self.mpv.set("pause", True)
 
+    # ----- YouTube-Verlauf: nach 10 s echter Wiedergabe melden, dann alle 30 s die gehörte Zeit -----
+    YT_AFTER, YT_EVERY = 10, 30
+
+    def yt_tick(self, pos):
+        r = getattr(self, "_ytr", None)
+        if r is None or self.paused or self.loading or r["t"] is not self.current:
+            return
+        if r["last"] is not None and 0 < pos - r["last"] < 1.5:
+            r["played"] += pos - r["last"]
+        else:
+            if r["from"] is not None and r["last"] is not None:      # gespult: bisherigen Abschnitt melden
+                self._yt_watch(r, r["from"], r["last"])
+            r["from"] = pos
+        r["last"] = pos
+        if not r["sent"] and r["played"] >= self.YT_AFTER:
+            r["sent"] = True
+            vid = r["t"]["videoId"]
+
+            def done(res):
+                if isinstance(res, Exception):
+                    log(f"youtube-verlauf: {res}")
+                    return
+                r["rep"] = res
+            tui.background(self.music.report_start, vid, done=done)
+        elif r["rep"] and pos - (r["from"] or 0) >= self.YT_EVERY:
+            self._yt_watch(r, r["from"], pos)
+            r["from"] = pos
+
+    def _yt_watch(self, r, st, et, final=False):
+        if r.get("rep") and et > st:
+            tui.background(self.music.report_watch, r["rep"], st, et, self.dur or r["t"].get("duration") or et,
+                           final, done=lambda res: isinstance(res, Exception) and log(f"youtube-hörzeit: {res}"))
+
+    def yt_end(self):
+        r, self._ytr = getattr(self, "_ytr", None), None
+        if r and r["rep"] and r["from"] is not None and r["last"] is not None:
+            self._yt_watch(r, r["from"], r["last"], final=True)
+
     def stop(self):
+        self.yt_end()
         self.mpv.cmd("stop")
         self.started = False
         self.emit("track")
@@ -960,6 +1058,9 @@ class Player:
         # In den Verlauf erst nach 5 s echter Wiedergabe (Durchskippen zählt nicht) – siehe on_mpv „time-pos“.
         # Hörverlauf in den Einstellungen aus → gar nichts merken.
         self._hist = {"t": t, "played": 0.0, "last": None} if setting("history") else None
+        self.yt_end()                 # vorigen Titel bei YouTube abschließen
+        self._ytr = {"t": t, "played": 0.0, "last": None, "rep": None, "sent": False, "from": None} \
+            if setting("yt_history") else None
         # Songtext schon jetzt holen (dieser + nächster Titel), nicht erst beim Öffnen von „lyrics“
         nxt = self.queue[self.index + 1] if self.index + 1 < len(self.queue) else None
         self.lyrics.preload([t, nxt])
@@ -1012,6 +1113,7 @@ class Player:
                         self._hist = None
                         if self.history.add(h["t"]):
                             self.emit("history")
+                self.yt_tick(val)
                 self.emit("pos")
             elif name == "duration" and val:
                 self.dur = val
@@ -1068,6 +1170,7 @@ class Player:
         self.autoplay = d.get("autoplay", True)
 
     def shutdown(self):
+        self.yt_end()
         self.save_state()
         self.mpv.quit()
 

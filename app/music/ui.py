@@ -42,6 +42,11 @@ button.ctl.play label { font-size: 22px; }
 .lyric.past { color: alpha(@foreground, 0.28); }
 .trk-mark { color: @primary; min-width: 18px; }
 flowbox.opts > flowboxchild { padding: 0; min-width: 0; min-height: 0; }
+button.artlink { background: none; background-image: none; border: none; box-shadow: none; padding: 0 2px;
+    min-height: 0; min-width: 0; border-radius: 3px; }
+button.artlink:hover label { color: @primary; text-decoration: underline; }
+button.artlink:disabled label { color: alpha(@foreground, 0.5); }
+label.np-artist.link:hover { text-decoration: underline; }
 .row.playing > button.rowhead { background-color: alpha(@primary, 0.16); }
 .row.playing .trk-title { color: @primary; }
 button.mini { padding: 0 6px; border-radius: 4px; color: alpha(@foreground, 0.7); background: none; border: none;
@@ -425,6 +430,9 @@ class Spectrum(Gtk.DrawingArea):
 
 
 # ---------- Listen ----------
+ARTIST_OPEN = None      # setzt MusicWindow: Klick auf einen Künstlernamen → Künstlerseite
+
+
 def track_row(t, on_play, actions, menus=None, extra=None):
     """Zeile: ▶ titel  künstler  album  3:45  [+] [»] …  actions: [(glyph, tooltip, fn)].
     menus (songmenu.SongMenus): Rechtsklick-Menü + Vorwärmen beim Überfahren; extra() → weitere Menüeinträge."""
@@ -437,9 +445,16 @@ def track_row(t, on_play, actions, menus=None, extra=None):
     row.artist = label(t["artist"], "dim", ellipsize=True)
     row.artist.set_max_width_chars(24)
     row.artist.set_width_chars(6)
+    # Künstler = eigener Knopf (öffnet die Künstlerseite), der Rest der Zeile spielt den Titel
+    art = Gtk.Button(child=row.artist, focus_on_click=False, valign=Gtk.Align.CENTER,
+                     tooltip_text=f"Künstlerseite: {t['artist']}" if t["artist"] else None)
+    art.add_css_class("artlink")
+    art.set_cursor_from_name("pointer")
+    art.connect("clicked", lambda *_: ARTIST_OPEN and ARTIST_OPEN(t))
+    art.set_sensitive(bool(t["artist"]))
     row.dur = label(fmt(t["duration"]) if t["duration"] else "", "dim", xalign=1)
     row.dur.set_width_chars(6)
-    head.set_child(hbox(row.mark, row.title, row.artist, row.dur, spacing=10))
+    head.set_child(hbox(row.mark, row.title, art, row.dur, spacing=10))
     head.connect("clicked", lambda *_: on_play())
     row.append(head)
     for glyph, tip, fn, *opt in actions:      # opt: (True,) = fn bekommt den Knopf (Popover daran)
@@ -478,6 +493,8 @@ class MusicWindow(tui.TuiWindow):
                          size=(900, 700), icons_only=True, hints=())
         self.p, self.cava, self.srcs = player, cava, srcs
         self.songs = songmenu.SongMenus(self)
+        global ARTIST_OPEN
+        ARTIST_OPEN = self.open_artist
         css = Gtk.CssProvider()
         css.load_from_string(CSS)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
@@ -851,9 +868,28 @@ class MusicWindow(tui.TuiWindow):
                                spacing=10))
         self.hist_info.set_hexpand(True)
         self.update_hist_info()
+        self.yt_chk = tui.Check("wiedergaben an youtube melden", engine.setting("yt_history"),
+                                lambda on: (engine.set_setting("yt_history", on), on or setattr(self.p, "_ytr", None)),
+                                tooltip="Wie die Website: gehörte Titel landen im YouTube-Verlauf und zählen für\n"
+                                        "„diesen Monat gehört“, Rückblick und Empfehlungen. Braucht die Anmeldung.")
+        self.yt_chk.set_margin_top(10)
+        panel.body.append(self.yt_chk)
+        panel.body.append(label("ab 10 s wiedergabe landet ein titel im youtube-verlauf, die gehörte zeit wird "
+                                "mitgeschickt. nur mit anmeldung.", "dim", wrap=True, xalign=0))
+        self.desk_chk = tui.Check("anzeige immer auf dem hintergrundbild", engine.setting("desk"), self.set_desk,
+                                  tooltip="Die Karte aus der Vorschau liegt dauerhaft auf dem Desktop –\n"
+                                          "unter den Fenstern, sichtbar wo der Hintergrund frei ist.")
+        self.desk_chk.set_margin_top(10)
+        self.desk_pos = tui.Select(self.set_desk_pos, tooltip="Wo auf dem Bildschirm")
+        self.desk_pos.set_options(DESK_POS, engine.setting("desk_pos"))
+        panel.body.append(hbox(self.desk_chk, label("", hexpand=True), self.desk_pos, spacing=10))
+        if not preview_supported():
+            self.desk_chk.set_sensitive(False)
+            self.desk_pos.set_sensitive(False)
         page.append(panel)
         self.add_page("settings", page)
         self.on_hover_changed = None       # setzt musicd: schaltet die Vorschau live ein/aus
+        self.on_desk_changed = None        # setzt musicd: Anzeige auf dem Hintergrund an/aus/verschieben
 
     def fill_settings_account(self):
         box = getattr(self, "set_acct", None)
@@ -891,6 +927,17 @@ class MusicWindow(tui.TuiWindow):
         self.hist_info.set_label(("leiste am linken rand (h) · " if on else "aus · ") +
                                  (f"{n} titel gespeichert, nur auf diesem rechner" if n else "nichts gespeichert"))
 
+    def set_desk(self, on):
+        engine.set_setting("desk", on)
+        if self.on_desk_changed:
+            self.on_desk_changed()
+
+    def set_desk_pos(self, v):
+        self.desk_pos.set_options(DESK_POS, v)
+        engine.set_setting("desk_pos", v)
+        if self.on_desk_changed:
+            self.on_desk_changed()
+
     def set_hover(self, on):
         engine.set_setting("hover", on)
         if self.on_hover_changed:
@@ -905,6 +952,12 @@ class MusicWindow(tui.TuiWindow):
         self.title.set_lines(2)
         self.title.set_ellipsize(Pango.EllipsizeMode.END)
         self.artist = label("", "np-artist", ellipsize=True)
+        self.artist.add_css_class("link")
+        self.artist.set_cursor_from_name("pointer")
+        self.artist.set_tooltip_text("Künstlerseite öffnen")
+        ac = Gtk.GestureClick()
+        ac.connect("released", lambda *_: self.open_artist(self.p.current))
+        self.artist.add_controller(ac)
         self.album = label("", "np-album", ellipsize=True)
         self.info = label("", "dim", ellipsize=True)
         self.like_btn = tui.Button("", lambda: self.p.like(), tooltip="Gefällt mir (l)")
@@ -1452,6 +1505,67 @@ class MusicWindow(tui.TuiWindow):
                                           lambda i=pl["id"]: self.open_detail("playlist", i)))
         tui.background(self.p.music.library, done=done)
 
+    def open_artist(self, t):
+        """Künstlerseite zum Titel t – ohne gespeicherte ID per Suche nach dem Namen."""
+        if not t:
+            return
+        if t.get("artistId"):
+            self.open_detail("artist", t["artistId"])
+            return
+        self.say(f"suche künstler {t['artist']} …")
+
+        def done(res):
+            if isinstance(res, Exception) or not res:
+                self.say(f"künstler nicht gefunden: {t['artist']}", error=True)
+                return
+            t["artistId"] = res
+            self.open_detail("artist", res)
+        tui.background(self.p.music.artist_id, t["artist"], done=done)
+
+    def fill_artist(self, ident, d):
+        """Künstlerseite: Top-Titel, dann Alben, Singles, ähnliche Künstler."""
+        self.detail_names[("artist", ident)] = d["name"]
+        tracks = d["tracks"]
+        self.detail_tracks = tracks
+        sub = f" · {d['subscribers']} abonnenten" if d["subscribers"] else ""
+        self.detail_panel.set_title(f"󰠃 {esc(d['name'])} <span alpha='60%'>künstler{esc(sub)}</span>", markup=True)
+        box = self.detail_box
+        btns = hbox(spacing=8)
+        if d.get("radio"):
+            btns.append(tui.Button("󰐹 radio", lambda: self.play_playlist_id(d["radio"], "radio"),
+                                   tooltip="Mix aus diesem Künstler und ähnlicher Musik"))
+        if d.get("all_songs"):
+            btns.append(tui.Button("alle titel ›", lambda: self.open_detail("playlist", d["all_songs"])))
+        box.append(btns)
+
+        def head(txt):
+            h = label(txt, "accent", xalign=0)
+            h.set_margin_top(10)
+            box.append(h)
+        if tracks:
+            head("top-titel")
+        for i, t in enumerate(tracks):
+            row = track_row(t, lambda i=i: self.p.play_tracks(tracks, start=i),
+                            [("+", "An Warteschlange anhängen", lambda t=t: self.p.add(t)),
+                             ("»", "Als nächstes spielen", lambda t=t: self.p.add(t, next_=True))],
+                            menus=self.songs)
+            row.mark.set_label(str(i + 1))
+            box.append(row)
+        for key, title, glyph, kind in (("albums", "alben", "󰀥", "album"), ("singles", "singles & eps", "󰀥", "album"),
+                                        ("related", "ähnliche künstler", "󰠃", "artist")):
+            if d.get(key):
+                head(title)
+                for c in d[key]:
+                    box.append(coll_row(glyph, c["title"], c["sub"], lambda k=kind, i=c["id"]: self.open_detail(k, i)))
+
+    def play_playlist_id(self, pid, name):
+        def done(res):
+            if isinstance(res, Exception) or not res[1]:
+                self.say(f"{name}: nichts gefunden", error=True)
+                return
+            self.p.play_tracks(res[1], start=0)
+        tui.background(self.p.music.watch_list, pid, done=done)
+
     def open_detail(self, kind, ident):
         self.detail_key = (kind, ident)
         self.show_tab("lib")
@@ -1460,12 +1574,17 @@ class MusicWindow(tui.TuiWindow):
         self.detail_panel.set_title("lädt …")
         tui.clear(self.detail_box)
         fn = {"playlist": self.p.music.playlist, "album": self.p.music.album,
-              "artist": self.p.music.artist_songs, "history": lambda _i: ("verlauf", self.p.music.history())}[kind]
+              "artist": self.p.music.artist, "history": lambda _i: ("verlauf", self.p.music.history())}[kind]
 
         def done(res):
+            if self.detail_key != (kind, ident):     # inzwischen woanders hin
+                return
             if isinstance(res, Exception):
                 self.say(f"laden: {res}", error=True)
                 self.detail_panel.set_title("fehler")
+                return
+            if kind == "artist":
+                self.fill_artist(ident, res)
                 return
             title, tracks = res
             self.detail_names[(kind, ident)] = title
@@ -1867,6 +1986,16 @@ class MusicWindow(tui.TuiWindow):
 
     def _key(self, c, kv, code, state):
         """Vor tui.TuiWindow._key (das Esc sonst immer schluckt): Vollbild/Leiste schließen."""
+        if state & Gdk.ModifierType.ALT_MASK and not state & Gdk.ModifierType.CONTROL_MASK:
+            # Alt+1…6 wechselt den Tab immer – auch während man im Suchfeld tippt
+            i = {Gdk.KEY_1: 0, Gdk.KEY_2: 1, Gdk.KEY_3: 2, Gdk.KEY_4: 3, Gdk.KEY_5: 4, Gdk.KEY_6: 5,
+                 Gdk.KEY_7: 6, Gdk.KEY_8: 7, Gdk.KEY_9: 8}.get(kv)
+            tabs = [t for t, _n, _i in self.TABS if t != "settings"]
+            if i is not None and i < len(tabs):
+                if isinstance(self.get_focus(), (Gtk.Text, Gtk.Entry)) and tabs[i] != "search":
+                    self.set_focus(None)
+                self.show_tab(tabs[i])
+                return True
         if kv == Gdk.KEY_Escape and getattr(self, "focus_mode", False):
             self.toggle_focus(False)
             return True
@@ -1939,6 +2068,9 @@ class NoPreview:
     def set_enabled(self, on):
         pass
 
+    def apply_desk(self):
+        pass
+
 
 def cursor_pos():
     """Zeigerposition (logische Pixel) direkt vom Hyprland-Socket – None, wenn das nicht klappt."""
@@ -1959,15 +2091,27 @@ def cursor_pos():
         return None
 
 
+DESK_POS = [("bottom", "unten mittig"), ("bottom-left", "unten links"), ("bottom-right", "unten rechts"),
+            ("top-left", "oben links"), ("top-right", "oben rechts")]
+
+
 class Preview:
     """Unsichtbarer Streifen am unteren Bildschirmrand (Mitte). Maus drauf → Karte mit Titel, Fortschritt
     und Knöpfen gleitet hoch; Maus weg → verschwindet wieder. Klick auf den Titel öffnet den Player."""
     WIDTH = 520
 
-    def __init__(self, app, player, cava, open_player, srcs):
+    def __init__(self, app, player, cava, open_player, srcs, desk=False):
         self.p, self.cava, self.open_player, self.srcs = player, cava, open_player, srcs
         self.show_id = self.hide_id = self.watch_id = None
         self.outside_ms = 0
+        self.desk = desk
+        if desk:                       # Anzeige auf dem Hintergrundbild: nur die Karte, immer da
+            self.trigger = None
+            self.build_card(app)
+            self.p.listeners.append(self.on_player)
+            cava.listeners.append(self.on_spectrum)
+            self.enabled = False
+            return
 
         self.trigger = Gtk.Window(application=app)
         self.trigger.add_css_class("preview-trigger")
@@ -1985,25 +2129,39 @@ class Preview:
         m.connect("enter", lambda *_: self.arm())
         m.connect("leave", lambda *_: self.disarm())
         self.trigger.add_controller(m)
+        self.build_card(app)
+        self.p.listeners.append(self.on_player)
+        cava.listeners.append(self.on_spectrum)
+        self.enabled = False
+        self.set_enabled(engine.setting("hover"))
 
+    def build_card(self, app):
+        desk = self.desk
         self.card = Gtk.Window(application=app)
         self.card.add_css_class("preview")
         Layer.init_for_window(self.card)
-        Layer.set_namespace(self.card, "music-preview")
-        Layer.set_layer(self.card, Layer.Layer.OVERLAY)
-        Layer.set_anchor(self.card, Layer.Edge.BOTTOM, True)
-        Layer.set_margin(self.card, Layer.Edge.BOTTOM, 10)
+        Layer.set_namespace(self.card, "music-desk" if desk else "music-preview")
+        # Hintergrund: BOTTOM = über dem Hintergrundbild, unter allen Fenstern
+        Layer.set_layer(self.card, Layer.Layer.BOTTOM if desk else Layer.Layer.OVERLAY)
+        if desk:
+            self.place_desk()
+        else:
+            Layer.set_anchor(self.card, Layer.Edge.BOTTOM, True)
+            Layer.set_margin(self.card, Layer.Edge.BOTTOM, 10)
         Layer.set_exclusive_zone(self.card, 0)
         Layer.set_keyboard_mode(self.card, Layer.KeyboardMode.NONE)   # Tastatur nur, solange die Karte offen ist
-        # CAPTURE: vor den Knöpfen – sonst "klickt" die Leertaste den fokussierten Knopf (z. B. den Titel,
-        # der den Player öffnet), statt Play/Pause auszulösen
-        keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
-        keys.connect("key-pressed", self.on_key)
-        self.card.add_controller(keys)
-        m = Gtk.EventControllerMotion()
-        m.connect("enter", lambda *_: self.cancel_hide())
-        m.connect("leave", lambda *_: self.hide_soon(350))
-        self.card.add_controller(m)
+        self.card.set_default_size(self.WIDTH, 1)     # sonst ist die Fläche teils zu hoch (leerer Rest unten)
+        self.card.set_resizable(False)
+        if not desk:
+            # CAPTURE: vor den Knöpfen – sonst "klickt" die Leertaste den fokussierten Knopf (z. B. den Titel,
+            # der den Player öffnet), statt Play/Pause auszulösen
+            keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
+            keys.connect("key-pressed", self.on_key)
+            self.card.add_controller(keys)
+            m = Gtk.EventControllerMotion()
+            m.connect("enter", lambda *_: self.cancel_hide())
+            m.connect("leave", lambda *_: self.hide_soon(350))
+            self.card.add_controller(m)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.add_css_class("pcard")
@@ -2015,7 +2173,7 @@ class Preview:
         title_btn.add_css_class("ptitle")
         title_btn.set_child(vbox(self.title, self.artist, spacing=3))
         title_btn.set_tooltip_text("Player öffnen")
-        title_btn.connect("clicked", lambda *_: (self.hide(), self.open_player()))
+        title_btn.connect("clicked", lambda *_: (self.desk or self.hide(), self.open_player()))
         self.prev = tui.Button("󰒮", self.p.prev)
         self.play = tui.Button("󰐊", self.p.toggle)
         self.next = tui.Button("󰒭", lambda: self.p.next())
@@ -2034,9 +2192,10 @@ class Preview:
         box.append(hbox(self.cover, right, spacing=14))
         box.append(self.spec)
         # Was sonst gerade Ton macht (früher das mpris-Modul in der Waybar)
-        self.src_list = sources.SourceList(srcs, limit=3)
-        self.src_list.add_css_class("src-sep")
-        box.append(self.src_list)
+        if not desk:                   # auf dem Hintergrund nicht: das hieße dauernd pactl abfragen
+            self.src_list = sources.SourceList(self.srcs, limit=3)
+            self.src_list.add_css_class("src-sep")
+            box.append(self.src_list)
         self.card.set_child(box)
         # Cover oben bündig mit der Oberkante der Titelschrift, unten mit den Balkenquadraten
         ink = self.title.create_pango_layout("Hdlk").get_pixel_extents()[0]
@@ -2045,10 +2204,28 @@ class Preview:
         h = right.measure(Gtk.Orientation.VERTICAL, -1)[1]
         self.cover.set_content_width(max(40, round(h - self.cover.top - self.cover.bottom)))
 
-        self.p.listeners.append(self.on_player)
-        cava.listeners.append(self.on_spectrum)
-        self.enabled = False
-        self.set_enabled(engine.setting("hover"))
+    def place_desk(self):
+        pos = engine.setting("desk_pos") or "bottom"
+        for e in (Layer.Edge.TOP, Layer.Edge.BOTTOM, Layer.Edge.LEFT, Layer.Edge.RIGHT):
+            Layer.set_anchor(self.card, e, False)
+        edges = {"bottom": (Layer.Edge.BOTTOM,), "bottom-left": (Layer.Edge.BOTTOM, Layer.Edge.LEFT),
+                 "bottom-right": (Layer.Edge.BOTTOM, Layer.Edge.RIGHT), "top-left": (Layer.Edge.TOP, Layer.Edge.LEFT),
+                 "top-right": (Layer.Edge.TOP, Layer.Edge.RIGHT)}.get(pos, (Layer.Edge.BOTTOM,))
+        for e in edges:
+            Layer.set_anchor(self.card, e, True)
+            Layer.set_margin(self.card, e, 24 if e != Layer.Edge.BOTTOM or len(edges) > 1 else 10)
+
+    def apply_desk(self):
+        """Einstellungen „anzeige immer auf dem hintergrundbild“ / Position übernehmen."""
+        on = bool(engine.setting("desk"))
+        self.place_desk()
+        self.enabled = on
+        if on:
+            self.update()
+            self.card.set_visible(True)
+        else:
+            self.card.set_visible(False)
+        self.cava.want("desk", on)
 
     def set_enabled(self, on):
         """Vorschau an/aus (Einstellungen). Aus = kein Auslöse-Streifen am Bildschirmrand."""

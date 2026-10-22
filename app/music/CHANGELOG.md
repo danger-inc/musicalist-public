@@ -1,5 +1,17 @@
 # musicalist – Änderungen
 
+## 1.5.0 (2026-10-22)
+- **Künstlerseite**: Ein Klick auf den Künstlernamen in einer Liste (oder unter dem Titel in „jetzt“) öffnet seine
+  Seite mit Top-Titeln, Alben, Singles und ähnlichen Künstlern, dazu „radio“ und „alle titel“. Der Rest der Zeile
+  spielt wie bisher den Titel.
+- **YouTube-Statistik**: musicalist meldet Wiedergaben jetzt wie die Website an YouTube – nach 10 s landet ein Titel
+  im YouTube-Verlauf, die gehörte Zeit wird mitgeschickt. So zählen deine Stunden für „diesen Monat gehört“,
+  Rückblick und Empfehlungen. Abschaltbar unter Einstellungen; nur mit Anmeldung.
+- **Anzeige auf dem Hintergrund**: Die Karte aus der Vorschau kann dauerhaft auf dem Hintergrundbild liegen (unter
+  den Fenstern), Position wählbar – Einstellungen → „anzeige immer auf dem hintergrundbild“.
+- **Alt+1 … Alt+6** wechselt die Tabs überall, auch während du im Suchfeld tippst.
+- Die Vorschau-Karte war manchmal höher als ihr Inhalt (leerer Rest unten) – behoben.
+
 ## 1.4.0 (2026-10-21)
 - **Rechtsklick auf jeden Titel** (jetzt, warteschlange, suche, bibliothek, hörverlauf): abspielen, als nächstes, anhängen, radio, **zu playlist hinzufügen**, gefällt mir, künstler/album öffnen, link kopieren – in der Warteschlange auch verschieben und entfernen.
 - **Zu Playlist hinzufügen** geht jetzt überall: Knopf **󰐒 playlist** beim laufenden Titel, Taste `a`, 󰐒 in jeder Suchzeile, „󰐒 als playlist“ für die ganze Warteschlange. Die zuletzt benutzte Playlist steht oben, neue Playlists lassen sich direkt anlegen.
