@@ -4,6 +4,7 @@ set -euo pipefail
 { read -r pid < "${XDG_RUNTIME_DIR:-/tmp/musicalist-$UID}/rice-music.pid" && kill "$pid"; } 2>/dev/null || true
 RICE="$HOME/.local/share/rice-apps"
 rm -rf "$RICE/music"
+rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/musicalist"     # gespeicherte meistgehörte Titel
 rm -f "$HOME/.local/bin/rice-music" "$HOME/.local/bin/musicalist" \
       "$HOME/.local/share/applications/de.invincible.Music.desktop" \
       "$HOME/.local/share/icons/hicolor/scalable/apps/musicalist.svg"

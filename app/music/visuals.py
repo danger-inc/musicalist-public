@@ -429,7 +429,7 @@ class Visuals(Gtk.Overlay):
         self.title = label("", "vz-title", ellipsize=True)
         self.artist = label("", "vz-artist", ellipsize=True)
         self.album = label("", "vz-album", ellipsize=True)
-        self.meter = tui.Meter(1000, self._seek, mark=False)
+        self.meter = tui.Meter(1000, self._seek, mark=False, scroll="h")
         self.meter.set_size_request(220, -1)
         self.meter.set_hexpand(False)
         self.pos = label("0:00", "vz-time")

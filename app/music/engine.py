@@ -15,7 +15,10 @@ BROWSER_JSON = os.path.join(AUTH_DIR, "browser.json")   # Anmeldung für ytmusic
 COOKIES_TXT = os.path.join(AUTH_DIR, "cookies.txt")      # Anmeldung für yt-dlp
 STATE = os.path.join(HERE, "state.json")
 SETTINGS = os.path.join(HERE, "settings.json")
-HISTORY = os.path.join(HERE, "history.json")   # eigener Hörverlauf (nur lokal, wird nie veröffentlicht)
+HISTORY = os.path.join(HERE, "history.json")
+PLAYS = os.path.join(HERE, "plays.json")       # Wiedergaben je Titel (für „meistgehört“, nur lokal)
+# Audiodateien bewusst außerhalb von rice-apps (wird gesichert/veröffentlicht) – lassen sich jederzeit neu laden
+OFFLINE_DIR = os.path.join(GLib.get_user_data_dir(), "musicalist", "offline")   # eigener Hörverlauf (nur lokal, wird nie veröffentlicht)
 DEFAULT_SETTINGS = {"hover": False,       # Vorschau-Karte am Bildschirmrand: standardmäßig aus
                     "background": False,  # Fenster zu → weiterspielen? Standard: nein, ganz beenden
                     "visual": "orbit",    # Modus der Seite „visuals“
@@ -23,7 +26,9 @@ DEFAULT_SETTINGS = {"hover": False,       # Vorschau-Karte am Bildschirmrand: st
                     "history": True,          # Hörverlauf führen (aus = nichts wird gemerkt, Leiste weg)
                     "yt_history": True,       # Wiedergaben an YouTube melden (Verlauf, Statistik, Empfehlungen)
                     "desk": False,            # Anzeige dauerhaft auf dem Hintergrundbild
-                    "desk_pos": "bottom"}     # wo: bottom / bottom-left / bottom-right / top-right / top-left
+                    "desk_pos": "bottom",
+                    "offline": True,          # meistgehörte Titel als Datei speichern (geht ohne Netz, startet sofort)
+                    "offline_n": 25}          # wie viele     # wo: bottom / bottom-left / bottom-right / top-right / top-left
 
 
 def setting(key):
@@ -558,6 +563,7 @@ class Resolver:
         self.warm_lock = threading.Lock()
         self.warm_next = None       # Hover: zuletzt gewünschter Titel (neuester gewinnt)
         self.warm_busy = False
+        self.local = None           # vid → Pfad einer gespeicherten Datei (Offline), sonst None
 
     def reset(self):
         self.ydls = {}
@@ -610,8 +616,18 @@ class Resolver:
                 self.inflight.pop(vid, None)
             ev.set()
 
+    def local_info(self, vid):
+        f = self.local(vid) if self.local else None
+        if not f:
+            return None
+        return {"url": f, "ua": UA, "abr": None, "codec": os.path.splitext(f)[1].lstrip("."), "duration": None,
+                "kind": "offline"}
+
     def get(self, vid):
-        """Für sofortiges Abspielen: Zwischenspeicher, sonst der schnelle Weg (Notfall: hq)."""
+        """Für sofortiges Abspielen: gespeicherte Datei, Zwischenspeicher, sonst der schnelle Weg (Notfall: hq)."""
+        loc = self.local_info(vid)
+        if loc:
+            return loc
         hit = self.cached(vid)
         if hit:
             return hit
@@ -625,7 +641,7 @@ class Resolver:
     def warm(self, vid):
         """Maus liegt auf einem Titel: Adresse schon mal (schnell) holen – der Klick spielt dann sofort.
         Immer nur einer gleichzeitig; kommt ein neuer Wunsch, gewinnt der neueste."""
-        if not vid or self.cached(vid) or vid in self.inflight:
+        if not vid or self.cached(vid) or vid in self.inflight or (self.local and self.local(vid)):
             return
         with self.warm_lock:
             self.warm_next = vid
@@ -651,7 +667,8 @@ class Resolver:
         """Im Hintergrund nacheinander vorladen (neueste Wunschliste gewinnt)."""
         kind = "hq" if os.path.exists(COOKIES_TXT) else "fast"
         with self.queue_lock:
-            self.wanted = [v for v in vids if not (self.cached(v) and self.cached(v).get("kind") == kind)]
+            self.wanted = [v for v in vids if not (self.cached(v) and self.cached(v).get("kind") == kind)
+                           and not (self.local and self.local(v))]
             if self.worker and self.worker.is_alive():
                 return
             self.worker = threading.Thread(target=self._prefetch_loop, args=(kind,), daemon=True)
@@ -778,6 +795,193 @@ class History:
         return False
 
 
+class Offline:
+    """Meistgehörte Titel offline: Wiedergaben werden gezählt (mit Halbwertszeit – was man länger nicht hört,
+    rutscht von allein raus), die besten N liegen als Audiodatei in OFFLINE_DIR. Abgleich beim Start, alle 6 h
+    und wenn ein Titel neu in die Spitze kommt; herausgefallene Dateien werden gelöscht."""
+    HALF = 21 * 86400        # Halbwertszeit einer Wiedergabe
+    MIN_SCORE = 1.5          # ≈ zweimal in letzter Zeit gehört – einmal reinhören reicht nicht
+
+    def __init__(self, history):
+        self.listeners = []
+        self.lock = threading.Lock()
+        self.busy, self.status, self.errors = False, "", {}
+        self.current = None              # gerade geladener Titel
+        try:
+            with open(PLAYS) as f:
+                self.plays = json.load(f)
+        except (OSError, ValueError):
+            self.plays = self._seed(history.items)
+        try:
+            with open(os.path.join(OFFLINE_DIR, "index.json")) as f:
+                self.index = json.load(f)
+        except (OSError, ValueError):
+            self.index = {}
+        self._save_id = self._sync_id = None
+        GLib.timeout_add_seconds(60, lambda: self.sync() and False)          # kurz nach dem Start
+        GLib.timeout_add_seconds(6 * 3600, lambda: self.sync() or True)
+
+    # ----- Zählen -----
+    def _seed(self, items):
+        """Beim ersten Mal aus dem bisherigen Hörverlauf vorbelegen."""
+        plays = {}
+        for it in sorted(items, key=lambda x: x.get("at", 0)):
+            self._bump(plays, it, it.get("at") or time.time())
+        return plays
+
+    def _bump(self, plays, t, now):
+        e = plays.get(t["videoId"])
+        if e is None:
+            e = plays[t["videoId"]] = {"s": 0.0, "n": 0, "last": now}
+        e["s"] = e["s"] * 0.5 ** (max(0, now - e["last"]) / self.HALF) + 1
+        e["n"] += 1
+        e["last"] = now
+        e["t"] = {k: t.get(k) for k in ("videoId", "title", "artist", "album", "duration", "thumb")}
+
+    def score(self, e, now=None):
+        return e["s"] * 0.5 ** (max(0, (now or time.time()) - e["last"]) / self.HALF)
+
+    def count(self, t):
+        """Eine Wiedergabe (aufgerufen zusammen mit dem Hörverlauf, also nach 5 s echtem Hören)."""
+        if not t or not t.get("videoId"):
+            return
+        self._bump(self.plays, t, time.time())
+        if self._save_id is None:
+            self._save_id = GLib.timeout_add_seconds(5, self.save)
+        if setting("offline") and t["videoId"] not in self.index and t["videoId"] in self.wanted_ids():
+            if self._sync_id is None:            # neu in der Spitze → bald laden (gebündelt)
+                self._sync_id = GLib.timeout_add_seconds(30, self._sync_soon)
+
+    def _sync_soon(self):
+        self._sync_id = None
+        self.sync()
+        return False
+
+    def save(self):
+        self._save_id = None
+        now = time.time()
+        if len(self.plays) > 2000:              # Bodensatz wegwerfen
+            keep = sorted(self.plays.items(), key=lambda kv: -self.score(kv[1], now))[:1500]
+            self.plays = dict(keep)
+        try:
+            with open(PLAYS + ".tmp", "w") as f:
+                json.dump(self.plays, f, ensure_ascii=False)
+            os.replace(PLAYS + ".tmp", PLAYS)
+        except OSError:
+            pass
+        return False
+
+    def top(self, n=None):
+        """[(track, score, anzahl)] – die meistgehörten Titel, beste zuerst."""
+        now = time.time()
+        rows = [(e["t"], self.score(e, now), e["n"]) for e in self.plays.values() if e.get("t")]
+        rows = [r for r in rows if r[1] >= self.MIN_SCORE]
+        rows.sort(key=lambda r: -r[1])
+        return rows[:n or setting("offline_n") or 25]
+
+    def wanted_ids(self):
+        return [t["videoId"] for t, _s, _n in self.top()] if setting("offline") else []
+
+    # ----- Dateien -----
+    def path(self, vid):
+        e = self.index.get(vid)
+        if e:
+            f = os.path.join(OFFLINE_DIR, e["file"])
+            if os.path.exists(f):
+                return f
+        return None
+
+    def has(self, vid):
+        return vid in self.index
+
+    def size(self):
+        return sum(e.get("size", 0) for e in self.index.values())
+
+    def emit(self):
+        for fn in list(self.listeners):
+            GLib.idle_add(lambda f=fn: f() and False)
+
+    def _save_index(self):
+        os.makedirs(OFFLINE_DIR, exist_ok=True)
+        tmp = os.path.join(OFFLINE_DIR, "index.json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(self.index, f, ensure_ascii=False)
+        os.replace(tmp, os.path.join(OFFLINE_DIR, "index.json"))
+
+    def sync(self):
+        """Abgleichen: fehlende laden, herausgefallene löschen (im Hintergrund, einer nach dem anderen)."""
+        want = self.top() if setting("offline") else []
+        with self.lock:
+            if self.busy:
+                return False
+            self.busy = True
+        threading.Thread(target=self._sync, args=([t for t, _s, _n in want],), daemon=True).start()
+        return True
+
+    def _sync(self, want):
+        try:
+            ids = {t["videoId"] for t in want}
+            for vid in [v for v in self.index if v not in ids]:     # aussortieren
+                self._remove(vid)
+            # Dateien ohne Eintrag (abgebrochene Downloads) aufräumen
+            if os.path.isdir(OFFLINE_DIR):
+                known = {e["file"] for e in self.index.values()}
+                for name in os.listdir(OFFLINE_DIR):
+                    if name not in known and name != "index.json":
+                        try:
+                            os.remove(os.path.join(OFFLINE_DIR, name))
+                        except OSError:
+                            pass
+            todo = [t for t in want if not self.path(t["videoId"]) and self.errors.get(t["videoId"], 0) < time.time()]
+            for i, t in enumerate(todo):
+                self.status = f"lade {i + 1}/{len(todo)}: {t['title']}"
+                self.current = t["videoId"]
+                self.emit()
+                try:
+                    self._download(t)
+                except Exception as e:  # noqa: BLE001
+                    self.errors[t["videoId"]] = time.time() + 6 * 3600     # später nochmal
+                    log(f"offline {t['videoId']}: {str(e)[:160]}")
+            self.status = ""
+        finally:
+            self.current = None
+            self.busy = False
+            self.emit()
+
+    def _remove(self, vid):
+        e = self.index.pop(vid, None)
+        if e:
+            try:
+                os.remove(os.path.join(OFFLINE_DIR, e["file"]))
+            except OSError:
+                pass
+            self._save_index()
+
+    def _download(self, t):
+        import yt_dlp
+        os.makedirs(OFFLINE_DIR, exist_ok=True)
+        vid = t["videoId"]
+        opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "noprogress": True,
+                "format": "bestaudio[acodec=opus]/bestaudio/best", "js_runtimes": js_runtimes(),
+                "outtmpl": os.path.join(OFFLINE_DIR, f"{vid}.part-dl.%(ext)s"), "ratelimit": 4_000_000}
+        if os.path.exists(COOKIES_TXT):
+            opts["cookiefile"] = COOKIES_TXT
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"https://music.youtube.com/watch?v={vid}", download=True)
+            got = (info.get("requested_downloads") or [{}])[0].get("filepath") or ydl.prepare_filename(info)
+        ext = os.path.splitext(got)[1]
+        final = os.path.join(OFFLINE_DIR, vid + ext)
+        os.replace(got, final)
+        self.index[vid] = {"file": vid + ext, "title": t.get("title"), "artist": t.get("artist"),
+                           "size": os.path.getsize(final), "at": time.time(), "abr": info.get("abr")}
+        self._save_index()
+
+    def clear(self):
+        for vid in list(self.index):
+            self._remove(vid)
+        self.emit()
+
+
 class Player:
     """Warteschlange + Wiedergabe. listeners bekommen (was) bei Änderungen:
     'track' (anderer Titel), 'state' (Pause/Laden), 'pos' (Zeit), 'queue', 'volume', 'error:<text>'."""
@@ -788,6 +992,8 @@ class Player:
         self.lyrics = Lyrics(self.music)
         self.listeners = []
         self.history = History()
+        self.offline = Offline(self.history)
+        self.resolver.local = self.offline.path
         self.queue, self.index = [], -1
         self.pos, self.dur, self.paused, self.loading, self.volume = 0.0, 0.0, True, False, 70
         self.repeat, self.shuffle, self.autoplay = "aus", False, True
@@ -1113,6 +1319,7 @@ class Player:
                         self._hist = None
                         if self.history.add(h["t"]):
                             self.emit("history")
+                        self.offline.count(h["t"])
                 self.yt_tick(val)
                 self.emit("pos")
             elif name == "duration" and val:

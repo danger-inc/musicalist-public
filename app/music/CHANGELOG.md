@@ -1,5 +1,14 @@
 # musicalist – Änderungen
 
+## 1.6.0 (2026-10-22)
+- **Meistgehörte offline**: musicalist zählt, wie oft du einen Titel hörst, und speichert die meistgehörten
+  (Standard: top 25, einstellbar 10/25/50/100) als Datei. Die spielen sofort und auch ohne Internet; in Listen
+  zeigt „󰇚“ sie an. Was du länger nicht mehr hörst, rutscht von allein raus und wird wieder gelöscht (Abgleich
+  beim Start, alle 6 h und sobald ein Titel neu in die Spitze kommt). Einstellungen (⚙) → „offline · meistgehört“
+  mit Liste und „jetzt abgleichen“. Die Zählung startet mit deinem bisherigen Hörverlauf.
+- **Fortschrittsbalken**: mit zwei Fingern spult jetzt nur noch Wischen nach links/rechts. Senkrechtes Scrollen
+  über dem Balken ändert die Stelle im Lied nicht mehr (gilt im Player, in der Vorschau-Karte und bei visuals).
+
 ## 1.5.0 (2026-10-22)
 - **Künstlerseite**: Ein Klick auf den Künstlernamen in einer Liste (oder unter dem Titel in „jetzt“) öffnet seine
   Seite mit Top-Titeln, Alben, Singles und ähnlichen Künstlern, dazu „radio“ und „alle titel“. Der Rest der Zeile

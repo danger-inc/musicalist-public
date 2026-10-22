@@ -431,6 +431,7 @@ class Spectrum(Gtk.DrawingArea):
 
 # ---------- Listen ----------
 ARTIST_OPEN = None      # setzt MusicWindow: Klick auf einen Künstlernamen → Künstlerseite
+OFFLINE_HAS = None      # setzt MusicWindow: videoId → liegt offline gespeichert?
 
 
 def track_row(t, on_play, actions, menus=None, extra=None):
@@ -454,7 +455,11 @@ def track_row(t, on_play, actions, menus=None, extra=None):
     art.set_sensitive(bool(t["artist"]))
     row.dur = label(fmt(t["duration"]) if t["duration"] else "", "dim", xalign=1)
     row.dur.set_width_chars(6)
-    head.set_child(hbox(row.mark, row.title, art, row.dur, spacing=10))
+    off = None
+    if OFFLINE_HAS and OFFLINE_HAS(t.get("videoId")):
+        off = label("󰇚", "dim")
+        off.set_tooltip_text("offline gespeichert (meistgehört)")
+    head.set_child(hbox(row.mark, row.title, off, art, row.dur, spacing=10))
     head.connect("clicked", lambda *_: on_play())
     row.append(head)
     for glyph, tip, fn, *opt in actions:      # opt: (True,) = fn bekommt den Knopf (Popover daran)
@@ -493,8 +498,9 @@ class MusicWindow(tui.TuiWindow):
                          size=(900, 700), icons_only=True, hints=())
         self.p, self.cava, self.srcs = player, cava, srcs
         self.songs = songmenu.SongMenus(self)
-        global ARTIST_OPEN
+        global ARTIST_OPEN, OFFLINE_HAS
         ARTIST_OPEN = self.open_artist
+        OFFLINE_HAS = player.offline.has
         css = Gtk.CssProvider()
         css.load_from_string(CSS)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
@@ -887,6 +893,7 @@ class MusicWindow(tui.TuiWindow):
             self.desk_chk.set_sensitive(False)
             self.desk_pos.set_sensitive(False)
         page.append(panel)
+        page.append(self.build_offline())
         self.add_page("settings", page)
         self.on_hover_changed = None       # setzt musicd: schaltet die Vorschau live ein/aus
         self.on_desk_changed = None        # setzt musicd: Anzeige auf dem Hintergrund an/aus/verschieben
@@ -920,6 +927,75 @@ class MusicWindow(tui.TuiWindow):
         self.p.emit("history")
         self.update_hist_info()
         self.say("hörverlauf gelöscht")
+
+    # ---------- offline (meistgehört) ----------
+    def build_offline(self):
+        panel = tui.Panel("󰇚 offline · meistgehört")
+        b = panel.body
+        self.off_chk = tui.Check("meistgehörte titel speichern", engine.setting("offline"), self.set_offline,
+                                 tooltip="Die Titel, die du in letzter Zeit am häufigsten hörst, liegen als Datei\n"
+                                         "auf dem Rechner: spielen sofort und auch ohne Internet.")
+        self.off_n = tui.Select(self.set_offline_n, tooltip="Wie viele Titel")
+        b.append(hbox(self.off_chk, label("", hexpand=True), label("anzahl", "dim"), self.off_n, spacing=10))
+        b.append(label("zählt wie oft du einen titel hörst; was du länger nicht mehr hörst, rutscht von allein "
+                       "raus und wird wieder gelöscht. abgleich beim start, alle 6 h und sobald ein titel neu "
+                       "in die spitze kommt. braucht den hörverlauf.", "dim", wrap=True, xalign=0))
+        self.off_info = label("", "dim", wrap=True, xalign=0, hexpand=True)
+        b.append(hbox(self.off_info, tui.Button("󰑐 jetzt abgleichen", self.offline_sync), spacing=10))
+        self.off_list = vbox(spacing=0)
+        b.append(self.off_list)
+        self.p.offline.listeners.append(self.update_offline)
+        self.update_offline()
+        return panel
+
+    def set_offline(self, on):
+        engine.set_setting("offline", on)
+        self.p.offline.sync()
+        self.update_offline()
+        self.say("meistgehörte werden gespeichert" if on else "offline aus – gespeicherte titel werden gelöscht")
+
+    def set_offline_n(self, v):
+        engine.set_setting("offline_n", int(v))
+        self.p.offline.sync()
+        self.update_offline()
+
+    def offline_sync(self):
+        if not self.p.offline.sync():
+            self.say("abgleich läuft schon")
+        self.update_offline()
+
+    def update_offline(self):
+        off = self.p.offline
+        on = engine.setting("offline")
+        n = engine.setting("offline_n") or 25
+        self.off_n.set_options([(str(k), f"top {k}") for k in (10, 25, 50, 100)], str(n))
+        top = off.top(n) if on else []
+        have = sum(1 for t, _s, _c in top if off.path(t["videoId"]))
+        mb = off.size() / 1e6
+        if not on:
+            txt = "aus" + (f" · {len(off.index)} dateien werden gelöscht …" if off.index else "")
+        elif off.busy and off.status:
+            txt = f"{off.status}  ·  {have}/{len(top)} da · {mb:.0f} mb"
+        elif not top:
+            txt = "noch nichts oft genug gehört – ein titel braucht ≈ 2 wiedergaben in letzter zeit"
+        else:
+            txt = f"{have}/{len(top)} gespeichert · {mb:.0f} mb · nur auf diesem rechner"
+        if not engine.setting("history"):
+            txt += " · hörverlauf ist aus, es wird nicht mehr gezählt"
+        self.off_info.set_label(txt)
+        tui.clear(self.off_list)
+        for i, (t, _s, cnt) in enumerate(top):
+            vid = t["videoId"]
+            mark = "✓" if off.path(vid) else "⟳" if off.current == vid else "·"
+            row = Gtk.Button(hexpand=True)
+            row.add_css_class("rowhead")
+            row.set_child(hbox(label(f"{i + 1:>2}", "dim"), label(mark, "accent" if mark != "·" else "dim"),
+                               label(t.get("title") or "?", hexpand=True, ellipsize=True, xalign=0),
+                               label(t.get("artist") or "", "dim", ellipsize=True),
+                               label(f"{cnt}×", "dim"), spacing=8))
+            row.connect("clicked", lambda _b, tt=t: self.p.play_now(dict(tt)))
+            self.off_list.append(row)
+        return False
 
     def update_hist_info(self):
         n = len(self.p.history.items)
@@ -985,7 +1061,7 @@ class MusicWindow(tui.TuiWindow):
 
         self.pos_lbl = label("0:00", "mono-pct")
         self.dur_lbl = label("0:00", "mono-pct", xalign=1)
-        self.seek = tui.Meter(1000, self.on_seek, mark=False)
+        self.seek = tui.Meter(1000, self.on_seek, mark=False, scroll="h")
         self.prev_btn = tui.Button("󰒮", self.p.prev, tooltip="Zurück (p)")
         self.play_btn = tui.Button("󰐊", self.p.toggle, tooltip="Play/Pause (Leertaste)")
         self.next_btn = tui.Button("󰒭", lambda: self.p.next(), tooltip="Weiter (n)")
@@ -2184,7 +2260,7 @@ class Preview:
         self.like.connect("clicked", lambda *_: self.p.like())
         self.pos = label("", "dim", xalign=1)
         self.seek = tui.Meter(1000, lambda v: self.p.dur and self.p.seek(v / 1000 * self.p.dur), small=True,
-                               mark=False, flush=True)
+                               mark=False, flush=True, scroll="h")
         self.spec = Spectrum(rows=1, cell=8, height=16, flush=True)
         right = vbox(hbox(title_btn, self.like, spacing=8),
                      hbox(self.prev, self.play, self.next, label("", hexpand=True), self.pos, spacing=6),

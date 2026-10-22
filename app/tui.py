@@ -632,8 +632,13 @@ class Meter(Gtk.DrawingArea):
     interactive=False: reine Anzeige (z. B. Pegel)."""
 
     def __init__(self, maximum=100, callback=None, interactive=True, glyph="■", empty=None, small=False,
-                 mark=True, flush=False):
+                 mark=True, flush=False, scroll="v"):
         super().__init__(hexpand=True)
+        # scroll="h": nur waagrechtes Wischen/Kippen verstellt (Fortschrittsbalken) – senkrechtes Scrollen geht
+        # an die Seite weiter, damit man beim Blättern nicht aus Versehen die Stelle im Lied ändert
+        self.scroll_axis = scroll
+        self.swipe_owns_h = scroll == "h"     # swipe.SwipeBack lässt waagrechte Gesten hier in Ruhe
+        self._sg = None
         self.flush = flush  # True: erste/letzte Zelle sitzen genau an den Rändern (bündig mit Nachbarn)
         self.mark = mark  # False: keine 100-%-Marke (z. B. Fortschrittsbalken mit maximum=1000)
         self.maximum, self.callback, self.interactive = maximum, callback, interactive
@@ -650,8 +655,13 @@ class Meter(Gtk.DrawingArea):
             drag.connect("drag-begin", lambda g, x, y: self._set_from_x(x))
             drag.connect("drag-update", lambda g, dx, dy: self._set_from_x(g.get_start_point()[1] + dx))
             self.add_controller(drag)
-            scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
-            scroll.connect("scroll", lambda c, dx, dy: self._user_set(self.value - dy * 2) or True)
+            if scroll == "h":
+                scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.BOTH_AXES)
+                scroll.connect("scroll", self._hscroll)
+                scroll.connect("scroll-end", lambda *_: setattr(self, "_sg", None))
+            else:
+                scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
+                scroll.connect("scroll", lambda c, dx, dy: self._user_set(self.value - dy * 2) or True)
             self.add_controller(scroll)
             keys = Gtk.EventControllerKey()
             keys.connect("key-pressed", self._key)
@@ -660,6 +670,32 @@ class Meter(Gtk.DrawingArea):
             focus.connect("enter", lambda *_: self.queue_draw())
             focus.connect("leave", lambda *_: self.queue_draw())
             self.add_controller(focus)
+
+    def _hscroll(self, ctrl, dx, dy):
+        """Nur waagrecht: Touchpad-Geste entscheidet sich nach den ersten Pixeln für eine Richtung."""
+        if ctrl.get_unit() == Gdk.ScrollUnit.WHEEL:          # Mausrad: nur Kippen nach links/rechts
+            if abs(dx) > abs(dy):
+                self._user_set(self.value + dx * self.maximum * 0.02)
+                return True
+            return False
+        now = time.monotonic()
+        g = self._sg
+        if g is None or now - g["t"] > 0.35:
+            g = self._sg = {"dx": 0.0, "dy": 0.0, "lock": None}
+        g["t"] = now
+        if g["lock"] is None:
+            g["dx"] += dx
+            g["dy"] += dy
+            if abs(g["dx"]) + abs(g["dy"]) < 6:
+                return False
+            g["lock"] = "h" if abs(g["dx"]) > 1.5 * abs(g["dy"]) else "v"
+            if g["lock"] == "h":
+                dx = g["dx"]
+        if g["lock"] != "h":
+            return False
+        # Finger nach rechts (dx < 0, wie bei 2-Finger-Zurück) = vorspulen; ganze Balkenbreite = halbes Lied
+        self._user_set(self.value - dx / max(1, self.get_width()) * self.maximum * 0.5)
+        return True
 
     def _key(self, _c, kv, _code, _state):
         step = {Gdk.KEY_Left: -2, Gdk.KEY_Right: 2, Gdk.KEY_Page_Down: -10, Gdk.KEY_Page_Up: 10,
