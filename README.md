@@ -1,68 +1,70 @@
 # musicalist
 
-YouTube-Music-Player im Terminal-Look der Suite (GTK4): Suche, Bibliothek, Radio/Autoplay, Songtexte, Spektrum
-(cava), Medientasten (MPRIS) und auf Wunsch eine **Vorschau-Karte**, die unten mittig hochgleitet, wenn die Maus an
-den Bildschirmrand fährt (Leertaste = Pause, ←/→ = Titel zurück/vor).
+youtube music player in the terminal look of the suite (gtk4): search, library, radio/autoplay, lyrics, spectrum
+(cava), media keys (mpris) and, if you want, a **preview card** that slides up at the bottom when the mouse
+hits the screen edge (space = pause, ←/→ = previous/next track).
 
-## Installieren
+## install
+
+the repository is public – no account needed:
 
 ```bash
-git clone https://github.com/invincible-nix/musicalist-public ~/musicalist-src
+git clone https://github.com/danger-inc/musicalist-public ~/musicalist-src
 cd ~/musicalist-src && ./install.sh
 ```
 
-Der Installer fragt einmal nach dem Passwort (für die Systempakete: GTK4, mpv, cava, playerctl), legt eine eigene
-Python-Umgebung für ytmusicapi/yt-dlp an (`~/.local/share/rice-apps/music/venv`), installiert den Befehl
-`musicalist` und einen Eintrag im Anwendungsmenü. Pakete, die es auf deiner Distribution nicht gibt, werden
-übersprungen und am Ende genannt – der Rest wird trotzdem installiert.
+the installer asks for the password once (for the system packages: gtk4, mpv, cava, playerctl), sets up its own
+python environment for ytmusicapi/yt-dlp (`~/.local/share/rice-apps/music/venv`) and installs the command
+`musicalist` and an application menu entry. packages that don't exist on your distribution are skipped
+and listed at the end – everything else is installed anyway.
 
-Starten: `musicalist` oder über das Anwendungsmenü. Nochmal aufrufen blendet das Fenster ein/aus;
-✕ / `q` beendet musicalist ganz, die Musik stoppt. Soll sie bei geschlossenem Fenster weiterlaufen:
-Tab 6 „einstellungen“ → „beim schließen im hintergrund weiterspielen“.
+start with `musicalist` or from the application menu. calling it again shows/hides the window;
+✕ / `q` exits musicalist completely and the music stops. to keep playing with the window closed:
+settings (⚙ or `,`) → "beim schließen im hintergrund weiterspielen".
 
-## Läuft auf
+## runs on
 
-| System | Status |
-|---|---|
-| Ubuntu 24.04+, Linux Mint 22+, Debian 13 | getestet (Ubuntu 24.04) |
-| Fedora 39+ | getestet (Fedora 44) |
-| Arch, EndeavourOS, CachyOS, Manjaro | getestet (Arch) |
-| openSUSE Tumbleweed | sollte gehen (ungetestet) |
-| Windows / macOS | nein – musicalist braucht Linux (mpv-Steuerung, MPRIS, Layer-Shell) |
+| system | status |
+| --- | --- |
+| ubuntu 24.04+, linux mint 22+, debian 13 | tested (ubuntu 24.04) |
+| fedora 39+ | tested (fedora 44) |
+| arch, endeavouros, cachyos, manjaro | tested (arch) |
+| openSUSE Tumbleweed | should work (untested) |
+| windows / macos | no – musicalist needs linux (mpv control, mpris, layer-shell) |
 
-Nötig ist **GTK 4.12 oder neuer** (ältere Systeme wie Ubuntu 22.04 / Mint 21 / Debian 12 sind zu alt).
-Das Programm `mpv` spielt den Ton ab. `cava` (Spektrum) und `playerctl` sind optional.
+required is **gtk 4.12 or newer** (older systems like ubuntu 22.04 / mint 21 / debian 12 are too old).
+`mpv` plays the audio. `cava` (spectrum) and `playerctl` are optional.
 
-## Einstellungen (Tab 6 bzw. ⚙)
+## settings (⚙ or `,`)
 
-- **Vorschau-Karte am unteren Bildschirmrand (Hover)** – standardmäßig **aus**. Braucht Wayland mit Layer-Shell
-  (Hyprland, Sway, KDE Plasma …) und das Paket `gtk4-layer-shell`; unter GNOME und X11 nicht verfügbar.
-  Wenn sie Probleme macht: einfach ausgeschaltet lassen.
+* **preview card at the bottom edge (hover)** – **off** by default. needs wayland with layer-shell
+(hyprland, sway, kde plasma …) and the package `gtk4-layer-shell`; not available on gnome and x11.
+if it causes trouble: just leave it off.
 
-## Anmeldung
+## login
 
-Im Tab „bibliothek“ auf „mit zen/firefox anmelden“ klicken: musicalist übernimmt die YouTube-Sitzung aus deinem
-Zen-, Firefox- oder LibreWolf-Profil (auch Snap/Flatpak). Vorher dort bei music.youtube.com einloggen.
-Chrome/Chromium gehen nicht (die verschlüsseln ihre Cookies).
-**Abspielen geht nur mit Anmeldung:** Suchen und Stöbern klappt auch ohne, Titel werden aber erst
-wiedergegeben, wenn die Anmeldung bei Google bestätigt ist.
+in the tab "bibliothek" click "mit zen/firefox anmelden": musicalist takes over the youtube session from your
+zen, firefox or librewolf profile (snap/flatpak too). log in at music.youtube.com there first.
+chrome/chromium don't work (they encrypt their cookies).
+**playback needs a login:** searching and browsing work without, but tracks only play once
+the google login is confirmed.
 
-Die Anmeldedaten liegen nur lokal in `~/.local/share/rice-apps/music/auth` (Rechte 600) und werden nirgends
-hochgeladen.
+the login data stays local in `~/.local/share/rice-apps/music/auth` (permissions 600) and is never
+uploaded anywhere.
 
-## Tasten
+## keys
 
-Leertaste Play/Pause · n/p weiter/zurück · ←/→ spulen · +/− Lautstärke · l ♥ · / Suche · 1–6 Tabs ·
-q schließt (Esc nicht – damit man es nicht aus Versehen zumacht).
+space play/pause · n/p next/previous · ←/→ seek · +/− volume · l ♥ · a add to playlist · / search · 1–6 tabs ·
+h history bar · v/f visuals mode/fullscreen · ? all keys · q closes (not esc – so you don't close it by accident).
 
-## Hyprland (optional)
+## hyprland (optional)
 
 ```lua
--- Autostart (wartet im Hintergrund), innerhalb von hl.on("hyprland.start", function () … end):
+-- autostart (waits in the background), inside hl.on("hyprland.start", function () … end):
 hl.exec_cmd(os.getenv("HOME") .. "/.local/bin/rice-music --daemon")
--- ein-/ausblenden:
+-- show/hide:
 hl.bind("SUPER + M", hl.dsp.exec_cmd(os.getenv("HOME") .. "/.local/bin/rice-music"))
--- Vorschau-Karte (falls eingeschaltet): weich einblenden und Unschärfe dahinter
+-- preview card (if enabled): fade in and blur behind it
 hl.layer_rule({
     name         = "blur-music-preview",
     match        = { namespace = "^music-preview$" },
@@ -72,24 +74,24 @@ hl.layer_rule({
 })
 ```
 
-Andere Oberflächen: eine Tastenkombination auf den Befehl `musicalist` legen (GNOME: Einstellungen → Tastatur →
-Eigene Tastenkürzel; KDE: Systemeinstellungen → Kurzbefehle).
+other desktops: bind a shortcut to the command `musicalist` (gnome: settings → keyboard →
+custom shortcuts; kde: system settings → shortcuts).
 
-## Befehle
+## commands
 
-`musicalist` (ein/aus) · `musicalist show|hide|play-pause|next|prev` · `musicalist search:begriff+mit+plus`
+`musicalist` (toggle) · `musicalist show|hide|play-pause|next|prev` · `musicalist search:term+with+plus`
 
-## Aktualisieren / entfernen
+## update / remove
 
 ```bash
-cd ~/musicalist-src && ./update.sh      # holt die neue Version, startet musicalist neu
-./uninstall.sh                          # entfernt alles inklusive Anmeldung
+cd ~/musicalist-src && ./update.sh      # fetches the new version, restarts musicalist
+./uninstall.sh                          # removes everything including the login
 ```
 
-## Probleme?
+## problems?
 
-- **Kein Ton / „wiedergabe fehlgeschlagen“:** `mpv` installiert? (`mpv --version`). Danach `./install.sh` erneut.
-- **`musicalist: Befehl nicht gefunden`:** `~/.local/bin` fehlt im PATH – der Installer sagt am Ende, was in die
-  `~/.bashrc` gehört. Über das Anwendungsmenü startet es auch so.
-- **Kästchen statt Symbolen:** `./update.sh` (die Symbolschrift kommt jetzt mit und wird automatisch geladen).
-- **Startet nicht:** `cat $XDG_RUNTIME_DIR/rice-music.log` zeigt die Fehlermeldung.
+* **no sound / "wiedergabe fehlgeschlagen":** is `mpv` installed? (`mpv --version`). then run `./install.sh` again.
+* **`musicalist: command not found`:** `~/.local/bin` is missing in `PATH` – the installer says at the end what belongs
+in `~/.bashrc`. from the application menu it starts anyway.
+* **boxes instead of symbols:** `./update.sh` (the icon font comes along and is loaded automatically).
+* **doesn't start:** `cat $XDG_RUNTIME_DIR/rice-music.log` shows the error message.
