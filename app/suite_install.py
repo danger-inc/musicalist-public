@@ -26,7 +26,7 @@ ICON_DIR = H("~/.local/share/icons/hicolor/scalable/apps")
 WINDOWS = os.name == "nt"
 SUPPORTED = WINDOWS or bool(shutil.which("bash"))
 # Unter Windows gibt es (noch) Installer für diese Apps – install-windows.ps1 im Repo
-WIN_APPS = ("scourge", "notist", "datist")
+WIN_APPS = ("scourge", "notist", "datist", "musicalist")
 WIN_LINK = {"scourge": "Scourge", "notist": "notist", "datist": "datist", "musicalist": "musicalist"}
 
 # Repo-Namen: der neue zuerst, dann die öffentliche Ausgabe, dann frühere Namen (GitHub leitet um).

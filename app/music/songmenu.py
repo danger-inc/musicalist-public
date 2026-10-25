@@ -8,6 +8,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
+import engine
 import tui
 from tui import label, hbox, vbox
 
@@ -26,7 +27,8 @@ class SongMenus:
     def __init__(self, win):
         self.win, self.p = win, win.p
         self.playlists, self.pl_time = None, 0.0
-        self.last_pl = None        # (id, titel) der zuletzt benutzten Playlist – steht oben
+        lp = engine.setting("last_playlist")
+        self.last_pl = tuple(lp) if lp else None    # (id, titel) der zuletzt benutzten Playlist – steht oben
 
     # ---------- an eine Zeile hängen ----------
     def attach(self, row, t, extra=None):
@@ -129,11 +131,10 @@ class SongMenus:
             liked = bool(t.get("liked"))
             it("󰋑" if liked else "󰋕", "gefällt mir nicht mehr" if liked else "gefällt mir",
                lambda: p.rate(t, not liked), "l" if cur else "")
-        if t.get("artistId") or t.get("albumId"):
+        if t.get("artist") or t.get("albumId"):
             self._rub(main, "öffnen")
-            if t.get("artistId"):
-                it("󰠃", f"künstler · {(t.get('artist') or '').split(',')[0]}",
-                   lambda: w.open_detail("artist", t["artistId"]))
+            if t.get("artist"):
+                it("󰠃", f"künstler · {(t.get('artist') or '').split(',')[0]}", lambda: w.open_artist(t))
             if t.get("albumId"):
                 it("󰀥", f"album · {t.get('album') or 'öffnen'}", lambda: w.open_detail("album", t["albumId"]))
         if cur:
@@ -142,7 +143,7 @@ class SongMenus:
         url = f"https://music.youtube.com/watch?v={t['videoId']}"
         it("󰆏", "link kopieren", lambda: (Gdk.Display.get_default().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(url)),
                     w.say("link kopiert")))
-        it("↗", "im browser öffnen", lambda: subprocess.Popen(["xdg-open", url], start_new_session=True))
+        it("↗", "im browser öffnen", lambda: engine.open_url(url))
         if extra:
             self._rub(main)
             for e in extra:
@@ -215,7 +216,8 @@ class SongMenus:
                 return
             if self.last_pl and any(pl["id"] == self.last_pl[0] for pl in pls):
                 lst.append(label("zuletzt", "kp-rub"))
-                self._item(lst, pop, "󰐒", self.last_pl[1], lambda pl=self.last_pl: self.add(pl, tracks))
+                b = self._item(lst, pop, "󰐒", self.last_pl[1], lambda pl=self.last_pl: self.add(pl, tracks))
+                GLib.idle_add(lambda: (b.grab_focus(), False)[1])     # „a“, dann Enter
                 lst.append(label("alle", "kp-rub"))
             if not pls:
                 lst.append(label("noch keine eigenen playlists", "kp-empty"))
@@ -236,18 +238,25 @@ class SongMenus:
     def add(self, pl, tracks):
         pid, title = pl
         self.last_pl = (pid, title)
+        engine.set_setting("last_playlist", [pid, title])
         vids = [t["videoId"] for t in tracks]
         self.win.say(f"füge zu „{title}“ hinzu …")
 
         def done(res):
             if isinstance(res, Exception):
                 self.win.say(f"playlist: {str(res)[:120]}", error=True)
-            elif res:
-                self.win.say(f"󰐒 {len(vids)} titel → „{title}“" if len(vids) > 1 else
-                             f"󰐒 „{tracks[0]['title']}“ → „{title}“")
-                self.pl_time = 0.0                     # Anzahl hat sich geändert
             else:
-                self.win.say(f"schon in „{title}“")
+                added, dup = res
+                if added:
+                    self.pl_time = 0.0                 # Anzahl hat sich geändert
+                if not added:
+                    self.win.say(f"󰀦 bereits in „{title}“" if len(vids) == 1 else
+                                 f"󰀦 alle {len(vids)} titel bereits in „{title}“", error=True)
+                elif dup:
+                    self.win.say(f"󰐒 {added} → „{title}“ · {dup} bereits drin")
+                else:
+                    self.win.say(f"󰐒 {added} titel → „{title}“" if added > 1 else
+                                 f"󰐒 „{tracks[0]['title']}“ → „{title}“")
         tui.background(self.p.music.add_to_playlist, pid, vids, done=done)
 
     def create(self, name, tracks):

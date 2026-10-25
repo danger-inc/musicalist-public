@@ -11,6 +11,8 @@ import os, signal, sys, warnings
 os.environ.setdefault("GSK_RENDERER", "cairo")  # gleiche Optik, halber Speicher
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.dirname(HERE)]
+if os.name == "nt":
+    sys.path.insert(0, os.path.join(HERE, "pylibs"))      # Windows: pip-Pakete der App (ytmusicapi, yt-dlp …)
 import tui  # noqa: E402
 from tui import Gio, GLib, Gtk  # noqa: E402
 import engine, sources, ui  # noqa: E402
@@ -36,6 +38,7 @@ def _use_token(token):
 
 
 FIFO = engine.RUNTIME + "/rice-music.fifo"
+PORT = 37524                     # Windows: Befehle kommen über 127.0.0.1 statt über die Fifo-Leitung
 PID_FILE = engine.RUNTIME + "/rice-music.pid"
 
 
@@ -70,21 +73,45 @@ class App(Gtk.Application):
         self.player.mpris.on_raise = lambda: self.command("show")
         self.player.mpris.on_quit = self.stop
         self.win.connect("close-request", self.on_close)
-        if os.path.exists(FIFO):
-            os.unlink(FIFO)
-        os.mkfifo(FIFO, 0o600)
-        self.fd = os.open(FIFO, os.O_RDWR | os.O_NONBLOCK)
-        GLib.io_add_watch(self.fd, GLib.PRIORITY_HIGH, GLib.IOCondition.IN, self.on_fifo)
+        if engine.IS_WIN:
+            self.listen_tcp()
+        else:
+            if os.path.exists(FIFO):
+                os.unlink(FIFO)
+            os.mkfifo(FIFO, 0o600)
+            self.fd = os.open(FIFO, os.O_RDWR | os.O_NONBLOCK)
+            GLib.io_add_watch(self.fd, GLib.PRIORITY_HIGH, GLib.IOCondition.IN, self.on_fifo)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                for sig in (signal.SIGTERM, signal.SIGINT):
+                    GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, self.stop)
         with open(PID_FILE, "w") as f:
             f.write(f"{os.getpid()}\n")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            for sig in (signal.SIGTERM, signal.SIGINT):
-                GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, self.stop)
         if self.show_first:
             self.command("show")
         else:
             GLib.idle_add(lambda: self.win.realize() and False)  # erstes Öffnen ohne Verzögerung
+
+    def listen_tcp(self):
+        """Windows: kleiner Befehlsserver (nur 127.0.0.1); ein zweiter Start schickt „show“ und endet."""
+        import socket, threading
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", PORT))
+        srv.listen(4)
+        self.srv = srv
+
+        def serve():
+            while True:
+                try:
+                    c, _a = srv.accept()
+                    with c:
+                        c.settimeout(2)
+                        data = c.recv(4096).decode(errors="ignore")
+                except OSError:
+                    return
+                for cmd in data.split():
+                    GLib.idle_add(lambda cmd=cmd: self.command(cmd) and False)
+        threading.Thread(target=serve, daemon=True).start()
 
     def on_fifo(self, fd, _cond):
         try:
@@ -111,7 +138,7 @@ class App(Gtk.Application):
         self.preview.hide()
         getattr(tui.glass, "bring_here", lambda w: None)(w)   # auf aktuellen Arbeitsbereich holen
         token, self.token = self.token, None
-        if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") or engine.IS_WIN:
             w.present()
         elif token and _use_token(token):     # vom Desktop mitgegeben → GTK muss nicht warten
             w.present()
@@ -157,6 +184,8 @@ class App(Gtk.Application):
         self.player.shutdown()                # mpv beenden → Musik aus
         if self.cava.proc is not None:
             self.cava.proc.terminate()
+        if getattr(self, "srv", None):
+            self.srv.close()
         for path in (PID_FILE, FIFO):
             try:
                 os.unlink(path)
@@ -166,7 +195,20 @@ class App(Gtk.Application):
         return False
 
 
+def send_to_running(cmds):
+    """Windows: läuft musicalist schon, bekommt es die Befehle (z. B. „show“) – True = übergeben."""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", PORT), timeout=1) as c:
+            c.sendall((" ".join(cmds) + "\n").encode())
+        return True
+    except OSError:
+        return False
+
+
 if __name__ == "__main__":
+    if engine.IS_WIN and send_to_running(["show"] + [a[2:] for a in sys.argv[1:] if a.startswith("--cmd=")]):
+        sys.exit(0)
     app = App("--show" in sys.argv)
     tok = os.environ.pop("XDG_ACTIVATION_TOKEN", None)   # Startberechtigung nicht an Kindprozesse vererben
     os.environ.pop("DESKTOP_STARTUP_ID", None)

@@ -24,7 +24,7 @@ import swipe
 import verlauf
 import visuals
 
-RUNTIME = GLib.get_user_runtime_dir()
+RUNTIME = engine.RUNTIME
 
 CSS = """
 .cover { font-family: "JetBrainsMono Nerd Font", monospace; font-size: 9px; line-height: 1; color: @primary; }
@@ -42,6 +42,8 @@ button.ctl.play label { font-size: 22px; }
 .lyric.past { color: alpha(@foreground, 0.28); }
 .trk-mark { color: @primary; min-width: 18px; }
 flowbox.opts > flowboxchild { padding: 0; min-width: 0; min-height: 0; }
+.album-badge { font-size: 9px; font-weight: bold; letter-spacing: 1px; color: @on_primary; background: @primary;
+               border-radius: 4px; padding: 0 5px; }
 button.artlink { background: none; background-image: none; border: none; box-shadow: none; padding: 0 2px;
     min-height: 0; min-width: 0; border-radius: 3px; }
 button.artlink:hover label { color: @primary; text-decoration: underline; }
@@ -473,12 +475,26 @@ def track_row(t, on_play, actions, menus=None, extra=None):
     return row
 
 
-def coll_row(glyph, title, sub, on_open):
+def artist_link(name, artist_id=None, css="dim", chars=24):
+    """Künstlername als Knopf → Künstlerseite (ohne ID per Suche nach dem Namen)."""
+    lab = label(name, css, ellipsize=True)
+    lab.set_max_width_chars(chars)
+    b = Gtk.Button(child=lab, focus_on_click=False, valign=Gtk.Align.CENTER, tooltip_text=f"Künstlerseite: {name}")
+    b.add_css_class("artlink")
+    b.set_cursor_from_name("pointer")
+    b.connect("clicked", lambda *_: ARTIST_OPEN and ARTIST_OPEN({"artist": name, "artistId": artist_id}))
+    b.set_sensitive(bool(name))
+    return b
+
+
+def coll_row(glyph, title, sub, on_open, artist=None):
+    """artist: (name, id) → Künstler als eigener Link statt Text in sub."""
     row = Gtk.Box()
     row.add_css_class("row")
     head = Gtk.Button(hexpand=True)
     head.add_css_class("rowhead")
-    head.set_child(hbox(label(glyph, "glyph"), label(title, hexpand=True, ellipsize=True), label(sub, "dim"),
+    head.set_child(hbox(label(glyph, "glyph"), label(title, hexpand=True, ellipsize=True),
+                        artist_link(*artist) if artist and artist[0] else None, label(sub, "dim"),
                         label("›", "accent"), spacing=10))
     head.connect("clicked", lambda *_: on_open())
     row.append(head)
@@ -704,8 +720,7 @@ class MusicWindow(tui.TuiWindow):
             item("󰋚", "hörverlauf", self.drawer.toggle, "h")
         rub("")
         item("󰒓", "einstellungen", lambda: self.show_tab("settings"), ",")
-        item("↗", "youtube music im browser", lambda: subprocess.Popen(["xdg-open", "https://music.youtube.com"],
-                                                                         start_new_session=True))
+        item("↗", "youtube music im browser", lambda: engine.open_url("https://music.youtube.com"))
         if on:
             item("󰍃", "abmelden", self.do_logout, danger=True)
 
@@ -1150,8 +1165,7 @@ class MusicWindow(tui.TuiWindow):
     def open_web(self):
         t = self.p.current
         if t:
-            subprocess.Popen(["xdg-open", f"https://music.youtube.com/watch?v={t['videoId']}"],
-                             start_new_session=True)
+            engine.open_url(f"https://music.youtube.com/watch?v={t['videoId']}")
 
     def on_spectrum(self, vals):
         if self.get_visible():
@@ -1264,6 +1278,12 @@ class MusicWindow(tui.TuiWindow):
         self.top_panel.body.append(self.top_box)
         self.top_panel.set_visible(False)
         page.append(self.top_panel)
+        self.albums_panel = tui.Panel("alben")
+        self.albums_box = vbox(spacing=0)
+        self.albums_panel.body.append(self.albums_box)
+        self.albums_panel.set_visible(False)
+        page.append(self.albums_panel)
+        self.album_cache = {}
         self.results_panel = tui.Panel("ergebnisse")
         self.results = vbox(spacing=0)
         self.results_panel.body.append(self.results)
@@ -1379,8 +1399,37 @@ class MusicWindow(tui.TuiWindow):
                         self.top_cache[q.lower()] = (time.monotonic(), res)
                     self.show_top(res, q, gen)
                 tui.background(self.p.music.top_result, q, done=top_done)
+            ah = self.album_cache.get(q.lower())
+            if ah and time.monotonic() - ah[0] < 600:
+                self.show_albums(ah[1], gen)
+            else:
+                def alb_done(res):
+                    if not isinstance(res, Exception):
+                        self.album_cache[q.lower()] = (time.monotonic(), res)
+                    self.show_albums(res, gen)
+                tui.background(self.p.music.search_albums, q, done=alb_done)
         else:
             self.top_panel.set_visible(False)
+            self.albums_panel.set_visible(False)
+
+    def show_albums(self, res, gen):
+        if gen != self.search_gen:
+            return
+        tui.clear(self.albums_box)
+        if isinstance(res, Exception) or not res:
+            self.albums_panel.set_visible(False)
+            return
+        for a in res:
+            if not a.get("browseId"):
+                continue
+            ars = [x for x in a.get("artists") or [] if x.get("name")]
+            row = coll_row("󰀥", a.get("title", "?"), " · ".join(x for x in (a.get("type"), str(a.get("year") or "")) if x),
+                           lambda b=a["browseId"]: self.open_detail("album", b),
+                           artist=(", ".join(x["name"] for x in ars), next((x.get("id") for x in ars if x.get("id")), None)))
+            head = row.get_first_child().get_child()
+            head.prepend(label("ALBUM", "album-badge"))
+            self.albums_box.append(row)
+        self.albums_panel.set_visible(self.albums_box.get_first_child() is not None)
 
     def show_top(self, r, q, gen):
         if gen != self.search_gen:
@@ -1428,7 +1477,12 @@ class MusicWindow(tui.TuiWindow):
         tl = label(title, "top-title", ellipsize=True)
         head = Gtk.Button(hexpand=True)
         head.add_css_class("rowhead")
-        head.set_child(vbox(label(kind_txt, "top-kind"), tl, label(sub, "top-sub", ellipsize=True), spacing=2))
+        subw = label(sub, "top-sub", ellipsize=True)
+        if rtype in ("song", "video", "album") and arts:
+            ars = [a for a in r.get("artists") or [] if a.get("name")]
+            subw = artist_link(arts, next((a.get("id") for a in ars if a.get("id")), None), "top-sub", 40)
+            subw.set_halign(Gtk.Align.START)
+        head.set_child(vbox(label(kind_txt, "top-kind"), tl, subw, spacing=2))
         head.connect("clicked", lambda *_: open_fn())
         card = hbox(cover, vbox(head, acts, spacing=6, hexpand=True, valign=Gtk.Align.CENTER), spacing=14)
         card.add_css_class("top-card")
@@ -1454,9 +1508,11 @@ class MusicWindow(tui.TuiWindow):
                 self.results.append(self.song_row(t, tracks))
         elif kind == "alben":
             for a in res:
-                arts = ", ".join(x["name"] for x in a.get("artists", []) if x.get("name"))
-                self.results.append(coll_row("󰀥", a.get("title", "?"), f"{arts} · {a.get('year', '')}",
-                                             lambda b=a["browseId"]: self.open_detail("album", b)))
+                ars = [x for x in a.get("artists") or [] if x.get("name")]
+                self.results.append(coll_row("󰀥", a.get("title", "?"), str(a.get("year") or ""),
+                                             lambda b=a["browseId"]: self.open_detail("album", b),
+                                             artist=(", ".join(x["name"] for x in ars),
+                                                     next((x.get("id") for x in ars if x.get("id")), None))))
         elif kind == "playlists":
             for pl in res:
                 self.results.append(coll_row("󰲸", pl.get("title", "?"),

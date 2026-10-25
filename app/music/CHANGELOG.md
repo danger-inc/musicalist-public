@@ -1,5 +1,17 @@
 # musicalist – Änderungen
 
+## 1.7.0 (2026-10-25)
+- **Alben in der Suche**: Unter „bester treffer“ stehen bei der Titelsuche jetzt bis zu fünf passende Alben, deutlich
+  mit „ALBUM“ gekennzeichnet (Künstler, Typ, Jahr); Klick öffnet das Album.
+- **Künstler überall klickbar**: Klick auf einen Künstlernamen öffnet die Künstlerseite – jetzt auch im „besten
+  Treffer“, in Album-Ergebnissen und im Rechtsklick-Menü jedes Titels (auch ohne gespeicherte Künstler-ID).
+- **Playlist: „a“, dann Enter**: Die zuletzt benutzte Playlist ist in der Auswahl vorausgewählt (bleibt auch nach
+  einem Neustart gemerkt).
+- **„Bereits in Playlist“**: Vor dem Hinzufügen wird die Playlist abgeglichen; Doppelte werden nicht noch einmal
+  eingefügt, die Meldung nennt sie („3 titel bereits in …“).
+- **Windows (Kernfunktionen)**: Player, Suche, Bibliothek, Warteschlange, Lyrics und Verlauf laufen jetzt auch unter
+  Windows (install-windows.bat). Ohne Hover-Vorschau, Spektrum und Medientasten.
+
 ## 1.6.1 (2026-10-25)
 - **Update-Knopf**: Neben der Versionsnummer steht „󰑐“ – Klick sucht sofort nach einem Update. Gibt es eine neuere
   Version, wird daraus „󰚰 update“; ein Klick lädt und installiert sie (Linux und Windows), danach heißt er „󰑓 neu starten“.

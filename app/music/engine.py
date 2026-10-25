@@ -19,7 +19,8 @@ HISTORY = os.path.join(HERE, "history.json")
 PLAYS = os.path.join(HERE, "plays.json")       # Wiedergaben je Titel (für „meistgehört“, nur lokal)
 # Audiodateien bewusst außerhalb von rice-apps (wird gesichert/veröffentlicht) – lassen sich jederzeit neu laden
 OFFLINE_DIR = os.path.join(GLib.get_user_data_dir(), "musicalist", "offline")   # eigener Hörverlauf (nur lokal, wird nie veröffentlicht)
-DEFAULT_SETTINGS = {"hover": False,       # Vorschau-Karte am Bildschirmrand: standardmäßig aus
+DEFAULT_SETTINGS = {"last_playlist": None,   # [id, titel] der zuletzt benutzten Playlist
+                    "hover": False,       # Vorschau-Karte am Bildschirmrand: standardmäßig aus
                     "background": False,  # Fenster zu → weiterspielen? Standard: nein, ganz beenden
                     "visual": "orbit",    # Modus der Seite „visuals“
                     "history_pinned": False,  # Hörverlauf-Leiste angeheftet
@@ -52,8 +53,17 @@ def set_setting(key, value):
         os.replace(SETTINGS + ".tmp", SETTINGS)
     except OSError:
         pass
-RUNTIME = GLib.get_user_runtime_dir()
-MPV_SOCK = RUNTIME + "/rice-music-mpv.sock"
+IS_WIN = os.name == "nt"
+RUNTIME = tempfile.gettempdir() if IS_WIN else GLib.get_user_runtime_dir()
+MPV_SOCK = r"\\.\pipe\rice-music-mpv" if IS_WIN else RUNTIME + "/rice-music-mpv.sock"
+
+
+def open_url(url):
+    """Adresse im Standardbrowser öffnen."""
+    if IS_WIN:
+        os.startfile(url)
+    else:
+        subprocess.Popen(["xdg-open", url], start_new_session=True)
 UA = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
 PLAY_NEEDS_LOGIN = True     # abspielen nur mit bestätigter Google-Anmeldung
 
@@ -103,6 +113,11 @@ def track(d):
 # ---------- Anmeldung über Zen ----------
 def browser_profiles():
     found = []
+    if IS_WIN:
+        appdata = os.environ.get("APPDATA", "")
+        for base in ("zen/Profiles", "Mozilla/Firefox/Profiles", "librewolf/Profiles"):
+            found += glob.glob(os.path.join(appdata, base, "*", "cookies.sqlite"))
+        return found
     # Zen liegt je nach Version unter ~/.config/zen (XDG) oder ~/.zen, als Flatpak unter ~/.var/app
     for base in ("~/.config/zen", "~/.zen", "~/.var/app/app.zen_browser.zen/.zen",
                  "~/.var/app/app.zen_browser.zen/config/zen", "~/.mozilla/firefox", "~/.librewolf",
@@ -260,6 +275,10 @@ class Music:
                "videos": "videos"}[kind]
         return self.yt.search(q, filter=flt, limit=20)
 
+    def search_albums(self, q):
+        """Die besten Alben zur Suche (für den Abschnitt „alben“ unter den Titeln)."""
+        return self.yt.search(q, filter="albums", limit=6)[:5]
+
     def top_result(self, q):
         """Bester Treffer der ungefilterten Suche (Titel, Künstler, Album …) oder None."""
         for r in self.yt.search(q, limit=1):
@@ -271,12 +290,22 @@ class Music:
         return self.yt.get_search_suggestions(q)
 
     def add_to_playlist(self, pid, vids):
-        """True = hinzugefügt, False = war schon drin."""
-        res = self.yt.add_playlist_items(pid, vids, duplicates=False)
+        """(hinzugefügt, schon drin) – Anzahlen. Vorher Abgleich mit dem Inhalt der Playlist."""
+        have = set()
+        try:
+            d = self.yt.get_playlist(pid, limit=None)
+            have = {t.get("videoId") for t in d.get("tracks", []) if t.get("videoId")}
+        except Exception:  # noqa: BLE001 – ohne Abgleich bleibt die Duplikat-Antwort der API
+            pass
+        new = [v for i, v in enumerate(vids) if v not in have and v not in vids[:i]]
+        dup = len(vids) - len(new)
+        if not new:
+            return 0, dup
+        res = self.yt.add_playlist_items(pid, new, duplicates=False)
         if isinstance(res, dict) and res.get("status") == "STATUS_SUCCEEDED":
-            return True
+            return len(new), dup
         if isinstance(res, dict) and "duplicate" in json.dumps(res).lower():
-            return False
+            return 0, len(vids)
         raise RuntimeError(str(res)[:160])
 
     def create_playlist(self, title, vids):
@@ -687,15 +716,32 @@ class Resolver:
 
 
 # ---------- mpv ----------
+class PipeSock:
+    """mpv-IPC unter Windows (Named Pipe) mit der Socket-Schnittstelle sendall/recv. Ein Handle liest nur,
+    ein zweites schreibt nur: ein wartendes ReadFile würde auf demselben Handle jedes WriteFile blockieren."""
+
+    def __init__(self, path):
+        self.rd = open(path, "r+b", buffering=0)
+        self.wr = open(path, "r+b", buffering=0)
+
+    def sendall(self, data, reader=False):
+        f = self.rd if reader else self.wr
+        f.write(data)
+
+    def recv(self, n):
+        return self.rd.read(n)
+
+
 class Mpv:
     def __init__(self, on_event):
         self.on_event = on_event
         self.sock = None
         self.lock = threading.Lock()
-        try:
-            os.unlink(MPV_SOCK)
-        except OSError:
-            pass
+        if not IS_WIN:
+            try:
+                os.unlink(MPV_SOCK)
+            except OSError:
+                pass
         self.proc = tui.spawn_watch(["mpv", "--idle=yes", "--no-video", "--no-terminal", "--ytdl=no",
                                      "--audio-display=no", f"--input-ipc-server={MPV_SOCK}",
                                      "--audio-client-name=musicalist", "--cache=yes", "--demuxer-max-bytes=64MiB",
@@ -703,17 +749,25 @@ class Mpv:
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(100):
             try:
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.connect(MPV_SOCK)
-                self.sock = s
+                if IS_WIN:
+                    self.sock = PipeSock(MPV_SOCK)
+                else:
+                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s.connect(MPV_SOCK)
+                    self.sock = s
                 break
             except OSError:
                 time.sleep(0.03)
         if self.sock is None:
             raise RuntimeError("mpv startet nicht")
-        threading.Thread(target=self.read, daemon=True).start()
+        # Beobachter am LESE-Handle anmelden (Ereignisse gehen an den Client, der sie bestellt hat)
         for i, p in enumerate(("time-pos", "duration", "pause", "volume", "idle-active", "paused-for-cache")):
-            self.cmd("observe_property", i + 1, p)
+            data = (json.dumps({"command": ["observe_property", i + 1, p]}) + "\n").encode()
+            if IS_WIN:
+                self.sock.sendall(data, reader=True)
+            else:
+                self.sock.sendall(data)
+        threading.Thread(target=self.read, daemon=True).start()
 
     def cmd(self, *args):
         data = (json.dumps({"command": list(args)}) + "\n").encode()
@@ -729,7 +783,10 @@ class Mpv:
     def read(self):
         buf = b""
         while True:
-            chunk = self.sock.recv(65536)
+            try:
+                chunk = self.sock.recv(65536)
+            except OSError:
+                return
             if not chunk:
                 return
             buf += chunk
@@ -1418,6 +1475,8 @@ class Mpris:
         self.conn = None
         self.on_raise = None
         self.on_quit = None
+        if IS_WIN:
+            return                                 # kein D-Bus: Medientasten/Sperrbildschirm gibt es hier nicht
         self.info = Gio.DBusNodeInfo.new_for_xml(MPRIS_XML)
         Gio.bus_own_name(Gio.BusType.SESSION, "org.mpris.MediaPlayer2.musicalist", Gio.BusNameOwnerFlags.NONE,
                          self.acquired, None, None)

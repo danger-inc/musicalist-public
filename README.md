@@ -30,7 +30,8 @@ settings (⚙ or `,`) → "beim schließen im hintergrund weiterspielen".
 | fedora 39+ | tested (fedora 44) |
 | arch, endeavouros, cachyos, manjaro | tested (arch) |
 | openSUSE Tumbleweed | should work (untested) |
-| windows / macos | no – musicalist needs linux (mpv control, mpris, layer-shell) |
+| windows | core features (player, search, library, lyrics); no hover preview, spectrum or media keys – run install-windows.bat |
+| macos | no |
 
 required is **gtk 4.12 or newer** (older systems like ubuntu 22.04 / mint 21 / debian 12 are too old).
 `mpv` plays the audio. `cava` (spectrum) and `playerctl` are optional.

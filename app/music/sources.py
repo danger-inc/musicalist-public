@@ -1,7 +1,7 @@
 # musicalist – andere Audioquellen (Ersatz für das mpris-Modul in der Waybar):
 # MPRIS-Player (Zen, Spotify, …) mit Titel und Steuerung, dazu Apps, die gerade hörbar Ton ausgeben,
 # aber kein MPRIS haben (Spiele, Discord, …). Fragt nur ab, solange jemand zuschaut (want()).
-import json, subprocess, threading
+import os, json, subprocess, threading
 
 import tui
 from tui import Gio, GLib, Gtk
@@ -73,6 +73,8 @@ class Sources:
         return r.unpack()[0]
 
     def collect(self):
+        if os.name == "nt":
+            return []                 # kein MPRIS/pactl unter Windows
         if self.bus is None:
             self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         names = self.bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
