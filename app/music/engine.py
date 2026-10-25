@@ -148,7 +148,7 @@ def read_cookies(db):
 LOGIN_URL = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F"
 
 
-def login_from_browser(wait=240):
+def login_from_browser(wait=240, progress=None):
     """Wie _login_once, öffnet aber bei fehlender/ungültiger Anmeldung den Browser zum Einloggen und
     wartet (bis `wait` s) darauf, dass dort die Anmeldung erscheint."""
     try:
@@ -158,6 +158,8 @@ def login_from_browser(wait=240):
         log(f"anmeldung 1. versuch: {type(e).__name__}: {e}")
     logout()
     open_url(LOGIN_URL)
+    if progress:
+        progress(f"browser geöffnet, warte auf anmeldung … ({why})")
     end = time.time() + wait
     while time.time() < end:
         time.sleep(3)
@@ -166,6 +168,8 @@ def login_from_browser(wait=240):
         except (RuntimeError, ValueError, KeyError) as e:
             if str(e) != str(why):
                 log(f"anmeldung: {type(e).__name__}: {e}")
+            if progress and str(e) != str(why):
+                progress(f"warte auf anmeldung … ({e})")
             why = e
             logout()
     raise RuntimeError(f"keine anmeldung erkannt ({why}) – im browser bei music.youtube.com einloggen und nochmal klicken")

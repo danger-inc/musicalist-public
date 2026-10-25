@@ -1,5 +1,9 @@
 # musicalist – Änderungen
 
+## 1.7.4 (2026-10-25)
+- **Anmeldung zeigt, worauf sie wartet**: Nach dem Öffnen des Browsers steht in der Statuszeile, was fehlt
+  (z. B. kein Profil gefunden, Cookies ungültig), statt dass nur der Browser aufgeht.
+
 ## 1.7.3 (2026-10-25)
 - **Anmeldung zeigt den Grund**: Wird nach dem Öffnen des Browsers keine Anmeldung erkannt, nennt die Fehlermeldung
   den Grund (steht auch im Log) statt nur „nicht erkannt“.

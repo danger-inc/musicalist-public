@@ -1647,7 +1647,8 @@ class MusicWindow(tui.TuiWindow):
             self.p.music.reset()
             self.p.resolver.reset()
             self.account_done(res)
-        tui.background(engine.login_from_browser, done=done)
+        tui.background(lambda: engine.login_from_browser(
+            progress=lambda t: GLib.idle_add(lambda: self.say(t, seconds=240) and False)), done=done)
 
     def do_logout(self):
         engine.logout()
