@@ -676,7 +676,7 @@ class Resolver:
 
     def __init__(self):
         self.cache = {}
-        self.locks = {"fast": threading.Lock(), "warm": threading.Lock(), "hq": threading.Lock()}
+        self.locks = {"fast": threading.Lock(), "warm": threading.Lock(), "hq": threading.Lock(), "m4a": threading.Lock()}
         self.ydls = {}
         self.queue_lock = threading.Lock()
         self.wanted = []
@@ -695,7 +695,8 @@ class Resolver:
         cookies = COOKIES_TXT if kind == "hq" and os.path.exists(COOKIES_TXT) else None
         key = (kind, cookies)
         if key not in self.ydls:
-            opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "format": "bestaudio/best",
+            opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
+                    "format": "bestaudio[ext=m4a]/140/bestaudio" if kind == "m4a" else "bestaudio/best",
                     "js_runtimes": js_runtimes(), "skip_download": True}
             if cookies:
                 opts["cookiefile"] = cookies
@@ -712,7 +713,7 @@ class Resolver:
         res = {"url": info["url"], "ua": (info.get("http_headers") or {}).get("User-Agent", UA),
                "abr": info.get("abr"), "codec": info.get("acodec", ""), "duration": info.get("duration"),
                "proto": info.get("protocol", ""),
-               "kind": "hq" if kind == "hq" else "fast"}
+               "kind": kind if kind in ("hq", "m4a") else "fast"}
         old = self.cached(vid)
         if not (old and old.get("kind") == "hq" and kind != "hq"):
             self.cache[vid] = (time.time() + 4 * 3600, res)
@@ -754,7 +755,9 @@ class Resolver:
             return loc
         if failed == "fast" and os.path.exists(COOKIES_TXT):
             return self._extract(vid, "hq")
-        if failed == "hq":
+        if failed in ("fast", "hq"):
+            return self._extract(vid, "m4a")     # anderes Format (AAC statt Opus)
+        if failed == "m4a":
             return self._extract(vid, "fast")
         hit = self.cached(vid)
         if hit:
@@ -844,7 +847,9 @@ class Mpv:
         self.proc = tui.spawn_watch(["mpv", "--idle=yes", "--no-video", "--no-terminal", "--ytdl=no",
                                      "--audio-display=no", f"--input-ipc-server={MPV_SOCK}",
                                      "--audio-client-name=musicalist", "--cache=yes", "--demuxer-max-bytes=64MiB",
-                                     "--gapless-audio=weak", "--replaygain=track"],
+                                     "--gapless-audio=weak", "--replaygain=track"] +
+                                    ([f"--log-file={os.path.join(os.environ.get('TEMP', '.'), 'rice-mpv.log')}",
+                                      "--msg-level=all=warn,ffmpeg=v"] if IS_WIN else []),
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(100):
             try:
@@ -1155,7 +1160,8 @@ class Player:
         self.repeat, self.shuffle, self.autoplay = "aus", False, True
         self.stream_info = None
         self.gen = 0
-        self._retry_vid = self._retry_kind = None
+        self._retry_kind = None
+        self._retry_n = {}
         self.started = False  # in dieser Sitzung schon etwas geladen?
         self.restore_pos = 0
         self.mpv = Mpv(self.on_mpv)
@@ -1494,7 +1500,7 @@ class Player:
                 self.loading = bool(val)
                 self.emit("state")
         elif ev == "file-loaded":
-            self._retry_vid = None
+            self._retry_n.clear()
             self.loading = False
             self.emit("state")
         elif ev == "end-file":
@@ -1506,11 +1512,12 @@ class Player:
                 si = self.stream_info or {}
                 log(f"mpv end-file error: {msg.get('file_error', '')} (kind={si.get('kind')} codec={si.get('codec')} "
                     f"proto={si.get('proto')} vid={vid})")
-                if vid and self._retry_vid != vid:       # einmal mit der anderen Adressart (mit/ohne Anmeldung) erneut
-                    self._retry_vid = vid
+                if vid and self._retry_n.get(vid, 0) < 3:   # bis 3× mit anderer Adresse/anderem Format erneut
+                    self._retry_n[vid] = self._retry_n.get(vid, 0) + 1
                     self._retry_kind = si.get("kind")
                     self.load(self.pos)
                     return False
+                self._retry_n.pop(vid, None)
                 self.emit(f"error:wiedergabe fehlgeschlagen ({msg.get('file_error', '')})")
         return False
 

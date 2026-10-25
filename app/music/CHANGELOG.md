@@ -1,5 +1,11 @@
 # musicalist – Änderungen
 
+## 1.7.11 (2026-10-25)
+- **Windows: nie mehr mehrere Instanzen.** Der Startport wird jetzt belegt, bevor das Fenster aufgebaut wird; jeder weitere
+  Start übergibt nur „show“ an die laufende Instanz und endet (vorher starteten schnelle Mehrfachstarts je eine eigene).
+- **„Wiedergabe fehlgeschlagen (loading failed)“**: bis zu dreimal automatisch erneut – erst mit Anmeldung, dann als
+  AAC (m4a) statt Opus. mpv schreibt unter Windows zusätzlich `%TEMP%\rice-mpv.log` (Ursache der Ablehnung).
+
 ## 1.7.10 (2026-10-25)
 - **Anmeldung klappt jetzt auch ohne bereits geöffneten Browser**: Findet „anmelden“ keine gültige Anmeldung, öffnet sich die
   Google-Anmeldeseite für YouTube Music; musicalist wartet bis zu 4 Minuten, übernimmt die Anmeldung und nennt in der

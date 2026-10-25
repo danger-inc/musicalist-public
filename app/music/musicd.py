@@ -6,7 +6,7 @@
 #   token:<xdg-activation-token> davor: Startberechtigung vom Desktop (GNOME/KDE), damit das Fenster nach vorn darf.
 # Fenster schließen (✕ / q / Alt+F4) beendet musicalist ganz – außer „im hintergrund weiterspielen“ ist an.
 # Braucht LD_PRELOAD=libgtk4-layer-shell.so (für die Vorschau-Karte) – setzt rice-music.
-import os, signal, sys, warnings
+import os, time, signal, sys, warnings
 
 os.environ.setdefault("GSK_RENDERER", "cairo")  # gleiche Optik, halber Speicher
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -101,17 +101,11 @@ class App(Gtk.Application):
             GLib.idle_add(lambda: self.win.realize() and False)  # erstes Öffnen ohne Verzögerung
 
     def listen_tcp(self):
-        """Windows: kleiner Befehlsserver (nur 127.0.0.1); ein zweiter Start schickt „show“ und endet."""
-        import socket, threading
-        srv = socket.socket()
-        try:
-            srv.bind(("127.0.0.1", PORT))
-        except OSError as e:          # Port belegt: ein anderes musicalist läuft (oder hängt noch)
-            print(f"musicd: Port {PORT} belegt: {e}", file=sys.stderr, flush=True)
-            if send_to_running(["show"]):
-                os._exit(0)
-            raise
-        srv.listen(4)
+        """Windows: kleiner Befehlsserver (nur 127.0.0.1); der Port wird schon beim Start belegt (siehe __main__)."""
+        import threading
+        srv = _SRV
+        if srv is None:
+            raise RuntimeError("kein Befehlsport")
         self.srv = srv
 
         def serve():
@@ -226,9 +220,32 @@ def send_to_running(cmds):
         return False
 
 
+_SRV = None
+
+
+def claim_port():
+    """Windows: Einzelinstanz. Der Port wird belegt, BEVOR das (langsame) Fenster entsteht – sonst starten mehrere
+    Starts kurz nacheinander je eine eigene Instanz. Läuft schon eine, bekommt sie „show“ und dieser Start endet."""
+    import socket
+    global _SRV
+    cmds = ["show"] + [a[2:] for a in sys.argv[1:] if a.startswith("--cmd=")]
+    srv = socket.socket()
+    try:
+        srv.bind(("127.0.0.1", PORT))
+    except OSError as e:
+        engine.log(f"musicd: Port {PORT} belegt ({e}) – übergebe an die laufende Instanz")
+        for _ in range(5):
+            if send_to_running(cmds):
+                break
+            time.sleep(0.5)
+        os._exit(0)                      # nie eine zweite Instanz starten
+    srv.listen(8)
+    _SRV = srv
+
+
 if __name__ == "__main__":
-    if engine.IS_WIN and send_to_running(["show"] + [a[2:] for a in sys.argv[1:] if a.startswith("--cmd=")]):
-        sys.exit(0)
+    if engine.IS_WIN:
+        claim_port()
     app = App("--show" in sys.argv)
     tok = os.environ.pop("XDG_ACTIVATION_TOKEN", None)   # Startberechtigung nicht an Kindprozesse vererben
     os.environ.pop("DESKTOP_STARTUP_ID", None)
