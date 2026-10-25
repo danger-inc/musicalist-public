@@ -1,5 +1,11 @@
 # musicalist – Änderungen
 
+## 1.7.7 (2026-10-25)
+- **Windows**: Beenden räumt auf (mpv wird beendet, der Prozess endet nach 1,5 s sicher) – vorher blieb ein Rest im
+  Hintergrund und ein neuer Start öffnete nichts. Ist der Port belegt, wird ein laufendes musicalist gezeigt statt still zu
+  scheitern. Fehler landen in `%TEMP%\rice-music.log`.
+- **Anmeldung**: Verbindungsabbrüche zu music.youtube.com werden dreimal wiederholt und bei Dauerfehler verständlich gemeldet.
+
 ## 1.7.6 (2026-10-25)
 - **Windows**: Das Nachinstallieren von ytmusicapi/yt-dlp scheiterte an der geschützten MSYS2-Python-Umgebung;
   es installiert jetzt wie der Installer nach `pylibs`. Bei einem Fehler steht die pip-Fehlerzeile in der Meldung.

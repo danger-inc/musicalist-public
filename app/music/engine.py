@@ -246,8 +246,16 @@ def _login_once():
             f.write(content)
         os.replace(path + ".tmp", path)
     try:
-        return account_name()
+        for versuch in range(3):          # Verbindungsabbrüche (Windows: Fehler 10054) sind oft einmalig
+            try:
+                return account_name()
+            except Exception as err:  # noqa: BLE001
+                if "onnection" not in f"{type(err).__name__} {err}" or versuch == 2:
+                    raise
+                time.sleep(1.5)
     except Exception as e:  # noqa: BLE001 – Google liefert bei ungültigen Cookies kein JSON
+        if "onnection" in f"{type(e).__name__} {e}":
+            raise RuntimeError("keine Verbindung zu music.youtube.com (Firewall, VPN oder Virenscanner blockiert Python?)") from None
         raise ValueError(f"anmeldung ungültig: {e}") from None
 
 

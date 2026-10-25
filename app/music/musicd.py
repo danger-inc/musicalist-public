@@ -13,6 +13,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.dirname(HERE)]
 if os.name == "nt":
     sys.path.insert(0, os.path.join(HERE, "pylibs"))      # Windows: pip-Pakete der App (ytmusicapi, yt-dlp …)
+if os.name == "nt":
+    # pythonw hat keine Konsole: stderr/Abstürze in eine Logdatei (%TEMP%\\rice-music.log), sonst „startet nicht“ ohne Spur
+    try:
+        import tempfile
+        _lf = open(os.path.join(tempfile.gettempdir(), "rice-music.log"), "a", buffering=1, encoding="utf-8", errors="replace")
+        sys.stderr = sys.stdout = _lf
+    except OSError:
+        pass
 import tui  # noqa: E402
 from tui import Gio, GLib, Gtk  # noqa: E402
 import engine, sources, ui  # noqa: E402
@@ -96,7 +104,13 @@ class App(Gtk.Application):
         """Windows: kleiner Befehlsserver (nur 127.0.0.1); ein zweiter Start schickt „show“ und endet."""
         import socket, threading
         srv = socket.socket()
-        srv.bind(("127.0.0.1", PORT))
+        try:
+            srv.bind(("127.0.0.1", PORT))
+        except OSError as e:          # Port belegt: ein anderes musicalist läuft (oder hängt noch)
+            print(f"musicd: Port {PORT} belegt: {e}", file=sys.stderr, flush=True)
+            if send_to_running(["show"]):
+                os._exit(0)
+            raise
         srv.listen(4)
         self.srv = srv
 
@@ -184,6 +198,12 @@ class App(Gtk.Application):
         self.player.shutdown()                # mpv beenden → Musik aus
         if self.cava.proc is not None:
             self.cava.proc.terminate()
+        if engine.IS_WIN:             # mpv/Python sicher beenden – sonst bleibt unter Windows ein Rest im Hintergrund
+            try:
+                self.player.mpv.proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+            GLib.timeout_add(1500, lambda: os._exit(0))
         if getattr(self, "srv", None):
             self.srv.close()
         for path in (PID_FILE, FIFO):
