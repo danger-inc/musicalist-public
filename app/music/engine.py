@@ -153,8 +153,9 @@ def login_from_browser(wait=240):
     wartet (bis `wait` s) darauf, dass dort die Anmeldung erscheint."""
     try:
         return _login_once()
-    except (RuntimeError, ValueError, KeyError):   # ValueError: JSONDecodeError ("Expecting value") bei ungültigen Cookies
-        pass
+    except (RuntimeError, ValueError, KeyError) as e:   # ValueError: JSONDecodeError ("Expecting value") bei ungültigen Cookies
+        why = e
+        log(f"anmeldung 1. versuch: {type(e).__name__}: {e}")
     logout()
     open_url(LOGIN_URL)
     end = time.time() + wait
@@ -162,9 +163,12 @@ def login_from_browser(wait=240):
         time.sleep(3)
         try:
             return _login_once()
-        except (RuntimeError, ValueError, KeyError):
+        except (RuntimeError, ValueError, KeyError) as e:
+            if str(e) != str(why):
+                log(f"anmeldung: {type(e).__name__}: {e}")
+            why = e
             logout()
-    raise RuntimeError("keine anmeldung erkannt – im browser bei music.youtube.com einloggen und nochmal klicken")
+    raise RuntimeError(f"keine anmeldung erkannt ({why}) – im browser bei music.youtube.com einloggen und nochmal klicken")
 
 
 def _login_once():

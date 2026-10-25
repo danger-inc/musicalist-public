@@ -1,5 +1,9 @@
 # musicalist – Änderungen
 
+## 1.7.3 (2026-10-25)
+- **Anmeldung zeigt den Grund**: Wird nach dem Öffnen des Browsers keine Anmeldung erkannt, nennt die Fehlermeldung
+  den Grund (steht auch im Log) statt nur „nicht erkannt“.
+
 ## 1.7.2 (2026-10-25)
 - **Anmeldung öffnet den Browser**: Findet „anmelden“ keine gültige Anmeldung, öffnet sich die Google-Anmeldeseite
   für YouTube Music; musicalist wartet bis zu 4 Minuten und übernimmt sie. Der Fehler „Expecting value: line 1
