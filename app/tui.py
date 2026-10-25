@@ -73,6 +73,12 @@ button.tbtn, menubutton.tbtn, button.glass-toggle {
     border: 1px solid alpha(@primary, 0.55); border-radius: 4px; padding: 1px 8px; color: @foreground;
 }
 button.glass-toggle:checked { background-color: alpha(@primary, 0.22); color: @foreground; }
+/* Rückmeldung: „an“ bleibt auch unter dem Mauszeiger sichtbar, Drücken färbt sofort (siehe swipe.py) */
+button.toggle:checked:hover, button.tbtn:checked:hover {
+    background-image: none; background-color: alpha(@primary, 0.42); color: @foreground; border-color: @primary;
+    box-shadow: inset 0 0 0 1px @primary; }
+button.toggle:active, button.tbtn:active {
+    background-image: none; background-color: alpha(@primary, 0.62); color: @foreground; border-color: @primary; }
 button.tbtn:hover, menubutton.tbtn:hover, button.glass-toggle:hover, button.tbtn:focus-visible {
     background-color: @primary; color: @on_primary; border-color: @primary;
 }
@@ -1026,15 +1032,15 @@ class TuiWindow(Gtk.ApplicationWindow):
         except Exception as e:
             import sys
             print("changelog:", e, file=sys.stderr)
-        # neuere Version auf GitHub? → Knopf „󰚰 v1.2.0 → v1.3.0“ + einmal Hinweis in der Statuszeile
+        # neuere Version auf GitHub? → Knopf „󰚰 update“ neben der Version + einmal Hinweis in der Statuszeile
         try:
             import changelog
 
+            if version:                      # eigener Knopf neben der Version: lädt und installiert das Update
+                self.update_btn = changelog.update_button(key, version, notify=self.say, classes=("flat", "news"))
+                self.header_extra.append(self.update_btn)
+
             def has_update(latest):
-                b.add_css_class("news")
-                b.remove_css_class("off")
-                b.set_label(f"󰚰 v{version} → v{latest}")
-                b.set_tooltip_text(changelog.update_text(latest) + " · klick: changelog")
                 if self.get_mapped():
                     self.say(changelog.update_text(latest), seconds=12)
                 else:

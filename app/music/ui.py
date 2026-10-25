@@ -535,7 +535,8 @@ class MusicWindow(tui.TuiWindow):
         self.content.remove(self.stack)
         self.swipe = swipe.SwipeBack(self.stack, self.nav_can_back, self.nav_go_back,
                                      blocked=lambda w: isinstance(w, tui.Meter),
-                                     where=self.nav_where, target=self.nav_target)
+                                     where=self.nav_where, target=self.nav_target,
+                                     goto=self.nav_goto)
         self.content.prepend(self.swipe.widget)
         # Hörverlauf-Leiste am rechten Rand (verlauf.py) um den ganzen Inhalt
         root = self.root
@@ -805,6 +806,15 @@ class MusicWindow(tui.TuiWindow):
                 self.lib_stack.set_visible_child_name("home")
             self.show_tab(loc[1])
         self.nav_note()
+
+    def nav_goto(self, loc):
+        self._nav_skip = False
+        if loc[0] == "detail":
+            self.open_detail(loc[1], loc[2])
+        else:
+            self.show_tab(loc[1])
+        self.nav_note()
+        return True
 
     def lib_home(self):
         self.lib_stack.set_visible_child_name("home")
