@@ -203,6 +203,25 @@ def login_from_browser(wait=240, progress=None):
     raise RuntimeError(f"keine anmeldung erkannt ({why}) – im browser bei music.youtube.com einloggen und nochmal klicken")
 
 
+# Diese Cookies braucht die Anmeldung wirklich. Hat der Browser sehr viele (Windows/Firefox: ~90, v. a. „ST-…“-Fragmente),
+# lehnt Google den Cookie-Header mit „413 Request Entity Too Large“ (HTML statt JSON) ab.
+_NEEDED = {"SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO", "SIDCC", "YSC", "PREF", "SOCS", "CONSENT",
+           "VISITOR_INFO1_LIVE", "VISITOR_PRIVACY_METADATA", "__Secure-ROLLOUT_TOKEN"}
+_MAX_COOKIES = 6000          # Bytes für den Cookie-Header (Google nimmt ca. 8 KB)
+
+
+def _slim(rows):
+    rows = [r for r in rows if not r[1].startswith("ST-")]
+
+    def size(rs):
+        return sum(len(r[1]) + len(r[2]) + 3 for r in rs if r[0].endswith("youtube.com"))
+    if size(rows) > _MAX_COOKIES:
+        keep = [r for r in rows if not r[0].endswith("youtube.com") or r[1] in _NEEDED or r[1].startswith("__Secure-")
+                and r[1].split("-", 2)[-1].upper().startswith(("PSID", "PAPISID"))]
+        rows = keep
+    return rows
+
+
 def _login_once():
     """Sucht das Browser-Profil mit YouTube-Anmeldung und legt die Zugangsdateien an.
     Gibt den Kontonamen zurück oder wirft RuntimeError."""
@@ -221,7 +240,7 @@ def _login_once():
         if not browser_profiles():
             raise RuntimeError("kein zen- oder firefox-profil gefunden")
         raise RuntimeError("keine youtube-anmeldung im browser gefunden – dort erst bei music.youtube.com einloggen")
-    rows = best[1]
+    rows = _slim(best[1])
     os.makedirs(AUTH_DIR, mode=0o700, exist_ok=True)
     os.chmod(AUTH_DIR, 0o700)
     yt = {}

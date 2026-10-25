@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.7.8 (2026-10-25)
+- **Anmeldung (Windows/Firefox)**: Der Browser hatte ~90 Cookies (viele „ST-…“-Fragmente); der Cookie-Header war so groß, dass
+  Google mit „413 Request Entity Too Large“ (HTML statt JSON → „Expecting value“) antwortete. Es werden nur noch die nötigen
+  Cookies übernommen. Das behebt auch die leeren Lyrics/Bibliothek bei scheinbar gültiger Anmeldung.
+
 ## 1.7.7 (2026-10-25)
 - **Windows**: Beenden räumt auf (mpv wird beendet, der Prozess endet nach 1,5 s sicher) – vorher blieb ein Rest im
   Hintergrund und ein neuer Start öffnete nichts. Ist der Port belegt, wird ein laufendes musicalist gezeigt statt still zu
