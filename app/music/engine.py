@@ -711,6 +711,7 @@ class Resolver:
             info = self.ydl(kind).extract_info(f"https://music.youtube.com/watch?v={vid}", download=False)
         res = {"url": info["url"], "ua": (info.get("http_headers") or {}).get("User-Agent", UA),
                "abr": info.get("abr"), "codec": info.get("acodec", ""), "duration": info.get("duration"),
+               "proto": info.get("protocol", ""),
                "kind": "hq" if kind == "hq" else "fast"}
         old = self.cached(vid)
         if not (old and old.get("kind") == "hq" and kind != "hq"):
@@ -745,11 +746,16 @@ class Resolver:
         return {"url": f, "ua": UA, "abr": None, "codec": os.path.splitext(f)[1].lstrip("."), "duration": None,
                 "kind": "offline"}
 
-    def get(self, vid):
-        """Für sofortiges Abspielen: gespeicherte Datei, Zwischenspeicher, sonst der schnelle Weg (Notfall: hq)."""
+    def get(self, vid, failed=None):
+        """Für sofortiges Abspielen: gespeicherte Datei, Zwischenspeicher, sonst der schnelle Weg (Notfall: hq).
+        failed = Art ("fast"/"hq") der Adresse, die mpv nicht laden konnte → es wird der andere Weg versucht."""
         loc = self.local_info(vid)
         if loc:
             return loc
+        if failed == "fast" and os.path.exists(COOKIES_TXT):
+            return self._extract(vid, "hq")
+        if failed == "hq":
+            return self._extract(vid, "fast")
         hit = self.cached(vid)
         if hit:
             return hit
@@ -1149,6 +1155,7 @@ class Player:
         self.repeat, self.shuffle, self.autoplay = "aus", False, True
         self.stream_info = None
         self.gen = 0
+        self._retry_vid = self._retry_kind = None
         self.started = False  # in dieser Sitzung schon etwas geladen?
         self.restore_pos = 0
         self.mpv = Mpv(self.on_mpv)
@@ -1421,6 +1428,8 @@ class Player:
         nxt = self.queue[self.index + 1] if self.index + 1 < len(self.queue) else None
         self.lyrics.preload([t, nxt])
 
+        failed, self._retry_kind = self._retry_kind, None
+
         def done(res):
             if gen != self.gen:  # inzwischen anderer Titel gewählt
                 return
@@ -1443,12 +1452,12 @@ class Player:
             self.mpv.set("pause", False)
             self.mpv.set("force-media-title", f"{t['artist']} - {t['title']}")
             self.prefetch()
-        tui.background(self.stream_for, t["videoId"], done=done)
+        tui.background(self.stream_for, t["videoId"], failed, done=done)
 
-    def stream_for(self, vid):
+    def stream_for(self, vid, failed=None):
         if PLAY_NEEDS_LOGIN:
             require_login()
-        return self.resolver.get(vid)
+        return self.resolver.get(vid, failed)
 
     def prefetch(self, include_current=False):
         start = self.index if include_current else self.index + 1
@@ -1485,13 +1494,23 @@ class Player:
                 self.loading = bool(val)
                 self.emit("state")
         elif ev == "file-loaded":
+            self._retry_vid = None
             self.loading = False
             self.emit("state")
         elif ev == "end-file":
             if msg.get("reason") == "eof":
                 self.next(auto=True)
             elif msg.get("reason") == "error":
-                self.resolver.cache.pop((self.current or {}).get("videoId"), None)
+                vid = (self.current or {}).get("videoId")
+                self.resolver.cache.pop(vid, None)
+                si = self.stream_info or {}
+                log(f"mpv end-file error: {msg.get('file_error', '')} (kind={si.get('kind')} codec={si.get('codec')} "
+                    f"proto={si.get('proto')} vid={vid})")
+                if vid and self._retry_vid != vid:       # einmal mit der anderen Adressart (mit/ohne Anmeldung) erneut
+                    self._retry_vid = vid
+                    self._retry_kind = si.get("kind")
+                    self.load(self.pos)
+                    return False
                 self.emit(f"error:wiedergabe fehlgeschlagen ({msg.get('file_error', '')})")
         return False
 

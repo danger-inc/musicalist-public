@@ -1,41 +1,15 @@
 # musicalist – Änderungen
 
-## 1.7.9 (2026-10-25)
-- **Anmeldung**: Die Cookie-Auswahl aus 1.7.8 warf bei sehr vielen Cookies auch `__Secure-3PAPISID` weg („cookie is missing the
-  required value“). Die für die Anmeldung nötigen Cookies bleiben jetzt immer erhalten; weggelassen werden zuerst „ST-…“,
-  dann die größten übrigen.
-
-## 1.7.8 (2026-10-25)
-- **Anmeldung (Windows/Firefox)**: Der Browser hatte ~90 Cookies (viele „ST-…“-Fragmente); der Cookie-Header war so groß, dass
-  Google mit „413 Request Entity Too Large“ (HTML statt JSON → „Expecting value“) antwortete. Es werden nur noch die nötigen
-  Cookies übernommen. Das behebt auch die leeren Lyrics/Bibliothek bei scheinbar gültiger Anmeldung.
-
-## 1.7.7 (2026-10-25)
-- **Windows**: Beenden räumt auf (mpv wird beendet, der Prozess endet nach 1,5 s sicher) – vorher blieb ein Rest im
-  Hintergrund und ein neuer Start öffnete nichts. Ist der Port belegt, wird ein laufendes musicalist gezeigt statt still zu
-  scheitern. Fehler landen in `%TEMP%\rice-music.log`.
-- **Anmeldung**: Verbindungsabbrüche zu music.youtube.com werden dreimal wiederholt und bei Dauerfehler verständlich gemeldet.
-
-## 1.7.6 (2026-10-25)
-- **Windows**: Das Nachinstallieren von ytmusicapi/yt-dlp scheiterte an der geschützten MSYS2-Python-Umgebung;
-  es installiert jetzt wie der Installer nach `pylibs`. Bei einem Fehler steht die pip-Fehlerzeile in der Meldung.
-
-## 1.7.5 (2026-10-25)
-- **Fehlendes ytmusicapi wird nachinstalliert**: Fehlte in der Python-Umgebung das Modul (Meldung „no module named
-  ytmusicapi“), scheiterte die Anmeldung. Sie installiert ytmusicapi und yt-dlp jetzt selbst nach.
-
-## 1.7.4 (2026-10-25)
-- **Anmeldung zeigt, worauf sie wartet**: Nach dem Öffnen des Browsers steht in der Statuszeile, was fehlt
-  (z. B. kein Profil gefunden, Cookies ungültig), statt dass nur der Browser aufgeht.
-
-## 1.7.3 (2026-10-25)
-- **Anmeldung zeigt den Grund**: Wird nach dem Öffnen des Browsers keine Anmeldung erkannt, nennt die Fehlermeldung
-  den Grund (steht auch im Log) statt nur „nicht erkannt“.
-
-## 1.7.2 (2026-10-25)
-- **Anmeldung öffnet den Browser**: Findet „anmelden“ keine gültige Anmeldung, öffnet sich die Google-Anmeldeseite
-  für YouTube Music; musicalist wartet bis zu 4 Minuten und übernimmt sie. Der Fehler „Expecting value: line 1
-  column 1“ (ungültige Cookies) ist abgefangen.
+## 1.7.10 (2026-10-25)
+- **Anmeldung klappt jetzt auch ohne bereits geöffneten Browser**: Findet „anmelden“ keine gültige Anmeldung, öffnet sich die
+  Google-Anmeldeseite für YouTube Music; musicalist wartet bis zu 4 Minuten, übernimmt die Anmeldung und nennt in der
+  Statuszeile, worauf es wartet bzw. woran es scheitert. Fehlendes `ytmusicapi`/`yt-dlp` wird selbst nachinstalliert.
+- **Sehr viele Browser-Cookies** (Firefox unter Windows: ~90) ließen Google mit „413 Request Entity Too Large“ antworten
+  („Expecting value“, leere Lyrics). Es werden nur noch die nötigen Cookies übernommen; Verbindungsabbrüche werden wiederholt.
+- **„Wiedergabe fehlgeschlagen (loading failed)“**: mpv versucht den Titel einmal automatisch mit der anderen Adressart
+  (mit/ohne Anmeldung); der Grund steht im Log.
+- **Windows**: Beenden räumt auf (mpv und Prozess enden sicher); ein zweiter Start zeigt das laufende Fenster. Fehler
+  landen in `%TEMP%\rice-music.log`.
 
 ## 1.7.1 (2026-10-25)
 - **Künstler anklickbar in „als nächstes“** (und in der Warteschlange, den Albumzeilen und dem besten Treffer): Der Klick
