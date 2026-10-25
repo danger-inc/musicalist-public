@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.7.1 (2026-10-25)
+- **Künstler anklickbar in „als nächstes“** (und in der Warteschlange, den Albumzeilen und dem besten Treffer): Der Klick
+  auf den Künstlernamen startete bisher nur den Titel, weil der Name als Knopf im Zeilen-Knopf steckte und nie einen
+  Klick bekam. Titel, Künstler und Dauer sind jetzt getrennte Flächen; die Zeile leuchtet weiterhin als Ganzes auf.
+
 ## 1.7.0 (2026-10-25)
 - **Alben in der Suche**: Unter „bester treffer“ stehen bei der Titelsuche jetzt bis zu fünf passende Alben, deutlich
   mit „ALBUM“ gekennzeichnet (Künstler, Typ, Jahr); Klick öffnet das Album.

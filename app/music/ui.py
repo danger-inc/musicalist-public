@@ -44,6 +44,8 @@ button.ctl.play label { font-size: 22px; }
 flowbox.opts > flowboxchild { padding: 0; min-width: 0; min-height: 0; }
 .album-badge { font-size: 9px; font-weight: bold; letter-spacing: 1px; color: @on_primary; background: @primary;
                border-radius: 4px; padding: 0 5px; }
+.row.trk:hover { background-color: alpha(@primary, 0.1); border-radius: 4px; }
+.row.trk > button.rowhead:hover { background: none; }
 button.artlink { background: none; background-image: none; border: none; box-shadow: none; padding: 0 2px;
     min-height: 0; min-width: 0; border-radius: 3px; }
 button.artlink:hover label { color: @primary; text-decoration: underline; }
@@ -461,9 +463,19 @@ def track_row(t, on_play, actions, menus=None, extra=None):
     if OFFLINE_HAS and OFFLINE_HAS(t.get("videoId")):
         off = label("󰇚", "dim")
         off.set_tooltip_text("offline gespeichert (meistgehört)")
-    head.set_child(hbox(row.mark, row.title, off, art, row.dur, spacing=10))
+    # Knöpfe nicht ineinander schachteln (der innere bekam keinen Klick, es startete immer der Titel):
+    # Titel | Künstler | Dauer sind drei Geschwister, alle außer dem Künstler spielen den Titel.
+    row.add_css_class("trk")
+    head.set_child(hbox(row.mark, row.title, off, spacing=10))
     head.connect("clicked", lambda *_: on_play())
+    dur_btn = Gtk.Button(child=row.dur, focus_on_click=False, valign=Gtk.Align.FILL)
+    dur_btn.add_css_class("rowhead")
+    dur_btn.connect("clicked", lambda *_: on_play())
     row.append(head)
+    art.set_margin_start(4)
+    art.set_margin_end(4)
+    row.append(art)
+    row.append(dur_btn)
     for glyph, tip, fn, *opt in actions:      # opt: (True,) = fn bekommt den Knopf (Popover daran)
         b = Gtk.Button(label=glyph, tooltip_text=tip, valign=Gtk.Align.CENTER)
         b.add_css_class("mini")
@@ -493,11 +505,20 @@ def coll_row(glyph, title, sub, on_open, artist=None):
     row.add_css_class("row")
     head = Gtk.Button(hexpand=True)
     head.add_css_class("rowhead")
-    head.set_child(hbox(label(glyph, "glyph"), label(title, hexpand=True, ellipsize=True),
-                        artist_link(*artist) if artist and artist[0] else None, label(sub, "dim"),
-                        label("›", "accent"), spacing=10))
+    # Künstler-Link steht neben dem Knopf, nicht darin (verschachtelte Knöpfe bekamen keinen Klick)
+    head.set_child(hbox(label(glyph, "glyph"), label(title, hexpand=True, ellipsize=True), spacing=10))
     head.connect("clicked", lambda *_: on_open())
+    row.add_css_class("trk")
     row.append(head)
+    if artist and artist[0]:
+        al = artist_link(*artist)
+        al.set_margin_start(4)
+        al.set_margin_end(4)
+        row.append(al)
+    tail = Gtk.Button(child=hbox(label(sub, "dim"), label("›", "accent"), spacing=10), focus_on_click=False)
+    tail.add_css_class("rowhead")
+    tail.connect("clicked", lambda *_: on_open())
+    row.append(tail)
     return row
 
 
@@ -533,6 +554,8 @@ class MusicWindow(tui.TuiWindow):
         self.build_header()
         self.add_changelog("musicalist", os.path.dirname(os.path.realpath(__file__)))
         self.header_extra.reorder_child_after(self.changelog_btn, self.np_chip)
+        if getattr(self, "update_btn", None):
+            self.header_extra.reorder_child_after(self.update_btn, self.changelog_btn)
 
         self.build_now()
         self.build_queue()
@@ -738,7 +761,9 @@ class MusicWindow(tui.TuiWindow):
             return
         self.tier = tier
         self.brand_lbl.set_label("󰝚" if tier >= 2 else "󰝚 musicalist")
-        self.changelog_btn.set_visible(tier == 0)
+        self.changelog_btn.set_visible(tier <= 1)          # auch im halben Fenster
+        if getattr(self, "update_btn", None):
+            self.update_btn.set_visible(tier <= 1)
         if self.glass_btn is not None:
             self.glass_btn.set_visible(tier < 3)
         self.gear_btn.set_visible(tier < 3)
@@ -1482,9 +1507,11 @@ class MusicWindow(tui.TuiWindow):
             ars = [a for a in r.get("artists") or [] if a.get("name")]
             subw = artist_link(arts, next((a.get("id") for a in ars if a.get("id")), None), "top-sub", 40)
             subw.set_halign(Gtk.Align.START)
-        head.set_child(vbox(label(kind_txt, "top-kind"), tl, subw, spacing=2))
+        link = isinstance(subw, Gtk.Button)       # Künstler-Link nicht in den Knopf schachteln (bekäme keinen Klick)
+        head.set_child(vbox(label(kind_txt, "top-kind"), tl, None if link else subw, spacing=2))
         head.connect("clicked", lambda *_: open_fn())
-        card = hbox(cover, vbox(head, acts, spacing=6, hexpand=True, valign=Gtk.Align.CENTER), spacing=14)
+        card = hbox(cover, vbox(head, subw if link else None, acts, spacing=6, hexpand=True,
+                                valign=Gtk.Align.CENTER), spacing=14)
         card.add_css_class("top-card")
         if t is not None:
             self.songs.attach(card, t)

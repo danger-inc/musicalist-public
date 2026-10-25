@@ -143,6 +143,7 @@ REPOS = {
     "mailist": ("app/mailist/VERSION", ("invincible-nix/mailist", "invincible-nix/mailist-public")),
     "sharist": ("app/sharist/VERSION", ("invincible-nix/sharist",)),
     "linguist": ("app/linguist/VERSION", ("danger-inc/linguist",)),
+    "inquirist": ("app/inquirist/VERSION", ("danger-inc/inquirist",)),
 }
 UPDATE_FILE = os.path.expanduser("~/.cache/ist-updates.json")
 UPDATE_EVERY = 6 * 3600

@@ -515,6 +515,7 @@ class Entry(Gtk.Entry):
         self.add_css_class("tentry")
         if password:
             self.set_visibility(False)
+            self.set_invisible_char("*")
             self.set_input_purpose(Gtk.InputPurpose.PASSWORD)
         if width:
             self.set_width_chars(width)
@@ -1039,6 +1040,7 @@ class TuiWindow(Gtk.ApplicationWindow):
             if version:                      # eigener Knopf neben der Version: lädt und installiert das Update
                 self.update_btn = changelog.update_button(key, version, notify=self.say, classes=("flat", "news"))
                 self.header_extra.append(self.update_btn)
+                self.header_extra.reorder_child_after(self.update_btn, b)     # direkt rechts neben der Version
 
             def has_update(latest):
                 if self.get_mapped():
