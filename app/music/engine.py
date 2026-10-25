@@ -3,7 +3,7 @@
 #
 # Stream-Adressen löst yt-dlp im Prozess auf (≈1,5 s); der nächste Titel wird schon während des laufenden
 # vorgeladen, damit der Wechsel sofort geht. Zustand (Warteschlange, Lautstärke …) liegt in state.json.
-import glob, json, os, random, shutil, socket, sqlite3, subprocess, tempfile, threading, time
+import glob, importlib, sys, json, os, random, shutil, socket, sqlite3, subprocess, tempfile, threading, time
 
 from gi.repository import Gio, GLib
 
@@ -148,9 +148,30 @@ def read_cookies(db):
 LOGIN_URL = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F"
 
 
+def ensure_deps(progress=None):
+    """ytmusicapi/yt-dlp nachinstallieren, falls die Python-Umgebung sie nicht hat (kaputte/alte Installation)."""
+    try:
+        import ytmusicapi  # noqa: F401
+        return
+    except ImportError:
+        pass
+    if progress:
+        progress("installiere ytmusicapi und yt-dlp (einmalig, dauert kurz) …")
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check", "--upgrade",
+                        "ytmusicapi>=1.10", "yt-dlp", "yt-dlp-ejs", "requests"],
+                       capture_output=True, text=True, timeout=600)
+    importlib.invalidate_caches()
+    try:
+        import ytmusicapi  # noqa: F401,F811
+    except ImportError:
+        tail = (r.stderr or r.stdout or "").strip().splitlines()[-1:] or ["unbekannt"]
+        raise RuntimeError(f"ytmusicapi fehlt und ließ sich nicht installieren ({tail[0][:120]}) – ./install.sh im Quellordner ausführen") from None
+
+
 def login_from_browser(wait=240, progress=None):
     """Wie _login_once, öffnet aber bei fehlender/ungültiger Anmeldung den Browser zum Einloggen und
     wartet (bis `wait` s) darauf, dass dort die Anmeldung erscheint."""
+    ensure_deps(progress)
     try:
         return _login_once()
     except (RuntimeError, ValueError, KeyError) as e:   # ValueError: JSONDecodeError ("Expecting value") bei ungültigen Cookies

@@ -1,5 +1,9 @@
 # musicalist – Änderungen
 
+## 1.7.5 (2026-10-25)
+- **Fehlendes ytmusicapi wird nachinstalliert**: Fehlte in der Python-Umgebung das Modul (Meldung „no module named
+  ytmusicapi“), scheiterte die Anmeldung. Sie installiert ytmusicapi und yt-dlp jetzt selbst nach.
+
 ## 1.7.4 (2026-10-25)
 - **Anmeldung zeigt, worauf sie wartet**: Nach dem Öffnen des Browsers steht in der Statuszeile, was fehlt
   (z. B. kein Profil gefunden, Cookies ungültig), statt dass nur der Browser aufgeht.
