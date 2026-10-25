@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.7.2 (2026-10-25)
+- **Anmeldung öffnet den Browser**: Findet „anmelden“ keine gültige Anmeldung, öffnet sich die Google-Anmeldeseite
+  für YouTube Music; musicalist wartet bis zu 4 Minuten und übernimmt sie. Der Fehler „Expecting value: line 1
+  column 1“ (ungültige Cookies) ist abgefangen.
+
 ## 1.7.1 (2026-10-25)
 - **Künstler anklickbar in „als nächstes“** (und in der Warteschlange, den Albumzeilen und dem besten Treffer): Der Klick
   auf den Künstlernamen startete bisher nur den Titel, weil der Name als Knopf im Zeilen-Knopf steckte und nie einen
