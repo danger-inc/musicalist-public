@@ -3,7 +3,7 @@
 #
 # Stream-Adressen löst yt-dlp im Prozess auf (≈1,5 s); der nächste Titel wird schon während des laufenden
 # vorgeladen, damit der Wechsel sofort geht. Zustand (Warteschlange, Lautstärke …) liegt in state.json.
-import glob, importlib, sys, json, os, random, shutil, socket, sqlite3, subprocess, tempfile, threading, time
+import glob, importlib, re, sys, json, os, random, shutil, socket, sqlite3, subprocess, tempfile, threading, time
 
 from gi.repository import Gio, GLib
 
@@ -210,15 +210,20 @@ _NEEDED = {"SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO", "SIDCC", "Y
 _MAX_COOKIES = 6000          # Bytes für den Cookie-Header (Google nimmt ca. 8 KB)
 
 
+def _wichtig(name):
+    return name in _NEEDED or re.match(r"__Secure-[13]P(SID|APISID)", name) is not None
+
+
 def _slim(rows):
     rows = [r for r in rows if not r[1].startswith("ST-")]
 
-    def size(rs):
-        return sum(len(r[1]) + len(r[2]) + 3 for r in rs if r[0].endswith("youtube.com"))
-    if size(rows) > _MAX_COOKIES:
-        keep = [r for r in rows if not r[0].endswith("youtube.com") or r[1] in _NEEDED or r[1].startswith("__Secure-")
-                and r[1].split("-", 2)[-1].upper().startswith(("PSID", "PAPISID"))]
-        rows = keep
+    def yt(rs):
+        return [r for r in rs if r[0].endswith("youtube.com")]
+    # zu groß: unwichtige Cookies, größte zuerst, weglassen (die wichtigen bleiben immer)
+    for r in sorted((r for r in yt(rows) if not _wichtig(r[1])), key=lambda r: -len(r[2])):
+        if sum(len(x[1]) + len(x[2]) + 3 for x in yt(rows)) <= _MAX_COOKIES:
+            break
+        rows = [x for x in rows if x is not r]
     return rows
 
 

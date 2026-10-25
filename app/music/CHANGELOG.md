@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.7.9 (2026-10-25)
+- **Anmeldung**: Die Cookie-Auswahl aus 1.7.8 warf bei sehr vielen Cookies auch `__Secure-3PAPISID` weg („cookie is missing the
+  required value“). Die für die Anmeldung nötigen Cookies bleiben jetzt immer erhalten; weggelassen werden zuerst „ST-…“,
+  dann die größten übrigen.
+
 ## 1.7.8 (2026-10-25)
 - **Anmeldung (Windows/Firefox)**: Der Browser hatte ~90 Cookies (viele „ST-…“-Fragmente); der Cookie-Header war so groß, dass
   Google mit „413 Request Entity Too Large“ (HTML statt JSON → „Expecting value“) antwortete. Es werden nur noch die nötigen
