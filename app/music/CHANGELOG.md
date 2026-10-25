@@ -1,5 +1,9 @@
 # musicalist – Änderungen
 
+## 1.7.6 (2026-10-25)
+- **Windows**: Das Nachinstallieren von ytmusicapi/yt-dlp scheiterte an der geschützten MSYS2-Python-Umgebung;
+  es installiert jetzt wie der Installer nach `pylibs`. Bei einem Fehler steht die pip-Fehlerzeile in der Meldung.
+
 ## 1.7.5 (2026-10-25)
 - **Fehlendes ytmusicapi wird nachinstalliert**: Fehlte in der Python-Umgebung das Modul (Meldung „no module named
   ytmusicapi“), scheiterte die Anmeldung. Sie installiert ytmusicapi und yt-dlp jetzt selbst nach.

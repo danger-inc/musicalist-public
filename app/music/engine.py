@@ -157,15 +157,22 @@ def ensure_deps(progress=None):
         pass
     if progress:
         progress("installiere ytmusicapi und yt-dlp (einmalig, dauert kurz) …")
-    r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check", "--upgrade",
-                        "ytmusicapi>=1.10", "yt-dlp", "yt-dlp-ejs", "requests"],
+    cmd = [sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check", "--upgrade"]
+    libs = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pylibs")
+    if IS_WIN:      # MSYS2-Python ist „externally managed“: Pakete wie der Installer nach <App>\pylibs
+        cmd += ["--target", libs]
+    r = subprocess.run(cmd + ["ytmusicapi>=1.10", "yt-dlp", "yt-dlp-ejs", "requests"],
                        capture_output=True, text=True, timeout=600)
+    if IS_WIN and libs not in sys.path:
+        sys.path.insert(0, libs)
     importlib.invalidate_caches()
     try:
         import ytmusicapi  # noqa: F401,F811
     except ImportError:
-        tail = (r.stderr or r.stdout or "").strip().splitlines()[-1:] or ["unbekannt"]
-        raise RuntimeError(f"ytmusicapi fehlt und ließ sich nicht installieren ({tail[0][:120]}) – ./install.sh im Quellordner ausführen") from None
+        out = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
+        tail = ([l for l in out if "error" in l.lower()] or out or ["unbekannt"])[-1]
+        log(f"pip: {r.returncode}: {' | '.join(out[-6:])}")
+        raise RuntimeError(f"ytmusicapi fehlt und ließ sich nicht installieren ({tail.strip()[:200]})") from None
 
 
 def login_from_browser(wait=240, progress=None):
