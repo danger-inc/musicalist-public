@@ -1637,7 +1637,7 @@ class MusicWindow(tui.TuiWindow):
             self.coll_panel.set_visible(False)
 
     def login(self):
-        self.say("lese anmeldung aus dem browser …", seconds=30)
+        self.say("lese anmeldung aus dem browser … (falls nötig öffnet sich der browser zum einloggen)", seconds=240)
 
         def done(res):
             if isinstance(res, Exception):

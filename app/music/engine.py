@@ -145,7 +145,29 @@ def read_cookies(db):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def login_from_browser():
+LOGIN_URL = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F"
+
+
+def login_from_browser(wait=240):
+    """Wie _login_once, öffnet aber bei fehlender/ungültiger Anmeldung den Browser zum Einloggen und
+    wartet (bis `wait` s) darauf, dass dort die Anmeldung erscheint."""
+    try:
+        return _login_once()
+    except (RuntimeError, ValueError, KeyError):   # ValueError: JSONDecodeError ("Expecting value") bei ungültigen Cookies
+        pass
+    logout()
+    open_url(LOGIN_URL)
+    end = time.time() + wait
+    while time.time() < end:
+        time.sleep(3)
+        try:
+            return _login_once()
+        except (RuntimeError, ValueError, KeyError):
+            logout()
+    raise RuntimeError("keine anmeldung erkannt – im browser bei music.youtube.com einloggen und nochmal klicken")
+
+
+def _login_once():
     """Sucht das Browser-Profil mit YouTube-Anmeldung und legt die Zugangsdateien an.
     Gibt den Kontonamen zurück oder wirft RuntimeError."""
     best = None
@@ -187,7 +209,10 @@ def login_from_browser():
         with os.fdopen(fd, "w") as f:
             f.write(content)
         os.replace(path + ".tmp", path)
-    return account_name()
+    try:
+        return account_name()
+    except Exception as e:  # noqa: BLE001 – Google liefert bei ungültigen Cookies kein JSON
+        raise ValueError(f"anmeldung ungültig: {e}") from None
 
 
 def browser_auth():
