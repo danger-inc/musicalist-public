@@ -11,6 +11,7 @@ gi.require_version("PangoCairo", "1.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango, PangoCairo
 
 import glass
+import istheme
 
 
 def load_icon_font():
@@ -177,6 +178,7 @@ class Theme:
         self.load()
         self.mon = Gio.File.new_for_path(MATUGEN_CSS).monitor_file(Gio.FileMonitorFlags.NONE, None)
         self.mon.connect("changed", lambda *_: GLib.timeout_add(150, self._reload))
+        self.mon2 = istheme.watch(lambda: GLib.timeout_add(0, self._reload))      # Design in den Einstellungen gewählt
 
     _shared = None
 
@@ -202,14 +204,36 @@ class Theme:
         return False
 
     def load(self):
-        css = FALLBACK
-        try:
-            css += "\n" + open(MATUGEN_CSS).read()
-        except OSError:
-            pass
+        css = FALLBACK + "\n"
+        colors, light = istheme.resolve()
+        css += colors
+        istheme.apply_gtk(light)
+        self.light = light
         _colors.clear()
         _colors.update(_parse_colors(css))
         self.provider.load_from_string(css + glass.GLASS_CSS + CSS)
+
+
+def theme_panel(tr=lambda s: s):
+    """Panel „design“ für die Einstellungen jeder App: Auswahl der Farben (gilt für die ganze Suite) + Hell/Dunkel."""
+    box = vbox(spacing=8)
+    box.append(istheme.picker(tr))
+    box.append(label(tr("gilt für alle -ist-apps. „automatisch“ übernimmt die farben deines desktops (matugen), "
+                        "sonst das standard-design."), "dim", wrap=True, xalign=0))
+    return Panel("󰏘 " + tr("design"), box)
+
+
+def theme_button(tr=lambda s: s):
+    """Knopf „design“ für kleine Einstellungs-Popover: öffnet die Auswahl in einem eigenen Popover."""
+    pop = Gtk.Popover(has_arrow=False)
+    pop.add_css_class("tpop")
+    inner = vbox(istheme.picker(tr, columns=3), spacing=6)
+    for m in ("set_margin_top", "set_margin_bottom", "set_margin_start", "set_margin_end"):
+        getattr(inner, m)(8)
+    pop.set_child(inner)
+    btn = Gtk.MenuButton(label="󰏘 " + tr("design") + " …", popover=pop, focus_on_click=False, halign=Gtk.Align.START)
+    btn.add_css_class("tbtn")
+    return btn
 
 
 # ---------- Hilfen ----------
@@ -993,6 +1017,19 @@ class TuiWindow(Gtk.ApplicationWindow):
                 self.close()
                 return True
         return False
+
+    def add_design_button(self):
+        """Pinsel-Knopf oben rechts für Apps ohne Einstellungsseite: Design wählen (gilt für die ganze Suite)."""
+        pop = Gtk.Popover(has_arrow=False)
+        pop.add_css_class("tpop")
+        inner = vbox(istheme.picker(columns=3), spacing=6)
+        for m in ("set_margin_top", "set_margin_bottom", "set_margin_start", "set_margin_end"):
+            getattr(inner, m)(8)
+        pop.set_child(inner)
+        b = Gtk.MenuButton(label="󰏘", popover=pop, tooltip_text="design", valign=Gtk.Align.CENTER, focus_on_click=False)
+        b.add_css_class("flat")
+        self.header_extra.append(b)
+        return b
 
     def add_changelog(self, key, folder, brand=None):
         """Versions-Knopf „v1.2.0“ oben rechts → Changelog-Fenster (folder enthält VERSION + CHANGELOG.md).

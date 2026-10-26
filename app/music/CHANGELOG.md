@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 1.8.0 (2026-10-26)
+- **Design wählbar**: In den Einstellungen gibt es die Designauswahl wie in notist (Automatisch + 9 Designs). Die Wahl gilt für alle -ist-Apps zugleich und wirkt sofort. Bei „Automatisch“ (Desktop-Farben) kannst du zwischen **Dunkel** und **Hell** umschalten.
+
 ## 1.7.11 (2026-10-25)
 - **Windows: nie mehr mehrere Instanzen.** Der Startport wird jetzt belegt, bevor das Fenster aufgebaut wird; jeder weitere
   Start übergibt nur „show“ an die laufende Instanz und endet (vorher starteten schnelle Mehrfachstarts je eine eigene).

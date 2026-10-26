@@ -895,6 +895,7 @@ class MusicWindow(tui.TuiWindow):
         self.set_acct = vbox(spacing=8)
         page.append(tui.Panel("󰀄 konto", self.set_acct))
         self.fill_settings_account()
+        page.append(tui.theme_panel())
         panel = tui.Panel("einstellungen")
         self.hover_chk = tui.Check("vorschau-karte am unteren bildschirmrand (hover)", engine.setting("hover"),
                                    self.set_hover,
