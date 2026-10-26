@@ -1,4 +1,19 @@
+<!-- gh-header -->
+<div align="center">
+
+<img src="musicalist.svg" width="88" alt="musicalist">
+
 # musicalist
+
+**youtube music player in the terminal look**
+
+<img src="https://img.shields.io/badge/GTK-4-4A86CF?style=flat-square&logo=gtk&logoColor=white" alt="GTK"> <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="python"> <img src="https://img.shields.io/badge/platform-linux%20·%20windows-2E7D6B?style=flat-square&logo=linux&logoColor=white" alt="platform"> <img src="https://img.shields.io/badge/made%20for-wayland%20·%20hyprland-7C6BC4?style=flat-square" alt="made for">
+
+</div>
+
+<p align="center"><img src="docs/musicalist.png" width="860" alt="musicalist screenshot"></p>
+
+<p align="center"><!-- gh-note --><sub>tip: the glass button (󰃝, top right) makes the window see-through, like the terminal – needs a compositor with blur, e.g. hyprland.</sub></p>
 
 youtube music player in the terminal look of the suite (gtk4): search, library, radio/autoplay, lyrics, spectrum
 (cava), media keys (mpris) and, if you want, a **preview card** that slides up at the bottom when the mouse
@@ -96,3 +111,22 @@ cd ~/musicalist-src && ./update.sh      # fetches the new version, restarts musi
 in `~/.bashrc`. from the application menu it starts anyway.
 * **boxes instead of symbols:** `./update.sh` (the icon font comes along and is loaded automatically).
 * **doesn't start:** `cat $XDG_RUNTIME_DIR/rice-music.log` shows the error message.
+
+<!-- gh-suite -->
+## the -ist suite
+
+all apps share one look (terminal style, colors from your wallpaper via matugen), one installer and the same shortcuts.
+
+| app | what it does |
+| --- | --- |
+| [scourge](https://github.com/danger-inc/scourge-public) | inspect, edit, record, cut – and installs the others |
+| [notist](https://github.com/danger-inc/notist-public) | notes · words · latex |
+| [filist](https://github.com/danger-inc/filist-public) | file explorer + file dialog |
+| [datist](https://github.com/danger-inc/datist) | calendar |
+| [mailist](https://github.com/danger-inc/mailist-public) | mail |
+| [linguist](https://github.com/danger-inc/linguist) | translator + hover corner |
+| [sharist](https://github.com/danger-inc/sharist) | quick share |
+| [wallist](https://github.com/danger-inc/wallist) | wallpapers |
+| [inquirist](https://github.com/danger-inc/inquirist) | launcher |
+
+dotfiles with the matching hyprland setup: [danger-inc/dotfiles](https://github.com/danger-inc/dotfiles)
