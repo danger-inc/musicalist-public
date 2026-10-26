@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # musicalist: YouTube-Music-Player im TUI-Stil. Läuft dauerhaft im Hintergrund (Start aus hyprland.lua über
-# ~/.local/bin/rice-music --daemon), damit Super+M sofort öffnet und die Musik bei geschlossenem Fenster
+# ~/.local/bin/rice-music --daemon), damit das in der Compositor-Config gebundene Kürzel sofort öffnet und die Musik bei geschlossenem Fenster
 # weiterspielt. Steuerung über die Leitung $XDG_RUNTIME_DIR/rice-music.fifo:
 #   toggle | show | hide | play-pause | next | prev | quit | search:<begriff+mit+plus>
 #   token:<xdg-activation-token> davor: Startberechtigung vom Desktop (GNOME/KDE), damit das Fenster nach vorn darf.

@@ -528,7 +528,7 @@ class MusicWindow(tui.TuiWindow):
     TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"),
             ("lyrics", "lyrics", "󰗊"), ("visuals", "visuals", "󱑽"), ("search", "suchen", "󰍉"),
             ("settings", "einstellungen", "󰒓")]   # einstellungen: kein Tab, sondern ⚙ oben rechts
-    ESC_CLOSES = False          # Esc soll den Player nicht zumachen (nur Super+M / q / ✕)
+    ESC_CLOSES = False          # Esc soll den Player nicht zumachen (nur Tastenkürzel aus der Config / q / ✕)
 
     def __init__(self, app, player, cava, srcs):
         super().__init__(app, "󰝚 musicalist", [(t, n, i) for t, n, i in self.TABS],
@@ -1957,7 +1957,7 @@ class MusicWindow(tui.TuiWindow):
         t = self.p.current
         self.cover.show(t["thumb"] if t else None)
         self.title.set_label(t["title"] if t else "nichts läuft")
-        self.artist.set_label(t["artist"] if t else "super+m · ⁶suchen")
+        self.artist.set_label(t["artist"] if t else "⁶suchen")
         self.album.set_label(t["album"] if t else "")
         self.update_track_labels()
         if hasattr(self, "visuals"):
@@ -2531,7 +2531,7 @@ class Preview:
         p, t = self.p, self.p.current
         self.cover.show(t["thumb"] if t else None)
         self.title.set_label(t["title"] if t else "nichts läuft")
-        self.artist.set_label(t["artist"] if t else "super+m öffnet den player")
+        self.artist.set_label(t["artist"] if t else "musicalist")
         self.like.set_label("󰋑" if t and t.get("liked") else "󰋕")
         self.play.set_label("󰏤" if not p.paused and p.started else "󰐊")
         dur = p.dur or (t or {}).get("duration") or 0
