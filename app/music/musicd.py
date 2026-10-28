@@ -195,6 +195,8 @@ class App(Gtk.Application):
         if engine.IS_WIN:             # mpv/Python sicher beenden – sonst bleibt unter Windows ein Rest im Hintergrund
             try:
                 self.player.mpv.proc.terminate()
+                if self.player.mpv2 is not None:
+                    self.player.mpv2.proc.terminate()
             except Exception:  # noqa: BLE001
                 pass
             GLib.timeout_add(1500, lambda: os._exit(0))

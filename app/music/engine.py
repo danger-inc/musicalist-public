@@ -3,11 +3,13 @@
 #
 # Stream-Adressen löst yt-dlp im Prozess auf (≈1,5 s); der nächste Titel wird schon während des laufenden
 # vorgeladen, damit der Wechsel sofort geht. Zustand (Warteschlange, Lautstärke …) liegt in state.json.
-import glob, importlib, re, sys, json, os, random, shutil, socket, sqlite3, subprocess, tempfile, threading, time
+import glob, importlib, importlib.util, math, re, zlib, sys, json, os, random, shutil, socket, sqlite3, subprocess, tempfile, threading, time
 
 from gi.repository import Gio, GLib
 
 import tui
+import localmusic
+import audiofx
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 AUTH_DIR = os.path.join(HERE, "auth")
@@ -16,6 +18,8 @@ COOKIES_TXT = os.path.join(AUTH_DIR, "cookies.txt")      # Anmeldung für yt-dlp
 STATE = os.path.join(HERE, "state.json")
 SETTINGS = os.path.join(HERE, "settings.json")
 HISTORY = os.path.join(HERE, "history.json")
+LISTENS = os.path.join(HERE, "listens.json")     # langes Hörprotokoll für den Rückblick (nur lokal)
+PINS = os.path.join(HERE, "offline_pins.json")  # von Hand für offline gemerkte Titel (nur lokal)
 PLAYS = os.path.join(HERE, "plays.json")       # Wiedergaben je Titel (für „meistgehört“, nur lokal)
 # Audiodateien bewusst außerhalb von rice-apps (wird gesichert/veröffentlicht) – lassen sich jederzeit neu laden
 OFFLINE_DIR = os.path.join(GLib.get_user_data_dir(), "musicalist", "offline")   # eigener Hörverlauf (nur lokal, wird nie veröffentlicht)
@@ -29,7 +33,14 @@ DEFAULT_SETTINGS = {"last_playlist": None,   # [id, titel] der zuletzt benutzten
                     "desk": False,            # Anzeige dauerhaft auf dem Hintergrundbild
                     "desk_pos": "bottom",
                     "offline": True,          # meistgehörte Titel als Datei speichern (geht ohne Netz, startet sofort)
-                    "offline_n": 25}          # wie viele     # wo: bottom / bottom-left / bottom-right / top-right / top-left
+                    "offline_n": 25,
+                    "offline_mb": 2048,       # Obergrenze für den Offline-Ordner in MB (0 = unbegrenzt)
+                    "ytdlp_auto": True,       # yt-dlp wöchentlich aktualisieren (YouTube ändert ständig etwas)
+                    "ytdlp_checked": 0,
+                    "crossfade": 0,           # Überblendung in Sekunden (0 = aus)
+                    "eq": {"on": False, "preset": "flach", "gains": [0] * 10, "pre": 0},
+                    "local": True,            # lokale Musik (Ordner) in der Bibliothek zeigen
+                    "local_dir": ""}          # leer = ~/Music          # wie viele     # wo: bottom / bottom-left / bottom-right / top-right / top-left
 
 
 def setting(key):
@@ -56,6 +67,7 @@ def set_setting(key, value):
 IS_WIN = os.name == "nt"
 RUNTIME = tempfile.gettempdir() if IS_WIN else GLib.get_user_runtime_dir()
 MPV_SOCK = r"\\.\pipe\rice-music-mpv" if IS_WIN else RUNTIME + "/rice-music-mpv.sock"
+MPV_SOCK2 = r"\\.\pipe\rice-music-mpv2" if IS_WIN else RUNTIME + "/rice-music-mpv2.sock"    # Standby für Überblendung
 
 
 def open_url(url):
@@ -91,6 +103,19 @@ def fmt(sec):
     return f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}" if sec >= 3600 else f"{sec // 60}:{sec % 60:02d}"
 
 
+def podcast_secs(text):
+    """„25 min“, „1 hr 5 min“, „1:02:03“ → Sekunden."""
+    if isinstance(text, (int, float)):
+        return int(text)
+    text = str(text or "")
+    if ":" in text:
+        return secs(text)
+    h = re.search(r"(\d+)\s*(?:hr|h|std)", text)
+    m = re.search(r"(\d+)\s*(?:min|m)\b", text)
+    sec = re.search(r"(\d+)\s*s(?:ec)?\b", text)
+    return (int(h.group(1)) * 3600 if h else 0) + (int(m.group(1)) * 60 if m else 0) + (int(sec.group(1)) if sec else 0)
+
+
 def track(d):
     """Einheitliches Format aus Suche, Playlist, Album, Radio, Verlauf."""
     if not d or not d.get("videoId"):
@@ -107,7 +132,7 @@ def track(d):
             "album": album.get("name", "") if isinstance(album, dict) else (album or ""),
             "duration": d.get("duration_seconds") or secs(d.get("duration") or d.get("length") or 0),
             "thumb": thumbs[-1]["url"] if thumbs else "",
-            "liked": d.get("likeStatus") == "LIKE"}
+            "liked": d.get("likeStatus") == "LIKE", "setVideoId": d.get("setVideoId")}
 
 
 # ---------- Anmeldung über Zen ----------
@@ -161,7 +186,7 @@ def ensure_deps(progress=None):
     libs = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pylibs")
     if IS_WIN:      # MSYS2-Python ist „externally managed“: Pakete wie der Installer nach <App>\pylibs
         cmd += ["--target", libs]
-    r = subprocess.run(cmd + ["ytmusicapi>=1.10", "yt-dlp", "yt-dlp-ejs", "requests"],
+    r = subprocess.run(cmd + ["ytmusicapi>=1.10", "yt-dlp", "yt-dlp-ejs", "requests", "mutagen"],
                        capture_output=True, text=True, timeout=600)
     if IS_WIN and libs not in sys.path:
         sys.path.insert(0, libs)
@@ -173,6 +198,78 @@ def ensure_deps(progress=None):
         tail = ([l for l in out if "error" in l.lower()] or out or ["unbekannt"])[-1]
         log(f"pip: {r.returncode}: {' | '.join(out[-6:])}")
         raise RuntimeError(f"ytmusicapi fehlt und ließ sich nicht installieren ({tail.strip()[:200]})") from None
+
+
+def explain(err):
+    """Fehler in einem Satz, den man versteht (statt Python-/Netzwerk-Rohtext)."""
+    e = str(err).strip().splitlines()[0] if str(err).strip() else type(err).__name__
+    low = e.lower()
+    if isinstance(err, LoginRequired):
+        return e
+    if any(k in low for k in ("name or service not known", "temporary failure in name", "network is unreachable",
+                               "failed to resolve", "nodename nor servname", "connection refused",
+                               "getaddrinfo", "no route to host", "timed out", "timeout")):
+        return "keine verbindung zum internet"
+    if "sign in to confirm" in low or "login required" in low or \
+            ("http" in low and any(k in low for k in ("401", "403 ", "cookies"))):
+        return "youtube verlangt anmeldung – einstellungen (,) → anmeldung neu einlesen"
+    if any(k in low for k in ("unable to extract", "nsig", "player response", "signature")):
+        return "youtube hat etwas geändert – yt-dlp wird aktualisiert (einstellungen: jetzt aktualisieren)"
+    if "video unavailable" in low or "not available" in low or "private video" in low:
+        return "titel nicht verfügbar (gesperrt oder entfernt)"
+    if "429" in low or "too many requests" in low:
+        return "youtube bremst gerade (zu viele anfragen) – gleich nochmal"
+    return e[:160]
+
+
+_ytdlp_lock = threading.Lock()
+
+
+def ytdlp_version():
+    """Installierte yt-dlp-Version aus den Paket-Metadaten – `import yt_dlp` kostet ~0,6 s (nur nötig beim Abspielen)."""
+    mod = sys.modules.get("yt_dlp.version")
+    if mod is not None and hasattr(mod, "__version__"):
+        return mod.__version__
+    try:                                    # version.py lesen, ohne das Paket zu importieren (~1 ms)
+        spec = importlib.util.find_spec("yt_dlp")
+        with open(os.path.join(os.path.dirname(spec.origin), "version.py")) as f:
+            m = re.search(r"__version__\s*=\s*['\"]([^'\"]+)", f.read())
+        if m:
+            return m.group(1)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from importlib.metadata import version
+        return version("yt-dlp")
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
+def update_ytdlp(min_age=0):
+    """yt-dlp per pip aktualisieren (blockierend – in einem Hintergrund-Thread aufrufen). min_age: nur wenn die
+    letzte Prüfung so viele Sekunden her ist. Gibt (alt, neu) zurück, None wenn übersprungen; wirft bei Fehlern."""
+    if not _ytdlp_lock.acquire(blocking=False):
+        return None
+    try:
+        if min_age and time.time() - (setting("ytdlp_checked") or 0) < min_age:
+            return None
+        set_setting("ytdlp_checked", time.time())
+        old = ytdlp_version()
+        cmd = [sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check", "--upgrade"]
+        if IS_WIN:
+            cmd += ["--target", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pylibs")]
+        r = subprocess.run(cmd + ["yt-dlp", "yt-dlp-ejs"], capture_output=True, text=True, timeout=300)
+        if r.returncode:
+            out = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
+            raise RuntimeError((out or ["pip-fehler"])[-1][:160])
+        for m in [m for m in sys.modules if m == "yt_dlp" or m.startswith("yt_dlp.") or m.startswith("yt_dlp_")]:
+            del sys.modules[m]                 # beim nächsten import yt_dlp kommt die neue Version
+        importlib.invalidate_caches()
+        new = ytdlp_version()
+        log(f"yt-dlp {old} → {new}")
+        return old, new
+    finally:
+        _ytdlp_lock.release()
 
 
 def login_from_browser(wait=240, progress=None):
@@ -339,11 +436,16 @@ class Music:
 
     def __init__(self):
         self._yt = None
+        self._yt_lock = threading.RLock()
         self.authed = False
         self.auth_error = None
 
     @property
     def yt(self):
+        with self._yt_lock:             # mehrere Threads (Suche, Vorschläge, Bibliothek) starten gleichzeitig
+            return self._make_yt()
+
+    def _make_yt(self):
         # Sprache Englisch lassen: ytmusicapi erkennt Ergebnistypen nur dann sicher
         if self._yt is None:
             from ytmusicapi import YTMusic
@@ -365,7 +467,7 @@ class Music:
     def search(self, q, kind):
         # limit 20: passt in eine Antwort (~0,4 s) – 40 braucht eine zweite Anfrage und dauert ~1,6 s
         flt = {"songs": "songs", "alben": "albums", "playlists": "playlists", "künstler": "artists",
-               "videos": "videos"}[kind]
+               "videos": "videos", "podcasts": "podcasts"}[kind]
         return self.yt.search(q, filter=flt, limit=20)
 
     def search_albums(self, q):
@@ -402,10 +504,83 @@ class Music:
         raise RuntimeError(str(res)[:160])
 
     def create_playlist(self, title, vids):
-        pid = self.yt.create_playlist(title, "", privacy_status="PRIVATE", video_ids=vids)
+        pid = self.yt.create_playlist(title, "", privacy_status="PRIVATE", video_ids=vids or None)
         if not isinstance(pid, str):
             raise RuntimeError(str(pid)[:160])
         return pid
+
+    # ----- eigene Playlists verwalten -----
+    def rename_playlist(self, pid, title):
+        res = self.yt.edit_playlist(pid, title=title)
+        if isinstance(res, dict) and res.get("status") not in (None, "STATUS_SUCCEEDED"):
+            raise RuntimeError(str(res)[:160])
+
+    def delete_playlist(self, pid):
+        res = self.yt.delete_playlist(pid)
+        if isinstance(res, dict) and res.get("status") not in (None, "STATUS_SUCCEEDED"):
+            raise RuntimeError(str(res)[:160])
+
+    def remove_from_playlist(self, pid, tracks):
+        vids = [{"videoId": t["videoId"], "setVideoId": t["setVideoId"]} for t in tracks if t.get("setVideoId")]
+        if not vids:
+            raise RuntimeError("diese playlist lässt sich nicht bearbeiten")
+        res = self.yt.remove_playlist_items(pid, vids)
+        if isinstance(res, dict) and res.get("status") not in (None, "STATUS_SUCCEEDED"):
+            raise RuntimeError(str(res)[:160])
+
+    # ----- Künstler abonnieren, neue Veröffentlichungen -----
+    def subscribe(self, channel_id, on=True):
+        (self.yt.subscribe_artists if on else self.yt.unsubscribe_artists)([channel_id])
+
+    def subscriptions(self):
+        return [{"id": r.get("browseId") or r.get("channelId"), "title": r.get("artist") or "?",
+                 "sub": str(r.get("subscribers") or "")}
+                for r in self.yt.get_library_subscriptions(limit=100) if r.get("browseId") or r.get("channelId")]
+
+    def new_releases(self, limit_artists=25):
+        """Neueste Alben/Singles der abonnierten Künstler (neuestes Jahr zuerst)."""
+        from concurrent.futures import ThreadPoolExecutor
+        subs = self.subscriptions()[:limit_artists]
+
+        def one(a):
+            try:
+                d = self.yt.get_artist(a["id"])
+            except Exception as e:  # noqa: BLE001
+                log(f"neu von {a['title']}: {str(e)[:80]}")
+                return []
+            out = []
+            for key in ("albums", "singles"):
+                for r in (d.get(key) or {}).get("results", []):
+                    if r.get("browseId"):
+                        out.append({"id": r["browseId"], "title": r.get("title") or "?", "artist": a["title"],
+                                    "year": str(r.get("year") or "0")})
+            return out
+        with ThreadPoolExecutor(5) as ex:
+            rows = [r for part in ex.map(one, subs) for r in part]
+        rows.sort(key=lambda r: r["year"], reverse=True)
+        return [{"id": r["id"], "title": r["title"], "sub": f"{r['artist']} · {r['year']}"} for r in rows[:30]]
+
+    # ----- Podcasts -----
+    def podcast(self, pid):
+        d = self.yt.get_podcast(pid, limit=100)
+        name = (d.get("author") or {}).get("name") or ""
+        out = []
+        for e in d.get("episodes", []):
+            if not e.get("videoId"):
+                continue
+            thumbs = e.get("thumbnails") or []
+            out.append({"videoId": e["videoId"], "title": e.get("title") or "?", "artist": name,
+                        "artistId": None, "albumId": None, "album": d.get("title", ""),
+                        "duration": podcast_secs(e.get("duration")), "thumb": thumbs[-1]["url"] if thumbs else "",
+                        "liked": False, "setVideoId": None, "podcast": True,
+                        "note": e.get("date") or ""})
+        return d.get("title", ""), out
+
+    def podcast_library(self):
+        return [{"id": r.get("podcastId") or r.get("browseId"), "title": r.get("title") or "?",
+                 "sub": (r.get("author") or {}).get("name", "") if isinstance(r.get("author"), dict)
+                 else str(r.get("author") or "")}
+                for r in self.yt.get_library_podcasts(limit=50) if r.get("podcastId") or r.get("browseId")]
 
     def playlist(self, pid):
         if pid == "LM":  # Lieblingssongs
@@ -438,7 +613,8 @@ class Music:
                     for r in (d.get(key) or {}).get("results", []) if r.get("browseId")]
         return {"name": d.get("name", ""), "subscribers": d.get("subscribers") or "", "tracks": tracks,
                 "all_songs": songs.get("browseId"), "albums": coll("albums"), "singles": coll("singles"),
-                "related": coll("related"), "radio": d.get("radioId"), "shuffle": d.get("shuffleId")}
+                "related": coll("related"), "radio": d.get("radioId"), "shuffle": d.get("shuffleId"),
+                "channelId": d.get("channelId"), "subscribed": bool(d.get("subscribed"))}
 
     def watch_list(self, pid):
         """Mix/Radio-Playlist (RDEM…) – geht nicht über get_playlist."""
@@ -619,7 +795,7 @@ class Lyrics:
                 res = self.lrclib(t, dur)
             except Exception as e:  # noqa: BLE001
                 log(f"lrclib: {str(e)[:100]}")
-            if not res or not res["synced"]:
+            if (not res or not res["synced"]) and not localmusic.is_local(vid):
                 try:
                     yt = self.music.lyrics(vid)
                 except Exception as e:  # noqa: BLE001
@@ -717,6 +893,10 @@ class Resolver:
         old = self.cached(vid)
         if not (old and old.get("kind") == "hq" and kind != "hq"):
             self.cache[vid] = (time.time() + 4 * 3600, res)
+            if len(self.cache) > 300:                  # abgelaufene und älteste Adressen loswerden
+                now = time.time()
+                for k in [k for k, (exp, _r) in self.cache.items() if exp < now] or [next(iter(self.cache))]:
+                    self.cache.pop(k, None)
         return res
 
     def _fast(self, vid, kind="fast"):
@@ -741,6 +921,12 @@ class Resolver:
             ev.set()
 
     def local_info(self, vid):
+        if localmusic.is_local(vid):             # Datei aus dem Musikordner
+            f = localmusic.path_of(vid)
+            if not os.path.exists(f):
+                raise RuntimeError(f"datei fehlt: {os.path.basename(f)}")
+            return {"url": f, "ua": UA, "abr": None, "codec": os.path.splitext(f)[1].lstrip("."), "duration": None,
+                    "kind": "offline"}
         f = self.local(vid) if self.local else None
         if not f:
             return None
@@ -772,7 +958,8 @@ class Resolver:
     def warm(self, vid):
         """Maus liegt auf einem Titel: Adresse schon mal (schnell) holen – der Klick spielt dann sofort.
         Immer nur einer gleichzeitig; kommt ein neuer Wunsch, gewinnt der neueste."""
-        if not vid or self.cached(vid) or vid in self.inflight or (self.local and self.local(vid)):
+        if not vid or self.cached(vid) or vid in self.inflight or (self.local and self.local(vid)) \
+                or localmusic.is_local(vid):
             return
         with self.warm_lock:
             self.warm_next = vid
@@ -799,7 +986,7 @@ class Resolver:
         kind = "hq" if os.path.exists(COOKIES_TXT) else "fast"
         with self.queue_lock:
             self.wanted = [v for v in vids if not (self.cached(v) and self.cached(v).get("kind") == kind)
-                           and not (self.local and self.local(v))]
+                           and not (self.local and self.local(v)) and not localmusic.is_local(v)]
             if self.worker and self.worker.is_alive():
                 return
             self.worker = threading.Thread(target=self._prefetch_loop, args=(kind,), daemon=True)
@@ -834,34 +1021,65 @@ class PipeSock:
         return self.rd.read(n)
 
 
+_mpv_ver = None
+
+
+def mpv_version():
+    """(Haupt, Neben) von `mpv --version`, z. B. (0, 37) – (0, 0) wenn nicht lesbar. Einmal pro Prozess."""
+    global _mpv_ver
+    if _mpv_ver is None:
+        _mpv_ver = (0, 0)
+        try:
+            out = subprocess.run(["mpv", "--version"], capture_output=True, text=True, timeout=5).stdout
+            m = re.search(r"mpv\s+v?(\d+)\.(\d+)", out)
+            if m:
+                _mpv_ver = (int(m.group(1)), int(m.group(2)))
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return _mpv_ver
+
+
 class Mpv:
-    def __init__(self, on_event):
+    """mpv per JSON-IPC. Stirbt der Prozess (Absturz, Speichermangel, kill), startet er neu und on_restart() darf
+    die Wiedergabe fortsetzen; nach 3 Neustarts in 2 Minuten wird aufgegeben (on_event "mpv-dead")."""
+
+    def __init__(self, on_event, on_restart=None, path=None):
         self.on_event = on_event
+        self.on_restart = on_restart
+        self.path = path or MPV_SOCK
+        self.props = {}            # zuletzt gemeldete Eigenschaften (time-pos, duration …) + "loaded"
         self.sock = None
         self.lock = threading.Lock()
+        self.closing = False
+        self.restarts = []
+        self._start()
+
+    def _start(self):
         if not IS_WIN:
             try:
-                os.unlink(MPV_SOCK)
+                os.unlink(self.path)
             except OSError:
                 pass
+        self.sock = None
+        self.props = {}
         self.proc = tui.spawn_watch(["mpv", "--idle=yes", "--no-video", "--no-terminal", "--ytdl=no",
-                                     "--audio-display=no", f"--input-ipc-server={MPV_SOCK}",
+                                     "--audio-display=no", f"--input-ipc-server={self.path}",
                                      "--audio-client-name=musicalist", "--cache=yes", "--demuxer-max-bytes=64MiB",
                                      "--gapless-audio=weak", "--replaygain=track"] +
                                     ([f"--log-file={os.path.join(os.environ.get('TEMP', '.'), 'rice-mpv.log')}",
                                       "--msg-level=all=warn,ffmpeg=v"] if IS_WIN else []),
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for _ in range(100):
+        for _ in range(300):
             try:
                 if IS_WIN:
-                    self.sock = PipeSock(MPV_SOCK)
+                    self.sock = PipeSock(self.path)
                 else:
                     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    s.connect(MPV_SOCK)
+                    s.connect(self.path)
                     self.sock = s
                 break
             except OSError:
-                time.sleep(0.03)
+                time.sleep(0.01)
         if self.sock is None:
             raise RuntimeError("mpv startet nicht")
         # Beobachter am LESE-Handle anmelden (Ereignisse gehen an den Client, der sie bestellt hat)
@@ -871,7 +1089,34 @@ class Mpv:
                 self.sock.sendall(data, reader=True)
             else:
                 self.sock.sendall(data)
-        threading.Thread(target=self.read, daemon=True).start()
+        threading.Thread(target=self.read, args=(self.sock,), daemon=True).start()
+
+    def _died(self, sock):
+        if self.closing or sock is not self.sock:
+            return False
+        try:
+            self.proc.wait(timeout=1)               # Zombie einsammeln
+        except Exception:  # noqa: BLE001 – hängt er noch, halb tot: sicherheitshalber beenden
+            try:
+                self.proc.kill()
+            except OSError:
+                pass
+        now = time.time()
+        self.restarts = [t for t in self.restarts if now - t < 120]
+        log(f"mpv beendet (Code {self.proc.returncode}) – Neustart {len(self.restarts) + 1}/3")
+        if len(self.restarts) >= 3:
+            self.on_event({"event": "mpv-dead"})
+            return False
+        self.restarts.append(now)
+        try:
+            self._start()
+        except Exception as e:  # noqa: BLE001
+            log(f"mpv-neustart: {e}")
+            self.on_event({"event": "mpv-dead"})
+            return False
+        if self.on_restart:
+            self.on_restart()
+        return False
 
     def cmd(self, *args):
         data = (json.dumps({"command": list(args)}) + "\n").encode()
@@ -884,14 +1129,25 @@ class Mpv:
     def set(self, prop, value):
         self.cmd("set_property", prop, value)
 
-    def read(self):
+    def loadfile(self, url, start=0):
+        """Datei laden (ersetzt den laufenden Titel), optional ab `start` Sekunden. Die Parameterliste von
+        `loadfile` hat sich geändert: ab mpv 0.38 mit Index (-1), davor ohne – falsche Form = „invalid parameter“."""
+        if not start:
+            self.cmd("loadfile", url, "replace")
+        elif mpv_version() >= (0, 38):
+            self.cmd("loadfile", url, "replace", -1, f"start={start}")
+        else:
+            self.cmd("loadfile", url, "replace", f"start={start}")
+
+    def read(self, sock):
         buf = b""
         while True:
             try:
-                chunk = self.sock.recv(65536)
+                chunk = sock.recv(65536)
             except OSError:
-                return
+                chunk = b""
             if not chunk:
+                GLib.idle_add(self._died, sock)
                 return
             buf += chunk
             while b"\n" in buf:
@@ -904,6 +1160,7 @@ class Mpv:
                     GLib.idle_add(self.on_event, msg)
 
     def quit(self):
+        self.closing = True
         self.cmd("quit")
 
 
@@ -956,6 +1213,77 @@ class History:
         return False
 
 
+class Stats:
+    """Langes Hörprotokoll für den Rückblick: [Zeit, videoId, Titel, Künstler, Dauer]. Beim ersten Start aus dem
+    Hörverlauf vorbelegt. Nur lokal; wer den Hörverlauf ausschaltet, protokolliert nichts."""
+    KEEP = 60000
+
+    def __init__(self, history):
+        try:
+            with open(LISTENS) as f:
+                self.rows = [r for r in json.load(f) if isinstance(r, list) and len(r) == 5]
+        except (OSError, ValueError):
+            self.rows = [[x.get("at", 0), x["videoId"], x.get("title") or "?", x.get("artist") or "",
+                          x.get("duration") or 0] for x in reversed(history.items)]
+        self._save_id = None
+
+    def add(self, t):
+        if not t or not t.get("videoId"):
+            return
+        self.rows.append([time.time(), t["videoId"], t.get("title") or "?", t.get("artist") or "",
+                          t.get("duration") or 0])
+        del self.rows[:-self.KEEP]
+        if self._save_id is None:
+            self._save_id = GLib.timeout_add_seconds(10, self.save)
+
+    def clear(self):
+        self.rows = []
+        self.save()
+
+    def save(self):
+        self._save_id = None
+        try:
+            with open(LISTENS + ".tmp", "w") as f:
+                json.dump(self.rows, f, ensure_ascii=False)
+            os.replace(LISTENS + ".tmp", LISTENS)
+        except OSError:
+            pass
+        return False
+
+    @staticmethod
+    def rebuild(vid, title, artist, dur):
+        """Spielbarer Titel aus einer Protokollzeile (Cover: Standardbild von YouTube)."""
+        if localmusic.is_local(vid):
+            return localmusic.make_track(localmusic.path_of(vid), (title, artist, "", dur))
+        return {"videoId": vid, "title": title, "artist": artist, "artistId": None, "albumId": None, "album": "",
+                "duration": dur, "thumb": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg", "liked": False,
+                "setVideoId": None}
+
+    def report(self, days=None, now=None):
+        """Zahlen für einen Zeitraum (days=None: alles)."""
+        now = now or time.time()
+        lo = now - days * 86400 if days else 0
+        rows = [r for r in self.rows if r[0] >= lo]
+        titles, artists, hours, wdays, perday = {}, {}, [0] * 24, [0] * 7, {}
+        secs_total = 0
+        for at, vid, title, artist, dur in rows:
+            e = titles.setdefault(vid, [0, title, artist, dur])
+            e[0] += 1
+            secs_total += dur or 0
+            for a in [x.strip() for x in artist.split(",") if x.strip()]:
+                artists[a] = artists.get(a, 0) + 1
+            lt = time.localtime(at)
+            hours[lt.tm_hour] += 1
+            wdays[lt.tm_wday] += 1
+            perday[(lt.tm_year, lt.tm_yday)] = perday.get((lt.tm_year, lt.tm_yday), 0) + 1
+        first = min((r[0] for r in rows), default=now)
+        span_days = max(1, min(days or 10 ** 6, int((now - first) / 86400) + 1))
+        return {"plays": len(rows), "seconds": secs_total, "unique": len(titles), "artists_n": len(artists),
+                "top_titles": sorted(([n, vid, t, a, d] for vid, (n, t, a, d) in titles.items()), reverse=True)[:10],
+                "top_artists": sorted(((n, a) for a, n in artists.items()), reverse=True)[:10],
+                "hours": hours, "wdays": wdays, "days_active": len(perday), "span_days": span_days}
+
+
 class Offline:
     """Meistgehörte Titel offline: Wiedergaben werden gezählt (mit Halbwertszeit – was man länger nicht hört,
     rutscht von allein raus), die besten N liegen als Audiodatei in OFFLINE_DIR. Abgleich beim Start, alle 6 h
@@ -966,7 +1294,7 @@ class Offline:
     def __init__(self, history):
         self.listeners = []
         self.lock = threading.Lock()
-        self.busy, self.status, self.errors = False, "", {}
+        self.busy, self.status, self.errors, self._again = False, "", {}, False
         self.current = None              # gerade geladener Titel
         try:
             with open(PLAYS) as f:
@@ -979,6 +1307,11 @@ class Offline:
         except (OSError, ValueError):
             self.index = {}
         self._save_id = self._sync_id = None
+        try:
+            with open(PINS) as f:
+                self.pins = json.load(f)
+        except (OSError, ValueError):
+            self.pins = {}
         GLib.timeout_add_seconds(60, lambda: self.sync() and False)          # kurz nach dem Start
         GLib.timeout_add_seconds(6 * 3600, lambda: self.sync() or True)
 
@@ -1038,10 +1371,73 @@ class Offline:
         rows = [(e["t"], self.score(e, now), e["n"]) for e in self.plays.values() if e.get("t")]
         rows = [r for r in rows if r[1] >= self.MIN_SCORE]
         rows.sort(key=lambda r: -r[1])
-        return rows[:n or setting("offline_n") or 25]
+        return self.fit_cap(rows[:n or setting("offline_n") or 25])
+
+    EST_BPS = 20_000          # geschätzte Bytes pro Sekunde (Opus ≈ 160 kbit/s), solange die Datei nicht da ist
+
+    def fit_cap(self, rows):
+        """Speicherlimit (offline_mb): von der Spitze her auffüllen, was nicht mehr passt, entfällt."""
+        cap = (setting("offline_mb") or 0) * 1_000_000
+        if not cap:
+            return rows
+        out = []
+        used = sum((self.index.get(v) or {}).get("size") or (t.get("duration") or 240) * self.EST_BPS
+                   for v, t in self.pins.items())                 # gemerkte Titel belegen ihren Platz zuerst
+        rows = [r for r in rows if r[0]["videoId"] not in self.pins]
+        for r in rows:
+            vid = r[0]["videoId"]
+            size = (self.index.get(vid) or {}).get("size") or (r[0].get("duration") or 240) * self.EST_BPS
+            if used + size > cap:
+                continue                      # kürzere, weiter hinten liegende Titel dürfen noch hineinpassen
+            used += size
+            out.append(r)
+        return out
 
     def wanted_ids(self):
-        return [t["videoId"] for t, _s, _n in self.top()] if setting("offline") else []
+        auto = [t["videoId"] for t, _s, _n in self.top()] if setting("offline") else []
+        return list(self.pins) + auto
+
+    # ----- von Hand gemerkt („offline speichern“): bleiben, bis man sie wieder entfernt -----
+    PIN_MAX = 300
+
+    def is_pinned(self, vid):
+        return vid in self.pins
+
+    def pin(self, tracks):
+        """Titel dauerhaft offline legen. Gibt die Zahl neu gemerkter Titel zurück."""
+        n = 0
+        for t in tracks:
+            vid = t.get("videoId")
+            if not vid or localmusic.is_local(vid) or vid in self.pins or len(self.pins) >= self.PIN_MAX:
+                continue
+            self.pins[vid] = {k: t.get(k) for k in ("videoId", "title", "artist", "album", "duration", "thumb")}
+            n += 1
+        if n:
+            self._save_pins()
+            self.sync()
+            self.emit()
+        return n
+
+    def unpin(self, vids):
+        for vid in vids:
+            self.pins.pop(vid, None)
+        self._save_pins()
+        self.sync()
+        self.emit()
+
+    def _save_pins(self):
+        try:
+            with open(PINS + ".tmp", "w") as f:
+                json.dump(self.pins, f, ensure_ascii=False)
+            os.replace(PINS + ".tmp", PINS)
+        except OSError:
+            pass
+
+    def want_all(self):
+        """Zu speichernde Titel: erst die gemerkten, dann die meistgehörten (Limit gilt für den Rest)."""
+        pinned = list(self.pins.values())
+        auto = [t for t, _s, _n in self.top() if t["videoId"] not in self.pins] if setting("offline") else []
+        return pinned + auto
 
     # ----- Dateien -----
     def path(self, vid):
@@ -1071,12 +1467,13 @@ class Offline:
 
     def sync(self):
         """Abgleichen: fehlende laden, herausgefallene löschen (im Hintergrund, einer nach dem anderen)."""
-        want = self.top() if setting("offline") else []
+        want = self.want_all()
         with self.lock:
             if self.busy:
+                self._again = True               # läuft gerade: danach noch einmal (z. B. neu gemerkt/freigegeben)
                 return False
             self.busy = True
-        threading.Thread(target=self._sync, args=([t for t, _s, _n in want],), daemon=True).start()
+        threading.Thread(target=self._sync, args=(want,), daemon=True).start()
         return True
 
     def _sync(self, want):
@@ -1108,6 +1505,9 @@ class Offline:
             self.current = None
             self.busy = False
             self.emit()
+            if self._again:
+                self._again = False
+                GLib.idle_add(lambda: self.sync() and False)
 
     def _remove(self, vid):
         e = self.index.pop(vid, None)
@@ -1118,9 +1518,13 @@ class Offline:
                 pass
             self._save_index()
 
+    MIN_FREE = 1_000_000_000      # darunter wird nichts mehr geladen (Platte nicht vollschreiben)
+
     def _download(self, t):
         import yt_dlp
         os.makedirs(OFFLINE_DIR, exist_ok=True)
+        if shutil.disk_usage(OFFLINE_DIR).free < self.MIN_FREE:
+            raise RuntimeError("zu wenig freier speicherplatz (unter 1 gb)")
         vid = t["videoId"]
         opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "noprogress": True,
                 "format": "bestaudio[acodec=opus]/bestaudio/best", "js_runtimes": js_runtimes(),
@@ -1154,6 +1558,8 @@ class Player:
         self.listeners = []
         self.history = History()
         self.offline = Offline(self.history)
+        self.stats = Stats(self.history)
+        self.locallib = localmusic.Library(os.path.join(HERE, "local.json"))
         self.resolver.local = self.offline.path
         self.queue, self.index = [], -1
         self.pos, self.dur, self.paused, self.loading, self.volume = 0.0, 0.0, True, False, 70
@@ -1161,16 +1567,244 @@ class Player:
         self.stream_info = None
         self.gen = 0
         self._retry_kind = None
+        self._fail_streak = 0
         self._retry_n = {}
+        self.sleep_end, self.sleep_track, self._sleep_id, self._sleep_faded, self._fade_t = None, False, None, False, 0.0
         self.started = False  # in dieser Sitzung schon etwas geladen?
         self.restore_pos = 0
-        self.mpv = Mpv(self.on_mpv)
+        self.eq = audiofx.normalize(setting("eq"))
+        self.mpv2, self._xf = None, None                  # Standby-mpv + laufende Überblendung
+        self.mpv = self._new_mpv(MPV_SOCK)
+        self.apply_eq()
         self.load_state()
         self.mpv.set("volume", self.volume)
         self.mpris = Mpris(self)
-        if self.current:  # nach dem Start: aktuellen Titel schon vorladen → Play geht sofort
-            self.prefetch(include_current=True)
+        if setting("crossfade"):             # Standby-mpv erst nach dem ersten Zeichnen starten
+            GLib.timeout_add(2500, lambda: self.ensure_standby() and False)
+        if self.current:  # nach dem Start: aktuellen Titel schon vorladen → Play geht sofort.
+            # Erst nach dem ersten Zeichnen: der yt-dlp-Import (~0,6 s) hielt sonst das Fenster beim Aufbau auf.
+            GLib.timeout_add(1200, lambda: self.prefetch(include_current=True) or False)
         self._save_id = None
+        if setting("ytdlp_auto"):
+            GLib.timeout_add_seconds(90, lambda: self.update_ytdlp(7 * 86400) and False)
+
+    # ----- zwei mpv-Prozesse: aktiv + Standby (für die Überblendung) -----
+    def _new_mpv(self, path):
+        box = {}
+
+        def on_event(msg):
+            m = box["m"]
+            if m is self.mpv:
+                self.on_mpv(msg)
+            else:
+                self._on_standby(m, msg)
+
+        def restarted():
+            m = box["m"]
+            if m is self.mpv:
+                self._mpv_restarted()
+            else:
+                self._standby_restarted(m)
+        box["m"] = Mpv(on_event, restarted, path)
+        return box["m"]
+
+    def ensure_standby(self):
+        if self.mpv2 is None:
+            try:
+                self.mpv2 = self._new_mpv(MPV_SOCK2)
+                self.mpv2.set("volume", 0)
+                self.apply_eq()
+            except Exception as e:  # noqa: BLE001 – ohne zweiten mpv gibt es eben keine Überblendung
+                log(f"standby-mpv: {e}")
+                self.mpv2 = None
+        return self.mpv2
+
+    def _on_standby(self, m, msg):
+        """Ereignisse des gerade nicht aktiven mpv: nur Eigenschaften merken (Dauer, Position, geladen)."""
+        ev = msg.get("event")
+        if ev == "property-change" and msg.get("name"):
+            m.props[msg["name"]] = msg.get("data")
+        elif ev == "file-loaded":
+            m.props["loaded"] = True
+
+    def _standby_restarted(self, m):
+        m.set("volume", 0)
+        self.apply_eq()
+
+    # ----- Equalizer -----
+    def set_eq(self, eq):
+        self.eq = audiofx.normalize(eq)
+        set_setting("eq", self.eq)
+        self.apply_eq()
+        self.emit("eq")
+
+    def apply_eq(self):
+        af = audiofx.build_af(self.eq)
+        for m in (self.mpv, self.mpv2):
+            if m is not None:
+                m.set("af", af)
+
+    # ----- Überblendung: der nächste Titel startet im Standby-mpv unter dem Ende des aktuellen -----
+    def set_crossfade(self, secs):
+        set_setting("crossfade", int(secs))
+        if secs:
+            self.ensure_standby()
+        else:
+            self._xf_cancel()
+        self.emit("eq")
+
+    def _xf_candidate(self):
+        """(Index, Stream-Daten) des nächsten Titels, wenn jetzt überblendet werden soll – sonst None."""
+        n = setting("crossfade") or 0
+        if not n or self._xf is not None or self.mpv2 is None or not self.started or self.paused or self.loading:
+            return None
+        if self.repeat == "eins" or self.sleep_track or not self.dur or self.dur < n * 3:
+            return None
+        if self.sleep_end and self.sleep_left() < n + 12:
+            return None
+        if self.dur - self.pos > n + 0.3 or self.pos < 2:
+            return None
+        nxt = self.index + 1
+        if nxt >= len(self.queue):
+            if self.repeat != "alle" or len(self.queue) < 2:
+                return None
+            nxt = 0
+        vid = self.queue[nxt]["videoId"]
+        try:
+            info = self.resolver.local_info(vid) or self.resolver.cached(vid)
+        except Exception:  # noqa: BLE001 – z. B. lokale Datei fehlt: normal weiter (meldet dort den Fehler)
+            return None
+        return (nxt, info) if info else None       # noch nicht aufgelöst → normaler Wechsel
+
+    def _xf_start(self, nxt, info):
+        a, b, n = self.mpv, self.mpv2, setting("crossfade")
+        t = self.queue[nxt]
+        b.props = {}
+        b.set("user-agent", info["ua"])
+        b.set("volume", 0)
+        b.set("pause", False)
+        b.loadfile(info["url"])
+        b.set("force-media-title", f"{t['artist']} - {t['title']}")
+        self._xf = {"idx": nxt, "vid": t["videoId"], "info": info, "t0": time.monotonic(), "len": float(n),
+                    "a": a, "b": b, "id": GLib.timeout_add(80, self._xf_tick)}
+        self._fade_t = time.monotonic()
+
+    def _xf_tick(self):
+        x = self._xf
+        if x is None:
+            return False
+        f = (time.monotonic() - x["t0"]) / x["len"]
+        loaded = bool(x["b"].props.get("loaded"))
+        if not loaded and f > 0.4:                       # Netz zu langsam: Überblendung fallenlassen
+            log("überblendung: nächster Titel nicht rechtzeitig geladen")
+            self._xf_cancel()
+            return False
+        f = min(1.0, f)
+        self._fade_t = time.monotonic()
+        x["a"].set("volume", round(self.volume * math.cos(f * math.pi / 2), 1))
+        x["b"].set("volume", round(self.volume * math.sin(f * math.pi / 2) if loaded else 0, 1))
+        if f >= 1.0:
+            self._xf_finish()
+            return False
+        return True
+
+    def _xf_stop_timer(self):
+        x = self._xf
+        if x and x.get("id"):
+            GLib.source_remove(x["id"])
+            x["id"] = None
+
+    def _xf_cancel(self):
+        """Überblendung abbrechen (Nutzer greift ein): der neue Titel wird still gestoppt, der alte bleibt."""
+        x = self._xf
+        if x is None:
+            return
+        self._xf_stop_timer()
+        self._xf = None
+        x["b"].cmd("stop")
+        x["b"].set("volume", 0)
+        x["a"].set("volume", self.volume)
+        self._fade_t = time.monotonic()
+
+    def _xf_finish(self):
+        x = self._xf
+        self._xf_stop_timer()
+        self._xf = None
+        if not (0 <= x["idx"] < len(self.queue)) or self.queue[x["idx"]]["videoId"] != x["vid"]:
+            x["b"].cmd("stop")                            # Warteschlange hat sich inzwischen geändert
+            x["b"].set("volume", 0)
+            x["a"].set("volume", self.volume)
+            return
+        a, b = x["a"], x["b"]
+        self.mpv, self.mpv2 = b, a                        # Rollen tauschen
+        a.cmd("stop")
+        a.set("volume", 0)
+        b.set("volume", self.volume)
+        self._fade_t = time.monotonic()
+        self.index = x["idx"]
+        t = self.current
+        self.gen += 1
+        self.loading, self.started, self.paused = False, True, False
+        self.pos = b.props.get("time-pos") or 0
+        self.dur = b.props.get("duration") or t.get("duration") or 0
+        self.stream_info = x["info"]
+        self._retry_n.clear()
+        self._fail_streak = 0
+        self.emit("track")
+        self.emit("state")
+        self._begin_track(t)
+        self.prefetch()
+
+    def _begin_track(self, t):
+        """Verlauf, YouTube-Meldung und Songtext für einen neu begonnenen Titel vorbereiten (load + Überblendung)."""
+        # In den Verlauf erst nach 5 s echter Wiedergabe (Durchskippen zählt nicht) – siehe on_mpv „time-pos“.
+        # Hörverlauf in den Einstellungen aus → gar nichts merken.
+        self._hist = {"t": t, "played": 0.0, "last": None} if setting("history") else None
+        self.yt_end()                 # vorigen Titel bei YouTube abschließen
+        self._ytr = {"t": t, "played": 0.0, "last": None, "rep": None, "sent": False, "from": None} \
+            if setting("yt_history") and not localmusic.is_local(t) else None
+        # Songtext schon jetzt holen (dieser + nächster Titel), nicht erst beim Öffnen von „lyrics“
+        nxt = self.queue[self.index + 1] if self.index + 1 < len(self.queue) else None
+        self.lyrics.preload([t, nxt])
+
+    def _mpv_restarted(self):
+        """mpv war abgestürzt und läuft wieder: Lautstärke setzen, Titel an der alten Stelle fortsetzen."""
+        self.mpv.set("volume", self.volume)
+        was_playing = not self.paused and self.current is not None and self.started
+        self.started, self.restore_pos, self.loading = False, self.pos, False
+        self.paused = True
+        self.emit("state")
+        self.emit("notice:abspielprogramm (mpv) war abgestürzt – neu gestartet")
+        if was_playing:
+            self.load(resume=self.restore_pos)
+
+    # ----- lokale Musik -----
+    def scan_local(self, done=None):
+        """Musikordner im Hintergrund einlesen; done(tracks | Exception) im Hauptthread."""
+        tui.background(lambda: self.locallib.scan(setting("local_dir")), done=done)
+
+    # ----- yt-dlp aktuell halten -----
+    def update_ytdlp(self, min_age=0, quiet=True):
+        def done(res):
+            if isinstance(res, Exception):
+                log(f"yt-dlp-update: {res}")
+                self.emit(f"notice:yt-dlp-update fehlgeschlagen: {str(res)[:100]}") if not quiet else None
+            elif res is None:
+                self.emit("notice:yt-dlp wird schon aktualisiert") if not quiet else None
+            else:
+                old, new = res
+                self.resolver.reset()
+                self.emit(f"notice:yt-dlp aktualisiert {old} → {new}" if old != new else
+                          ("notice:yt-dlp ist aktuell (" + new + ")" if not quiet else ""))
+        tui.background(update_ytdlp, min_age, done=done)
+
+    BREAK_HINTS = ("unable to extract", "sign in to confirm", "nsig", "http error 403", "signature", "player response",
+                   "requested format is not available", "unsupported url", "unable to download")
+
+    def maybe_update_for(self, msg):
+        """Wiedergabe-Fehler, der nach „YouTube hat etwas geändert“ aussieht → einmal pro 6 h yt-dlp updaten."""
+        if setting("ytdlp_auto") and any(h in msg.lower() for h in self.BREAK_HINTS):
+            self.update_ytdlp(6 * 3600)
 
     # ----- Benachrichtigung -----
     def emit(self, what):
@@ -1194,6 +1828,7 @@ class Player:
             random.shuffle(tracks)
             start = 0
         self.queue, self.index = tracks, start
+        self.emit("queue_new")
         self.emit("queue")
         self.load()
 
@@ -1263,6 +1898,7 @@ class Player:
             self.load()
 
     def toggle(self):
+        self._xf_cancel()
         if not self.started and self.current:  # nach Neustart: gespeicherten Titel erst laden
             self.load(resume=self.restore_pos)
             return
@@ -1273,6 +1909,7 @@ class Player:
             self.toggle()
 
     def pause(self):
+        self._xf_cancel()
         if not self.paused:
             self.mpv.set("pause", True)
 
@@ -1315,12 +1952,68 @@ class Player:
             self._yt_watch(r, r["from"], r["last"], final=True)
 
     def stop(self):
+        self._xf_cancel()
         self.yt_end()
         self.mpv.cmd("stop")
         self.started = False
         self.emit("track")
 
+    # ----- Sleep-Timer: nach N Minuten (letzte 10 s leiser werden) oder nach dem laufenden Titel pausieren -----
+    SLEEP_FADE = 10
+
+    def set_sleep(self, minutes=None, after_track=False):
+        """minutes=None und after_track=False schaltet den Timer aus."""
+        self._sleep_stop(restore=True)
+        self.sleep_end = time.monotonic() + minutes * 60 if minutes else None
+        self.sleep_track = bool(after_track)
+        if self.sleep_end:
+            self._sleep_id = GLib.timeout_add(500, self._sleep_tick)
+        self.emit("sleep")
+
+    def sleep_left(self):
+        return max(0, self.sleep_end - time.monotonic()) if self.sleep_end else None
+
+    def _sleep_stop(self, restore=False):
+        if self._sleep_id:
+            GLib.source_remove(self._sleep_id)
+            self._sleep_id = None
+        self.sleep_end, self.sleep_track = None, False
+        if restore and self._sleep_faded:
+            self._sleep_faded = False
+            self._fade_t = time.monotonic()
+            self.mpv.set("volume", self.volume)
+
+    def _sleep_tick(self):
+        left = self.sleep_left()
+        if left is None:
+            self._sleep_id = None
+            return False
+        if left <= 0:
+            self._sleep_id = None
+            self.sleep_end = None
+            self.pause()
+            self._sleep_faded = False
+            self._fade_t = time.monotonic()
+            self.mpv.set("volume", self.volume)     # beim nächsten Play wieder normal laut
+            self.emit("sleep")
+            return False
+        if left < self.SLEEP_FADE:
+            self._sleep_faded = True
+            self._fade_t = time.monotonic()
+            self.mpv.set("volume", max(1, self.volume * left / self.SLEEP_FADE))
+        self.emit("sleep")
+        return True
+
     def next(self, auto=False):
+        if auto and self.sleep_track:                 # „nach diesem Titel“: Ende erreicht → stehen bleiben
+            self._sleep_stop()
+            if self.index + 1 < len(self.queue):
+                self.index += 1
+            self.started, self.restore_pos = False, 0
+            self.mpv.set("pause", True)
+            self.emit("track")
+            self.emit("sleep")
+            return
         if auto and self.repeat == "eins":
             self.load()
             return
@@ -1343,6 +2036,7 @@ class Player:
             self.load()
 
     def seek(self, sec, relative=False):
+        self._xf_cancel()
         self.mpv.cmd("seek", sec, "relative" if relative else "absolute")
         self.pos = max(0, sec if not relative else self.pos + sec)
         self.mpris.seeked()
@@ -1360,6 +2054,9 @@ class Player:
         t = t or self.current
         if not t:
             return
+        if localmusic.is_local(t):
+            self.emit("notice:radio gibt es nur für youtube-titel")
+            return
         tui.background(self.music.radio, t["videoId"], done=lambda res: self._radio_done(res, t))
 
     def _radio_done(self, res, t):
@@ -1376,6 +2073,10 @@ class Player:
 
     def extend_radio(self, then_next=False):
         cur = self.current
+        if cur is not None and localmusic.is_local(cur):
+            if then_next:
+                self.mpv.set("pause", True)
+            return
         if cur is None or (getattr(self, "_extending", None) == cur["videoId"] and not then_next):
             return  # läuft schon (bzw. für diesen Titel schon versucht)
         self._extending = cur["videoId"]
@@ -1397,6 +2098,9 @@ class Player:
         t = self.current
         if not t:
             return
+        if localmusic.is_local(t):
+            self.emit("notice:lokale titel lassen sich nicht liken")
+            return
         on = (not t.get("liked")) if on is None else on
         t["liked"] = on
         self.emit("track")
@@ -1417,6 +2121,7 @@ class Player:
         t = self.current
         if not t:
             return
+        self._xf_cancel()
         self.gen += 1
         gen = self.gen
         self.loading, self.started = True, True
@@ -1424,15 +2129,7 @@ class Player:
         self.stream_info = None
         self.emit("track")
         self.emit("state")
-        # In den Verlauf erst nach 5 s echter Wiedergabe (Durchskippen zählt nicht) – siehe on_mpv „time-pos“.
-        # Hörverlauf in den Einstellungen aus → gar nichts merken.
-        self._hist = {"t": t, "played": 0.0, "last": None} if setting("history") else None
-        self.yt_end()                 # vorigen Titel bei YouTube abschließen
-        self._ytr = {"t": t, "played": 0.0, "last": None, "rep": None, "sent": False, "from": None} \
-            if setting("yt_history") else None
-        # Songtext schon jetzt holen (dieser + nächster Titel), nicht erst beim Öffnen von „lyrics“
-        nxt = self.queue[self.index + 1] if self.index + 1 < len(self.queue) else None
-        self.lyrics.preload([t, nxt])
+        self._begin_track(t)
 
         failed, self._retry_kind = self._retry_kind, None
 
@@ -1446,22 +2143,31 @@ class Player:
                 return
             if isinstance(res, Exception):
                 self.loading = False
-                self.emit(f"error:{t['title']}: {str(res).splitlines()[0][:160]}")
+                self._fail_streak += 1
+                self.emit(f"error:{t['title']}: {explain(res)}")
+                self.maybe_update_for(str(res))
                 self.emit("state")
+                if self._fail_streak >= 3:       # offline o. ä.: nicht die ganze Warteschlange durchrauschen lassen
+                    self._fail_streak = 0
+                    self.paused = True
+                    self.emit("error:3 titel hintereinander gingen nicht – pausiert (internet? mit ▶ nochmal versuchen)")
+                    self.emit("state")
+                    return
                 GLib.timeout_add(1200, lambda: gen == self.gen and self.next(auto=True) and False)
                 return
             self.stream_info = res
             self.mpv.set("user-agent", res["ua"])
-            opts = f"start={resume}" if resume else ""
-            self.mpv.cmd("loadfile", res["url"], "replace", -1, opts) if opts else \
-                self.mpv.cmd("loadfile", res["url"], "replace")
+            self.mpv.loadfile(res["url"], resume)
             self.mpv.set("pause", False)
+            if self.paused:                 # mpv meldet „nicht pausiert“ nur bei Änderung – hier selbst nachziehen
+                self.paused = False
+                self.emit("state")
             self.mpv.set("force-media-title", f"{t['artist']} - {t['title']}")
             self.prefetch()
         tui.background(self.stream_for, t["videoId"], failed, done=done)
 
     def stream_for(self, vid, failed=None):
-        if PLAY_NEEDS_LOGIN:
+        if PLAY_NEEDS_LOGIN and not localmusic.is_local(vid):
             require_login()
         return self.resolver.get(vid, failed)
 
@@ -1471,6 +2177,11 @@ class Player:
 
     def on_mpv(self, msg):
         ev = msg.get("event")
+        if ev == "mpv-dead":
+            self.loading = False
+            self.emit("error:mpv lässt sich nicht mehr starten – musicalist neu starten (ist mpv installiert?)")
+            self.emit("state")
+            return
         if ev == "property-change":
             name, val = msg.get("name"), msg.get("data")
             if name == "time-pos" and val is not None:
@@ -1482,18 +2193,26 @@ class Player:
                     h["last"] = val
                     if h["played"] >= 5 and h["t"] is self.current:
                         self._hist = None
+                        self.stats.add(h["t"])
                         if self.history.add(h["t"]):
                             self.emit("history")
-                        self.offline.count(h["t"])
+                        if not localmusic.is_local(h["t"]):
+                            self.offline.count(h["t"])
                 self.yt_tick(val)
                 self.emit("pos")
+                if self._xf is None and setting("crossfade"):
+                    cand = self._xf_candidate()
+                    if cand:
+                        self._xf_start(*cand)
             elif name == "duration" and val:
                 self.dur = val
                 self.emit("pos")
             elif name == "pause" and val is not None:
+                if not val and not self.started:
+                    return              # leerer mpv (Start/Neustart) meldet „nicht pausiert“ – es läuft aber nichts
                 self.paused = val
                 self.emit("state")
-            elif name == "volume" and val is not None and abs(val - self.volume) >= 1:
+            elif name == "volume" and val is not None and abs(val - self.volume) >= 1 and not self._sleep_faded and time.monotonic() - self._fade_t > 1.5:
                 self.volume = int(val)
                 self.emit("volume")
             elif name == "paused-for-cache":
@@ -1501,9 +2220,15 @@ class Player:
                 self.emit("state")
         elif ev == "file-loaded":
             self._retry_n.clear()
+            self._fail_streak = 0
             self.loading = False
             self.emit("state")
         elif ev == "end-file":
+            if msg.get("reason") == "eof" and self._xf is not None:      # Ende erreicht, während überblendet wird
+                if self._xf["b"].props.get("loaded"):
+                    self._xf_finish()
+                    return
+                self._xf_cancel()
             if msg.get("reason") == "eof":
                 self.next(auto=True)
             elif msg.get("reason") == "error":
@@ -1528,7 +2253,10 @@ class Player:
 
     def save_state(self):
         self._save_id = None
-        data = {"queue": self.queue[-300:], "index": self.index, "pos": self.pos, "volume": self.volume,
+        # höchstens 300 Titel – als Fenster um den aktuellen, damit der gespeicherte Index stimmt
+        lo = max(0, min(self.index - 20, len(self.queue) - 300)) if self.index >= 0 else max(0, len(self.queue) - 300)
+        data = {"queue": self.queue[lo:lo + 300], "index": self.index - lo if self.index >= 0 else -1,
+                "pos": self.pos, "volume": self.volume,
                 "repeat": self.repeat, "autoplay": self.autoplay}
         try:
             with open(STATE + ".tmp", "w") as f:
@@ -1555,7 +2283,10 @@ class Player:
     def shutdown(self):
         self.yt_end()
         self.save_state()
+        self._xf_cancel()
         self.mpv.quit()
+        if self.mpv2 is not None:
+            self.mpv2.quit()
 
 
 # ---------- MPRIS ----------
@@ -1614,11 +2345,13 @@ class Mpris:
         t = self.p.current
         if not t:
             return {"mpris:trackid": GLib.Variant("o", "/org/mpris/MediaPlayer2/TrackList/NoTrack")}
-        return {"mpris:trackid": GLib.Variant("o", f"/de/invincible/musicalist/{t['videoId'].replace('-', '_')}"),
-                "xesam:title": GLib.Variant("s", t["title"]), "xesam:artist": GLib.Variant("as", [t["artist"]]),
-                "xesam:album": GLib.Variant("s", t["album"]), "mpris:artUrl": GLib.Variant("s", t["thumb"]),
+        return {"mpris:trackid": GLib.Variant("o", "/de/invincible/musicalist/" + (re.sub(r"[^A-Za-z0-9_]", "_", t["videoId"]) if not localmusic.is_local(t)
+                                                                else "local_" + format(zlib.crc32(t["videoId"].encode()), "08x"))),
+                "xesam:title": GLib.Variant("s", t["title"] or ""), "xesam:artist": GLib.Variant("as", [t["artist"] or ""]),
+                "xesam:album": GLib.Variant("s", t["album"] or ""), "mpris:artUrl": GLib.Variant("s", t["thumb"] or ""),
                 "mpris:length": GLib.Variant("x", int((self.p.dur or t["duration"] or 0) * 1e6)),
-                "xesam:url": GLib.Variant("s", f"https://music.youtube.com/watch?v={t['videoId']}")}
+                "xesam:url": GLib.Variant("s", ("file://" + localmusic.path_of(t["videoId"])) if localmusic.is_local(t)
+                                           else f"https://music.youtube.com/watch?v={t['videoId']}")}
 
     def props(self, iface):
         p = self.p

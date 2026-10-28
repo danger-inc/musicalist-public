@@ -1,12 +1,12 @@
 # musicalist – Oberfläche: Hauptfenster (Tabs jetzt/warteschlange/bibliothek/lyrics/visuals/suchen) und die
 # Vorschau-Karte unten mittig (erscheint, wenn die Maus an den unteren Bildschirmrand in der Mitte fährt).
 # Alles im TUI-Stil aus ../tui.py: Cover als Braille-Pixelbild, Spektrum aus ▁▂▃▅▇ (cava), ■-Regler.
-import json, os, re, socket, subprocess, threading, time, urllib.request
+import json, os, socket, subprocess, threading, time
 
 import gi
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Graphene", "1.0")
-from gi.repository import Gdk, GdkPixbuf, GLib, Graphene, Gtk, Pango, PangoCairo
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Graphene, Gtk, Pango, PangoCairo
 try:   # nur für die Vorschau-Karte; ohne gtk4-layer-shell (oder unter GNOME/X11) läuft der Player trotzdem
     gi.require_version("Gtk4LayerShell", "1.0")
     from gi.repository import Gtk4LayerShell as Layer
@@ -23,6 +23,16 @@ import sources
 import swipe
 import verlauf
 import visuals
+from rows import track_row, coll_row, artist_link
+from widgets import (Layer, Cover, DotCover, big_thumb, fetch_pixbuf, dither, braille, halftone, placeholder,
+                     preview_supported, DESK_POS, TICKS, DOTS, BAYER)
+import rows
+from settings_page import SettingsMixin
+from queue_page import QueueMixin
+from search_page import SearchMixin
+from library_page import LibraryMixin
+from lyrics_page import LyricsMixin
+from sound_page import SoundMixin
 
 RUNTIME = engine.RUNTIME
 
@@ -53,6 +63,9 @@ button.artlink:disabled label { color: alpha(@foreground, 0.5); }
 label.np-artist.link:hover { text-decoration: underline; }
 .row.playing > button.rowhead { background-color: alpha(@primary, 0.16); }
 .row.playing .trk-title { color: @primary; }
+.row.dropat { box-shadow: inset 0 2px 0 @primary; }
+.row.dropat-end { box-shadow: inset 0 -2px 0 @primary; }
+.row.dragging { opacity: 0.4; }
 button.mini { padding: 0 6px; border-radius: 4px; color: alpha(@foreground, 0.7); background: none; border: none;
     box-shadow: none; min-height: 0; min-width: 0; }
 button.mini:hover { background-color: @primary; color: @on_primary; }
@@ -109,198 +122,26 @@ button.sugg.first .accent { color: @primary; }
 popover.kpop .kp-grid label { font-size: 12px; }
 popover.kpop .kp-grid .k { color: @primary; }
 """ + sources.CSS + visuals.CSS + verlauf.CSS + songmenu.CSS
-TICKS = " ▁▂▃▄▅▆▇█"
 
 
-# ---------- Cover als Braille ----------
-_thumbs = {}
 
 
-def big_thumb(url, size=300):
-    return re.sub(r"=w\d+-h\d+", f"=w{size}-h{size}", url) if url else url
 
 
-def fetch_pixbuf(url):
-    if url in _thumbs:
-        return _thumbs[url]
-    data = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": engine.UA}), timeout=8).read()
-    loader = GdkPixbuf.PixbufLoader()
-    loader.write(data)
-    loader.close()
-    pb = loader.get_pixbuf()
-    if len(_thumbs) > 60:
-        _thumbs.clear()
-    _thumbs[url] = pb
-    return pb
 
 
-BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
-DOTS = [(0, 0, 0x01), (0, 1, 0x02), (0, 2, 0x04), (1, 0, 0x08), (1, 1, 0x10), (1, 2, 0x20), (0, 3, 0x40), (1, 3, 0x80)]
 
 
-def dither(pb, w, h):
-    """Bild → w×h Punkte (True = an): Histogramm-Ausgleich + Bayer-Rasterung."""
-    pb = pb.scale_simple(w, h, GdkPixbuf.InterpType.BILINEAR)
-    px, stride, nch = pb.get_pixels(), pb.get_rowstride(), pb.get_n_channels()
-    lum = [[0.0] * w for _ in range(h)]
-    for y in range(h):
-        o = y * stride
-        for x in range(w):
-            i = o + x * nch
-            lum[y][x] = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]
-    # Histogramm-Ausgleich: jede Helligkeit bekommt ihren Rang (0–1) → auch dunkle Cover zeigen Details
-    flat = sorted(v for row in lum for v in row)
-    total = len(flat)
-    rank, first = {}, {}
-    for i, v in enumerate(flat):   # gleiche Helligkeit → mittlerer Rang (große einfarbige Flächen = Halbton)
-        first.setdefault(v, i)
-        rank[v] = (first[v] + i) / 2 / total
-    return [[rank[lum[y][x]] * 16 > BAYER[y % 4][x % 4] + 0.5 for x in range(w)] for y in range(h)]
 
 
-def braille(pb, cols, rows):
-    """Bild → Braille-Zeichen (2×4 Punkte je Zeichen)."""
-    # Cover sind quadratisch; Zeichen sind ~2× so hoch wie breit → Braille passt (2×4 Punkte) 1:1
-    on = dither(pb, cols * 2, rows * 4)
-    lines = []
-    for cy in range(rows):
-        line = []
-        for cx in range(cols):
-            bits = 0
-            for dx, dy, bit in DOTS:
-                if on[cy * 4 + dy][cx * 2 + dx]:
-                    bits |= bit
-            line.append(chr(0x2800 + bits))
-        lines.append("".join(line))
-    return "\n".join(lines)
 
 
-def halftone(url, n):
-    """Cover → n×n Helligkeiten 0–1 (Histogramm-Ausgleich wie dither(), aber stufenlos) für visuals „orbit“."""
-    pb = fetch_pixbuf(big_thumb(url)).scale_simple(n, n, GdkPixbuf.InterpType.BILINEAR)
-    px, stride, nch = pb.get_pixels(), pb.get_rowstride(), pb.get_n_channels()
-    lum = [[0.299 * px[y * stride + x * nch] + 0.587 * px[y * stride + x * nch + 1] + 0.114 * px[y * stride + x * nch + 2]
-            for x in range(n)] for y in range(n)]
-    flat = sorted(v for row in lum for v in row)
-    total = len(flat)
-    rank, first = {}, {}
-    for i, v in enumerate(flat):
-        first.setdefault(v, i)
-        rank[v] = (first[v] + i) / 2 / total
-    return [[rank[v] for v in row] for row in lum]
 
 
-def placeholder(cols, rows):
-    """Leeres Cover: ein Notensymbol aus Rahmenzeichen."""
-    lines = []
-    for y in range(rows):
-        if y in (0, rows - 1):
-            lines.append(("╭" if y == 0 else "╰") + "─" * (cols - 2) + ("╮" if y == 0 else "╯"))
-        elif y == rows // 2:
-            mid = "♪ nichts läuft"
-            pad = cols - 2 - len(mid)
-            lines.append("│" + " " * (pad // 2) + mid + " " * (pad - pad // 2) + "│")
-        else:
-            lines.append("│" + " " * (cols - 2) + "│")
-    return "\n".join(lines)
 
 
-class Cover(Gtk.Label):
-    def __init__(self, cols, rows, small=False):
-        super().__init__(xalign=0, yalign=0, valign=Gtk.Align.START)
-        self.add_css_class("cover")
-        if small:
-            self.add_css_class("small")
-        self.cols, self.rows, self.url = cols, rows, None
-        self.set_label(placeholder(cols, rows))
-
-    def set_size(self, cols, rows):
-        if (cols, rows) == (self.cols, self.rows):
-            return
-        self.cols, self.rows = cols, rows
-        url, self.url = self.url, None
-        self.show(url)  # neu rastern (Bild kommt aus dem Zwischenspeicher)
-
-    def show(self, url):
-        if url == self.url:
-            return
-        self.url = url
-        if not url:
-            self.set_label(placeholder(self.cols, self.rows))
-            return
-
-        def work():
-            return braille(fetch_pixbuf(big_thumb(url)), self.cols, self.rows)
-
-        def done(res):
-            if self.url == url and isinstance(res, str):
-                self.set_label(res)
-        tui.background(work, done=done)
 
 
-class DotCover(Gtk.DrawingArea):
-    """Cover als gezeichnetes Punktraster (Braille-Look), immer quadratisch und so hoch, wie die Zeile
-    es zulässt – damit es oben und unten genau mit den Nachbarn abschließt. Aus-Punkte bleiben schwach
-    sichtbar, so ist das Quadrat auch bei dunklen Covern klar begrenzt."""
-    DOTS = 36
-
-    def __init__(self, size=88):
-        super().__init__(valign=Gtk.Align.FILL, halign=Gtk.Align.START)
-        self.url, self.on = None, None
-        self.top = self.bottom = 0.0   # Abstand zur sichtbaren Kante der Nachbarn (Schrift/Balken)
-        self.set_content_width(size)
-        self.set_draw_func(self._draw)
-        self.connect("resize", self._resized)
-
-    def set_insets(self, top, bottom):
-        self.top, self.bottom = top, bottom
-        h = self.get_height()
-        if h > 0:
-            self._resized(None, self.get_width(), h)
-        self.queue_draw()
-
-    def _resized(self, _a, w, h):
-        side = round(h - self.top - self.bottom)
-        if h > 0 and w != side:   # Breite = sichtbare Höhe; nicht mitten in der Größenberechnung ändern
-            GLib.idle_add(lambda: self.set_content_width(side) and False)
-
-    def show(self, url):
-        if url == self.url:
-            return
-        self.url, self.on = url, None
-        self.queue_draw()
-        if not url:
-            return
-
-        def done(res):
-            if self.url == url and isinstance(res, list):
-                self.on = res
-                self.queue_draw()
-        tui.background(lambda: dither(fetch_pixbuf(big_thumb(url)), self.DOTS, self.DOTS), done=done)
-
-    def _draw(self, _a, cr, width, height):
-        c = tui.colors()
-        p, fg = c.get("primary"), c.get("foreground")
-        n = self.DOTS
-        side = min(width, height - self.top - self.bottom)
-        cr.translate(0, self.top)
-        pitch = side / n
-        r = pitch * 0.36
-        on = self.on
-        for y in range(n):
-            for x in range(n):
-                lit = on is not None and on[y][x]
-                col, a = (p, 1.0) if lit else (fg, 0.10)
-                cr.set_source_rgba(col.red, col.green, col.blue, a)
-                cr.arc((x + 0.5) * pitch, (y + 0.5) * pitch, r, 0, 6.2832)
-                cr.fill()
-        if on is None:          # nichts läuft / lädt noch: Note in der Mitte
-            layout = self.create_pango_layout("♪" if not self.url else "⠿")
-            layout.set_font_description(Pango.FontDescription.from_string(f"{tui.FONT} Bold {max(8, int(side / 4))}"))
-            tw, th = layout.get_pixel_size()
-            cr.set_source_rgba(p.red, p.green, p.blue, 0.85)
-            cr.move_to((side - tw) / 2, (side - th) / 2)
-            PangoCairo.show_layout(cr, layout)
 
 
 # ---------- Spektrum (cava) ----------
@@ -433,97 +274,10 @@ class Spectrum(Gtk.DrawingArea):
             cr.fill()
 
 
-# ---------- Listen ----------
-ARTIST_OPEN = None      # setzt MusicWindow: Klick auf einen Künstlernamen → Künstlerseite
-OFFLINE_HAS = None      # setzt MusicWindow: videoId → liegt offline gespeichert?
-
-
-def track_row(t, on_play, actions, menus=None, extra=None):
-    """Zeile: ▶ titel  künstler  album  3:45  [+] [»] …  actions: [(glyph, tooltip, fn)].
-    menus (songmenu.SongMenus): Rechtsklick-Menü + Vorwärmen beim Überfahren; extra() → weitere Menüeinträge."""
-    row = Gtk.Box()
-    row.add_css_class("row")
-    head = Gtk.Button(hexpand=True)
-    head.add_css_class("rowhead")
-    row.mark = label("", "trk-mark")
-    row.title = label(t["title"], "trk-title", hexpand=True, ellipsize=True)
-    row.artist = label(t["artist"], "dim", ellipsize=True)
-    row.artist.set_max_width_chars(24)
-    row.artist.set_width_chars(6)
-    # Künstler = eigener Knopf (öffnet die Künstlerseite), der Rest der Zeile spielt den Titel
-    art = Gtk.Button(child=row.artist, focus_on_click=False, valign=Gtk.Align.CENTER,
-                     tooltip_text=f"Künstlerseite: {t['artist']}" if t["artist"] else None)
-    art.add_css_class("artlink")
-    art.set_cursor_from_name("pointer")
-    art.connect("clicked", lambda *_: ARTIST_OPEN and ARTIST_OPEN(t))
-    art.set_sensitive(bool(t["artist"]))
-    row.dur = label(fmt(t["duration"]) if t["duration"] else "", "dim", xalign=1)
-    row.dur.set_width_chars(6)
-    off = None
-    if OFFLINE_HAS and OFFLINE_HAS(t.get("videoId")):
-        off = label("󰇚", "dim")
-        off.set_tooltip_text("offline gespeichert (meistgehört)")
-    # Knöpfe nicht ineinander schachteln (der innere bekam keinen Klick, es startete immer der Titel):
-    # Titel | Künstler | Dauer sind drei Geschwister, alle außer dem Künstler spielen den Titel.
-    row.add_css_class("trk")
-    head.set_child(hbox(row.mark, row.title, off, spacing=10))
-    head.connect("clicked", lambda *_: on_play())
-    dur_btn = Gtk.Button(child=row.dur, focus_on_click=False, valign=Gtk.Align.FILL)
-    dur_btn.add_css_class("rowhead")
-    dur_btn.connect("clicked", lambda *_: on_play())
-    row.append(head)
-    art.set_margin_start(4)
-    art.set_margin_end(4)
-    row.append(art)
-    row.append(dur_btn)
-    for glyph, tip, fn, *opt in actions:      # opt: (True,) = fn bekommt den Knopf (Popover daran)
-        b = Gtk.Button(label=glyph, tooltip_text=tip, valign=Gtk.Align.CENTER)
-        b.add_css_class("mini")
-        b.connect("clicked", (lambda _b, f=fn: f(_b)) if opt and opt[0] else (lambda _b, f=fn: f()))
-        row.append(b)
-    row.track = t
-    if menus is not None:
-        menus.attach(row, t, extra)
-    return row
-
-
-def artist_link(name, artist_id=None, css="dim", chars=24):
-    """Künstlername als Knopf → Künstlerseite (ohne ID per Suche nach dem Namen)."""
-    lab = label(name, css, ellipsize=True)
-    lab.set_max_width_chars(chars)
-    b = Gtk.Button(child=lab, focus_on_click=False, valign=Gtk.Align.CENTER, tooltip_text=f"Künstlerseite: {name}")
-    b.add_css_class("artlink")
-    b.set_cursor_from_name("pointer")
-    b.connect("clicked", lambda *_: ARTIST_OPEN and ARTIST_OPEN({"artist": name, "artistId": artist_id}))
-    b.set_sensitive(bool(name))
-    return b
-
-
-def coll_row(glyph, title, sub, on_open, artist=None):
-    """artist: (name, id) → Künstler als eigener Link statt Text in sub."""
-    row = Gtk.Box()
-    row.add_css_class("row")
-    head = Gtk.Button(hexpand=True)
-    head.add_css_class("rowhead")
-    # Künstler-Link steht neben dem Knopf, nicht darin (verschachtelte Knöpfe bekamen keinen Klick)
-    head.set_child(hbox(label(glyph, "glyph"), label(title, hexpand=True, ellipsize=True), spacing=10))
-    head.connect("clicked", lambda *_: on_open())
-    row.add_css_class("trk")
-    row.append(head)
-    if artist and artist[0]:
-        al = artist_link(*artist)
-        al.set_margin_start(4)
-        al.set_margin_end(4)
-        row.append(al)
-    tail = Gtk.Button(child=hbox(label(sub, "dim"), label("›", "accent"), spacing=10), focus_on_click=False)
-    tail.add_css_class("rowhead")
-    tail.connect("clicked", lambda *_: on_open())
-    row.append(tail)
-    return row
 
 
 # ---------- Hauptfenster ----------
-class MusicWindow(tui.TuiWindow):
+class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMixin, SoundMixin, tui.TuiWindow):
     APP_ID = "de.invincible.Music"
     TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"),
             ("lyrics", "lyrics", "󰗊"), ("visuals", "visuals", "󱑽"), ("search", "suchen", "󰍉"),
@@ -535,14 +289,14 @@ class MusicWindow(tui.TuiWindow):
                          size=(900, 700), icons_only=True, hints=())
         self.p, self.cava, self.srcs = player, cava, srcs
         self.songs = songmenu.SongMenus(self)
-        global ARTIST_OPEN, OFFLINE_HAS
-        ARTIST_OPEN = self.open_artist
-        OFFLINE_HAS = player.offline.has
+        rows.set_hooks(self.open_artist, player.offline.has)
         css = Gtk.CssProvider()
         css.load_from_string(CSS)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
                                                   Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
         self.account = None
+        self.login_expired = False
+        GLib.timeout_add_seconds(4, self.rescan_local)       # Musikordner im Hintergrund einlesen
         self.lyrics_vid = None
         self.lyric_lines = []
         self.detail_tracks = []
@@ -550,6 +304,7 @@ class MusicWindow(tui.TuiWindow):
         self.tier = 0                  # 0 breit … 3 sehr schmal (Achtel-Kachel), setzt on_resize
         self.focus_mode = False
         self.detail_key, self.detail_names = None, {}
+        self.detail_pool, self.editable_ids, self.local_scanned = None, set(), False
         self._shorten = []             # (knopf, lang, kurz) – schmale Fenster bekommen die kurze Beschriftung
         self.build_header()
         self.add_changelog("musicalist", os.path.dirname(os.path.realpath(__file__)))
@@ -649,7 +404,7 @@ class MusicWindow(tui.TuiWindow):
     KEYS = [("leertaste", "play / pause"), ("n · p", "nächster / voriger titel"), ("← →", "5 s spulen"),
             ("+ −", "lauter / leiser"), ("l", "gefällt mir"), ("a", "titel zu playlist hinzufügen"),
             ("1 – 6", "tabs"), ("/", "suchen (tab übernimmt den 1. vorschlag)"), ("h", "hörverlauf-leiste"),
-            (",", "einstellungen"), ("[ ]", "lyrics früher / später"), ("v · f", "visuals: modus / vollbild"),
+            (",", "einstellungen"), ("[ ]", "lyrics früher / später"), ("s", "sleep-timer"), ("e", "klang: equalizer / überblenden"), ("v · f", "visuals: modus / vollbild"),
             ("rechtsklick", "mehr zu jedem titel"), ("q", "schließen"), ("?", "diese liste"),
             ("super+alt+n / p", "weiter / zurück – auch wenn musicalist zu ist"),
             ("super+alt+leertaste", "play / pause von überall")]
@@ -793,8 +548,7 @@ class MusicWindow(tui.TuiWindow):
 
     def nav_title(self, loc):
         if loc[0] == "detail":
-            return self.detail_names.get(loc[1:], {"album": "album", "artist": "künstler",
-                                                    "history": "verlauf"}.get(loc[1], "playlist"))
+            return self.detail_names.get(loc[1:], self.DETAIL_NAMES.get(loc[1], "playlist"))
         names = {t: n for t, n, _i in self.TABS}
         return self.TAB_SUP.get(loc[1], "") + names.get(loc[1], loc[1])
 
@@ -887,189 +641,6 @@ class MusicWindow(tui.TuiWindow):
         self.schedule_relayout()
         self.update_tab_labels()
 
-    # ---------- einstellungen ----------
-    def build_settings(self):
-        page = vbox(spacing=8)
-        page.set_margin_top(6)
-        # ganz oben: Konto (Status + Anmeldung neu einlesen) – der Kontoname wird nie gezeigt
-        self.set_acct = vbox(spacing=8)
-        page.append(tui.Panel("󰀄 konto", self.set_acct))
-        self.fill_settings_account()
-        page.append(tui.theme_panel())
-        panel = tui.Panel("einstellungen")
-        self.hover_chk = tui.Check("vorschau-karte am unteren bildschirmrand (hover)", engine.setting("hover"),
-                                   self.set_hover,
-                                   tooltip="Maus an den unteren Bildschirmrand → kleine Karte mit Titel und Knöpfen")
-        panel.body.append(self.hover_chk)
-        if preview_supported():
-            hint = "braucht wayland mit layer-shell (hyprland, sway …). bei problemen einfach aus lassen."
-        else:
-            hint = "hier nicht verfügbar: braucht gtk4-layer-shell und einen wayland-compositor mit layer-shell."
-            self.hover_chk.set_sensitive(False)
-        panel.body.append(label(hint, "dim", wrap=True, xalign=0))
-        self.bg_chk = tui.Check("beim schließen im hintergrund weiterspielen", engine.setting("background"),
-                                lambda on: engine.set_setting("background", on),
-                                tooltip="Aus: ✕ / q beendet musicalist ganz, die Musik stoppt.\n"
-                                        "An: das Fenster verschwindet nur, die Musik läuft weiter.")
-        self.bg_chk.set_margin_top(10)
-        panel.body.append(self.bg_chk)
-        panel.body.append(label("aus: ✕ / q beendet musicalist, die musik stoppt. an: nur das fenster geht zu.",
-                                "dim", wrap=True, xalign=0))
-        self.hist_chk = tui.Check("hörverlauf führen", engine.setting("history"), self.set_history,
-                                  tooltip="An: gehörte Titel landen in der Leiste am linken Rand (h).\n"
-                                          "Aus: nichts wird gemerkt, die Leiste ist weg.")
-        self.hist_chk.set_margin_top(10)
-        panel.body.append(self.hist_chk)
-        self.hist_info = label("", "dim", wrap=True, xalign=0)
-        panel.body.append(hbox(self.hist_info, tui.Button("verlauf löschen", self.clear_history, danger=True),
-                               spacing=10))
-        self.hist_info.set_hexpand(True)
-        self.update_hist_info()
-        self.yt_chk = tui.Check("wiedergaben an youtube melden", engine.setting("yt_history"),
-                                lambda on: (engine.set_setting("yt_history", on), on or setattr(self.p, "_ytr", None)),
-                                tooltip="Wie die Website: gehörte Titel landen im YouTube-Verlauf und zählen für\n"
-                                        "„diesen Monat gehört“, Rückblick und Empfehlungen. Braucht die Anmeldung.")
-        self.yt_chk.set_margin_top(10)
-        panel.body.append(self.yt_chk)
-        panel.body.append(label("ab 10 s wiedergabe landet ein titel im youtube-verlauf, die gehörte zeit wird "
-                                "mitgeschickt. nur mit anmeldung.", "dim", wrap=True, xalign=0))
-        self.desk_chk = tui.Check("anzeige immer auf dem hintergrundbild", engine.setting("desk"), self.set_desk,
-                                  tooltip="Die Karte aus der Vorschau liegt dauerhaft auf dem Desktop –\n"
-                                          "unter den Fenstern, sichtbar wo der Hintergrund frei ist.")
-        self.desk_chk.set_margin_top(10)
-        self.desk_pos = tui.Select(self.set_desk_pos, tooltip="Wo auf dem Bildschirm")
-        self.desk_pos.set_options(DESK_POS, engine.setting("desk_pos"))
-        panel.body.append(hbox(self.desk_chk, label("", hexpand=True), self.desk_pos, spacing=10))
-        if not preview_supported():
-            self.desk_chk.set_sensitive(False)
-            self.desk_pos.set_sensitive(False)
-        page.append(panel)
-        page.append(self.build_offline())
-        self.add_page("settings", page)
-        self.on_hover_changed = None       # setzt musicd: schaltet die Vorschau live ein/aus
-        self.on_desk_changed = None        # setzt musicd: Anzeige auf dem Hintergrund an/aus/verschieben
-
-    def fill_settings_account(self):
-        box = getattr(self, "set_acct", None)
-        if box is None:
-            return
-        tui.clear(box)
-        if self.account is not None:
-            box.append(hbox(label("● angemeldet · youtube music", "accent", hexpand=True, ellipsize=True),
-                            tui.Button("󰑐 anmeldung neu einlesen", self.login,
-                                       tooltip="Anmeldung erneut aus Zen/Firefox übernehmen"),
-                            tui.Button("abmelden", self.do_logout, danger=True), spacing=8))
-        else:
-            box.append(hbox(label("○ nicht angemeldet", "dim", hexpand=True),
-                            tui.Button("󰍂 mit zen / firefox anmelden", self.login), spacing=8))
-        box.append(label("liest die anmeldung aus deinem browser (music.youtube.com) – nötig, wenn likes, "
-                         "bibliothek oder radio nicht mehr gehen.", "dim", wrap=True, xalign=0))
-
-    def set_history(self, on):
-        engine.set_setting("history", on)
-        if not on:
-            self.p._hist = None             # laufender Titel wird auch nicht mehr eingetragen
-        self.drawer.set_enabled(on)
-        self.update_hist_info()
-        self.say("hörverlauf an" if on else "hörverlauf aus – es wird nichts mehr gemerkt")
-
-    def clear_history(self):
-        self.p.history.clear()
-        self.p.emit("history")
-        self.update_hist_info()
-        self.say("hörverlauf gelöscht")
-
-    # ---------- offline (meistgehört) ----------
-    def build_offline(self):
-        panel = tui.Panel("󰇚 offline · meistgehört")
-        b = panel.body
-        self.off_chk = tui.Check("meistgehörte titel speichern", engine.setting("offline"), self.set_offline,
-                                 tooltip="Die Titel, die du in letzter Zeit am häufigsten hörst, liegen als Datei\n"
-                                         "auf dem Rechner: spielen sofort und auch ohne Internet.")
-        self.off_n = tui.Select(self.set_offline_n, tooltip="Wie viele Titel")
-        b.append(hbox(self.off_chk, label("", hexpand=True), label("anzahl", "dim"), self.off_n, spacing=10))
-        b.append(label("zählt wie oft du einen titel hörst; was du länger nicht mehr hörst, rutscht von allein "
-                       "raus und wird wieder gelöscht. abgleich beim start, alle 6 h und sobald ein titel neu "
-                       "in die spitze kommt. braucht den hörverlauf.", "dim", wrap=True, xalign=0))
-        self.off_info = label("", "dim", wrap=True, xalign=0, hexpand=True)
-        b.append(hbox(self.off_info, tui.Button("󰑐 jetzt abgleichen", self.offline_sync), spacing=10))
-        self.off_list = vbox(spacing=0)
-        b.append(self.off_list)
-        self.p.offline.listeners.append(self.update_offline)
-        self.update_offline()
-        return panel
-
-    def set_offline(self, on):
-        engine.set_setting("offline", on)
-        self.p.offline.sync()
-        self.update_offline()
-        self.say("meistgehörte werden gespeichert" if on else "offline aus – gespeicherte titel werden gelöscht")
-
-    def set_offline_n(self, v):
-        engine.set_setting("offline_n", int(v))
-        self.p.offline.sync()
-        self.update_offline()
-
-    def offline_sync(self):
-        if not self.p.offline.sync():
-            self.say("abgleich läuft schon")
-        self.update_offline()
-
-    def update_offline(self):
-        off = self.p.offline
-        on = engine.setting("offline")
-        n = engine.setting("offline_n") or 25
-        self.off_n.set_options([(str(k), f"top {k}") for k in (10, 25, 50, 100)], str(n))
-        top = off.top(n) if on else []
-        have = sum(1 for t, _s, _c in top if off.path(t["videoId"]))
-        mb = off.size() / 1e6
-        if not on:
-            txt = "aus" + (f" · {len(off.index)} dateien werden gelöscht …" if off.index else "")
-        elif off.busy and off.status:
-            txt = f"{off.status}  ·  {have}/{len(top)} da · {mb:.0f} mb"
-        elif not top:
-            txt = "noch nichts oft genug gehört – ein titel braucht ≈ 2 wiedergaben in letzter zeit"
-        else:
-            txt = f"{have}/{len(top)} gespeichert · {mb:.0f} mb · nur auf diesem rechner"
-        if not engine.setting("history"):
-            txt += " · hörverlauf ist aus, es wird nicht mehr gezählt"
-        self.off_info.set_label(txt)
-        tui.clear(self.off_list)
-        for i, (t, _s, cnt) in enumerate(top):
-            vid = t["videoId"]
-            mark = "✓" if off.path(vid) else "⟳" if off.current == vid else "·"
-            row = Gtk.Button(hexpand=True)
-            row.add_css_class("rowhead")
-            row.set_child(hbox(label(f"{i + 1:>2}", "dim"), label(mark, "accent" if mark != "·" else "dim"),
-                               label(t.get("title") or "?", hexpand=True, ellipsize=True, xalign=0),
-                               label(t.get("artist") or "", "dim", ellipsize=True),
-                               label(f"{cnt}×", "dim"), spacing=8))
-            row.connect("clicked", lambda _b, tt=t: self.p.play_now(dict(tt)))
-            self.off_list.append(row)
-        return False
-
-    def update_hist_info(self):
-        n = len(self.p.history.items)
-        on = engine.setting("history")
-        self.hist_info.set_label(("leiste am linken rand (h) · " if on else "aus · ") +
-                                 (f"{n} titel gespeichert, nur auf diesem rechner" if n else "nichts gespeichert"))
-
-    def set_desk(self, on):
-        engine.set_setting("desk", on)
-        if self.on_desk_changed:
-            self.on_desk_changed()
-
-    def set_desk_pos(self, v):
-        self.desk_pos.set_options(DESK_POS, v)
-        engine.set_setting("desk_pos", v)
-        if self.on_desk_changed:
-            self.on_desk_changed()
-
-    def set_hover(self, on):
-        engine.set_setting("hover", on)
-        if self.on_hover_changed:
-            self.on_hover_changed(on)
-
     # ---------- jetzt ----------
     def build_now(self):
         page = vbox(spacing=10)
@@ -1121,6 +692,8 @@ class MusicWindow(tui.TuiWindow):
         self.play_btn.add_css_class("play")
         self.shuffle_btn = tui.Button("󰒝 mischen", self.p.shuffle_queue, tooltip="Warteschlange mischen")
         self.repeat_btn = tui.Button("", self.p.cycle_repeat, tooltip="Wiederholen: aus / alle / eins")
+        self.sleep_btn = tui.Button("󰒲", self.sleep_menu, tooltip="Sleep-Timer (s)")
+        self.sound_btn = tui.Button("󰓃", self.sound_menu, tooltip="Klang: Equalizer und Überblendung (e)")
         self.auto_chk = tui.Check("autoplay", self.p.autoplay, self.set_autoplay,
                                   tooltip="Am Ende der Warteschlange ähnliche Titel weiterspielen")
         self.vol = tui.Meter(100, self.p.set_volume)
@@ -1131,7 +704,7 @@ class MusicWindow(tui.TuiWindow):
                            max_children_per_line=12, homogeneous=False, halign=Gtk.Align.START)
         opts.add_css_class("opts")
         self.ctl_opts = opts
-        for w in (self.shuffle_btn, self.repeat_btn, self.auto_chk,
+        for w in (self.shuffle_btn, self.repeat_btn, self.sleep_btn, self.sound_btn, self.auto_chk,
                   hbox(label("󰕾", "accent"), self.vol, self.vol_lbl, spacing=8)):
             opts.append(w)
         self.seek_box = hbox(self.pos_lbl, self.seek, self.dur_lbl, spacing=8, hexpand=True)
@@ -1184,6 +757,43 @@ class MusicWindow(tui.TuiWindow):
         if self.p.dur:
             self.p.seek(v / 1000 * self.p.dur)
 
+    # ---------- Sleep-Timer ----------
+    SLEEP_OPTS = [(15, "15 minuten"), (30, "30 minuten"), (45, "45 minuten"), (60, "1 stunde"), (90, "1,5 stunden")]
+
+    def sleep_menu(self, anchor=None):
+        anchor = anchor if isinstance(anchor, Gtk.Widget) else (
+            self.sleep_btn if self.sleep_btn.get_mapped() else self.statusbar)
+        pop = self.songs._popover(anchor)
+        if anchor is self.statusbar:
+            pop.set_position(Gtk.PositionType.TOP)
+        box = vbox(spacing=1)
+        pop.set_child(box)
+        box.append(label("󰒲  sleep-timer", "kp-head"))
+        left = self.p.sleep_left()
+        box.append(label("pausiert die musik – die letzten 10 s werden leiser", "kp-sub"))
+        for m, name in self.SLEEP_OPTS:
+            self.songs._item(box, pop, "󰔟", name, lambda m=m: self.p.set_sleep(m))
+        self.songs._item(box, pop, "󰒭", "nach diesem titel", lambda: self.p.set_sleep(after_track=True))
+        if left is not None or self.p.sleep_track:
+            self.songs._rub(box)
+            self.songs._item(box, pop, "✕", "timer aus", lambda: self.p.set_sleep(), danger=True)
+        pop.popup()
+
+    def update_sleep(self):
+        left = self.p.sleep_left()
+        if left is not None:
+            m, s = divmod(int(left) + (1 if left % 1 else 0), 60)
+            txt, on = f"󰒲 {m}:{s:02d}", True
+        elif self.p.sleep_track:
+            txt, on = "󰒲 titel", True
+        else:
+            txt, on = "󰒲", False
+            if getattr(self, "_sleep_was", False) and not self.p.sleep_track:
+                self.say("sleep-timer: pausiert" if self.p.paused else "sleep-timer aus")
+        self._sleep_was = on
+        self.sleep_btn.set_label(txt)
+        (self.sleep_btn.add_css_class if on else self.sleep_btn.remove_css_class)("accent")
+
     def set_autoplay(self, on):
         self.p.autoplay = on
         self.p.save_soon()
@@ -1205,736 +815,6 @@ class MusicWindow(tui.TuiWindow):
             self.src_panel.set_visible(bool(items))
         self.schedule_relayout()
 
-    # ---------- Warteschlange ----------
-    def build_queue(self):
-        page = vbox(spacing=8)
-        page.set_margin_top(6)
-        self.queue_panel = tui.Panel("warteschlange")
-        self.queue_box = vbox(spacing=0)
-        self.queue_empty = label("leer – unter ⁶suchen titel auswählen", "empty", xalign=0.5)
-        self.queue_panel.body.append(hbox(label("", hexpand=True),
-                                          self._sh(tui.Button("󰒝 mischen", self.p.shuffle_queue), "󰒝 mischen", "󰒝"),
-                                          self._sh(tui.Button("󰐹 radio auffüllen", self.p.extend_radio),
-                                                     "󰐹 radio auffüllen", "󰐹 radio"),
-                                          self._sh(tui.Button("󰐒 als playlist", self.queue_to_playlist,
-                                                              tooltip="Ganze Warteschlange in eine Playlist legen"),
-                                                   "󰐒 als playlist", "󰐒"),
-                                          tui.Button("leeren", lambda: self.p.clear(), danger=True)))
-        self.queue_panel.body.append(self.queue_box)
-        self.queue_panel.body.append(self.queue_empty)
-        page.append(self.queue_panel)
-        self.add_page("queue", page)
-
-    def update_queue(self):
-        q = self.p.queue
-        total = sum(t["duration"] or 0 for t in q)
-        self.queue_panel.set_title(f"warteschlange <span alpha='60%'>{len(q)} titel · {fmt(total)}</span>",
-                                   markup=True)
-        self.queue_empty.set_visible(not q)
-
-        def make(item):
-            i, t = item
-            return track_row(t, lambda r=None: self.p.jump(self._qi(t)),
-                             [("↑", "Nach oben", lambda: self.p.move(self._qi(t), self._qi(t) - 1)),
-                              ("↓", "Nach unten", lambda: self.p.move(self._qi(t), self._qi(t) + 1)),
-                              ("✕", "Entfernen", lambda: self.p.remove(self._qi(t)))],
-                             menus=self.songs, extra=lambda: self.queue_extra(t))
-
-        def update(row, item):
-            i, t = item
-            playing = i == self.p.index
-            row.mark.set_label("▶" if playing else f"{i + 1}")
-            (row.add_css_class if playing else row.remove_css_class)("playing")
-            (row.add_css_class if i < self.p.index else row.remove_css_class)("past")
-        tui.sync_rows(self.queue_box, list(enumerate(q)), lambda it: id(it[1]), make, update)
-
-        # "als nächstes" auf der Jetzt-Seite
-        nxt = q[self.p.index + 1:self.p.index + 1 + self.upnext_n] if self.p.index >= 0 and self.upnext_n else []
-        self.upnext_panel.set_visible(bool(nxt))
-        tui.sync_rows(self.upnext, nxt, id, lambda t: track_row(t, lambda: self.p.jump(self._qi(t)), [],
-                                                                 menus=self.songs, extra=lambda: self.queue_extra(t)),
-                      lambda r, t: r.mark.set_label("›"))
-
-    def queue_extra(self, t):
-        i = self._qi(t)
-        out = []
-        if i > self.p.index + 1:
-            out.append(("»", "als nächstes (vorziehen)", lambda: self.p.move(self._qi(t), self.p.index + 1)))
-        if i > 0:
-            out.append(("↑", "nach oben", lambda: self.p.move(self._qi(t), self._qi(t) - 1)))
-        if 0 <= i < len(self.p.queue) - 1:
-            out.append(("↓", "nach unten", lambda: self.p.move(self._qi(t), self._qi(t) + 1)))
-        if i != self.p.index:
-            out.append(("󰐊", "hierhin springen", lambda: self.p.jump(self._qi(t))))
-        out.append(("✕", "aus der warteschlange", lambda: self.p.remove(self._qi(t)), True))
-        return out
-
-    def queue_to_playlist(self):
-        rest = self.p.queue[max(0, self.p.index):] if self.p.index >= 0 else self.p.queue
-        self.songs.picker(self.queue_panel, rest[:200])
-
-    def _qi(self, t):
-        for i, x in enumerate(self.p.queue):
-            if x is t:
-                return i
-        return -1
-
-    # ---------- Suche ----------
-    # Beim Tippen: nach 120 ms Vorschläge (erster groß, Tab übernimmt ihn), nach 380 ms schon Ergebnisse.
-    # Enter sucht sofort. Ergebnisse bleiben 10 min im Speicher; veraltete Antworten werden verworfen.
-    def build_search(self):
-        page = vbox(spacing=8)
-        page.set_margin_top(6)
-        self.query = tui.Entry("suchen … (tippen reicht, enter sofort)", activate=lambda: self.do_search(now=True))
-        self.query.connect("changed", lambda *_: self.on_query_changed())
-        qk = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
-        qk.connect("key-pressed", self.on_query_key)
-        self.query.add_controller(qk)
-        self.kind = tui.Select(lambda k: (self.kind.set_options(self.kind.options, k), self.do_search(now=True)))
-        self.kind.set_options([(k, k) for k in ("songs", "alben", "playlists", "künstler", "videos")], "songs")
-        self.sugg_row = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=4, row_spacing=2,
-                                    max_children_per_line=12, homogeneous=False, halign=Gtk.Align.START)
-        self.sugg_row.add_css_class("opts")
-        self.sugg_row.add_css_class("sugg-row")
-        self.sugg_row.set_visible(False)
-        page.append(tui.Panel("󰍉 suche", vbox(hbox(label("/", "accent"), self.query, self.kind, spacing=10),
-                                              self.sugg_row, spacing=4)))
-        self.top_panel = tui.Panel("bester treffer")
-        self.top_box = vbox(spacing=0)
-        self.top_panel.body.append(self.top_box)
-        self.top_panel.set_visible(False)
-        page.append(self.top_panel)
-        self.albums_panel = tui.Panel("alben")
-        self.albums_box = vbox(spacing=0)
-        self.albums_panel.body.append(self.albums_box)
-        self.albums_panel.set_visible(False)
-        page.append(self.albums_panel)
-        self.album_cache = {}
-        self.results_panel = tui.Panel("ergebnisse")
-        self.results = vbox(spacing=0)
-        self.results_panel.body.append(self.results)
-        self.results_panel.set_visible(False)
-        page.append(self.results_panel)
-        self.add_page("search", page)
-        self.search_gen = 0
-        self.search_cache = {}        # (q, art) → (zeit, ergebnisse)
-        self.top_cache = {}
-        self.suggs = []
-        self._sugg_id = self._search_id = None
-        self._sugg_skip = None        # Text, für den keine Vorschläge mehr gezeigt werden (nach Enter/Klick)
-        self.shown_q = None
-
-    def on_query_changed(self):
-        q = self.query.get_text().strip()
-        for sid in ("_sugg_id", "_search_id"):
-            if getattr(self, sid):
-                GLib.source_remove(getattr(self, sid))
-                setattr(self, sid, None)
-        if len(q) < 2:
-            self.show_suggestions(q, [])
-            return
-        if q != self._sugg_skip:
-            self._sugg_id = GLib.timeout_add(120, self.load_suggestions)
-        self._search_id = GLib.timeout_add(380, lambda: (setattr(self, "_search_id", None), self.do_search())[0])
-
-    def load_suggestions(self):
-        self._sugg_id = None
-        q = self.query.get_text().strip()
-
-        def done(res):
-            if q == self.query.get_text().strip() and q != self._sugg_skip:
-                self.show_suggestions(q, [] if isinstance(res, Exception) else res[:7])
-        tui.background(self.p.music.suggestions, q, done=done)
-        return False
-
-    def show_suggestions(self, q, items):
-        self.suggs = [x for x in items if x.strip().lower() != q.lower()] if items else []
-        if items and items[0].strip().lower() == q.lower():
-            self.suggs = items[:1] + self.suggs            # genau getroffen: trotzdem vorn (= Enter-Ziel)
-        tui.clear(self.sugg_row)
-        for i, text in enumerate(self.suggs):
-            b = Gtk.Button(focus_on_click=False)
-            b.add_css_class("sugg")
-            if i == 0:
-                b.add_css_class("first")
-                b.set_child(hbox(label("󰍉", "accent"), label(text), label("tab", "kp-key"), spacing=6))
-                b.set_tooltip_text("tab übernimmt diesen vorschlag")
-            else:
-                b.set_child(label(text))
-            b.connect("clicked", lambda _b, t=text: self.take_suggestion(t))
-            self.sugg_row.append(b)
-        self.sugg_row.set_visible(bool(self.suggs))
-
-    def take_suggestion(self, text):
-        self._sugg_skip = text
-        self.query.set_text(text)
-        self.query.set_position(-1)
-        self.show_suggestions(text, [])
-        self.do_search(now=True)
-        self.query.grab_focus()
-        self.query.select_region(-1, -1)
-
-    def on_query_key(self, _c, kv, _code, state):
-        if kv in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab) and self.suggs and not state & Gdk.ModifierType.SHIFT_MASK:
-            self.take_suggestion(self.suggs[0])
-            return True
-        if kv == Gdk.KEY_Down and self.results.get_first_child() is not None:
-            first = self.top_box.get_first_child() if self.top_panel.get_visible() else self.results.get_first_child()
-            if first is not None:
-                first.child_focus(Gtk.DirectionType.TAB_FORWARD)
-                return True
-        return False
-
-    def do_search(self, now=False):
-        q = self.query.get_text().strip()
-        if not q:
-            return
-        if now:
-            self._sugg_skip = q
-            self.show_suggestions(q, [])
-            if self._search_id:
-                GLib.source_remove(self._search_id)
-                self._search_id = None
-        kind = self.kind.current
-        if (q, kind) == self.shown_q and not now:
-            return
-        self.search_gen += 1
-        gen = self.search_gen
-        key = (q.lower(), kind)
-        hit = self.search_cache.get(key)
-        if hit and time.monotonic() - hit[0] < 600:
-            self.show_results(hit[1], kind, q, gen)
-        else:
-            self.results_panel.set_title(f"ergebnisse <span alpha='60%'>sucht „{esc(q)}“ …</span>", markup=True)
-
-            def done(res):
-                if not isinstance(res, Exception):
-                    self.search_cache[key] = (time.monotonic(), res)
-                    if len(self.search_cache) > 80:
-                        self.search_cache.pop(next(iter(self.search_cache)))
-                self.show_results(res, kind, q, gen)
-            tui.background(self.p.music.search, q, kind, done=done)
-        # bester Treffer (eigene Anfrage, parallel) – nur bei „songs“, dort sucht man meist nach etwas Bestimmtem
-        if kind == "songs":
-            th = self.top_cache.get(q.lower())
-            if th and time.monotonic() - th[0] < 600:
-                self.show_top(th[1], q, gen)
-            else:
-                def top_done(res):
-                    if not isinstance(res, Exception):
-                        self.top_cache[q.lower()] = (time.monotonic(), res)
-                    self.show_top(res, q, gen)
-                tui.background(self.p.music.top_result, q, done=top_done)
-            ah = self.album_cache.get(q.lower())
-            if ah and time.monotonic() - ah[0] < 600:
-                self.show_albums(ah[1], gen)
-            else:
-                def alb_done(res):
-                    if not isinstance(res, Exception):
-                        self.album_cache[q.lower()] = (time.monotonic(), res)
-                    self.show_albums(res, gen)
-                tui.background(self.p.music.search_albums, q, done=alb_done)
-        else:
-            self.top_panel.set_visible(False)
-            self.albums_panel.set_visible(False)
-
-    def show_albums(self, res, gen):
-        if gen != self.search_gen:
-            return
-        tui.clear(self.albums_box)
-        if isinstance(res, Exception) or not res:
-            self.albums_panel.set_visible(False)
-            return
-        for a in res:
-            if not a.get("browseId"):
-                continue
-            ars = [x for x in a.get("artists") or [] if x.get("name")]
-            row = coll_row("󰀥", a.get("title", "?"), " · ".join(x for x in (a.get("type"), str(a.get("year") or "")) if x),
-                           lambda b=a["browseId"]: self.open_detail("album", b),
-                           artist=(", ".join(x["name"] for x in ars), next((x.get("id") for x in ars if x.get("id")), None)))
-            head = row.get_first_child().get_child()
-            head.prepend(label("ALBUM", "album-badge"))
-            self.albums_box.append(row)
-        self.albums_panel.set_visible(self.albums_box.get_first_child() is not None)
-
-    def show_top(self, r, q, gen):
-        if gen != self.search_gen:
-            return
-        tui.clear(self.top_box)
-        if not r or isinstance(r, Exception):
-            self.top_panel.set_visible(False)
-            return
-        rtype = (r.get("resultType") or "").lower()
-        arts = ", ".join(a["name"] for a in r.get("artists") or [] if a.get("name"))
-        thumbs = r.get("thumbnails") or []
-        cover = Cover(20, 10)
-        cover.show(thumbs[-1]["url"] if thumbs else None)
-        acts = hbox(spacing=8)
-        if rtype in ("song", "video") and r.get("videoId"):
-            t = engine.track(r)
-            title, kind_txt, sub = t["title"], "titel" if rtype == "song" else "video", arts or t["artist"]
-            play = lambda: (self.p.play_now(t), self.p.start_radio(t) if self.p.autoplay else None)
-            acts.append(tui.Button("󰐊 abspielen", play))
-            acts.append(tui.Button("» als nächstes", lambda: (self.p.add(t, next_=True), self.say(f"» {t['title']}"))))
-            acts.append(tui.Button("+", lambda: (self.p.add(t), self.say(f"+ {t['title']}")), tooltip="anhängen"))
-            acts.append(tui.Button("󰐒", lambda: self.songs.picker(acts, [t]), tooltip="zu playlist hinzufügen"))
-            open_fn = play
-        elif rtype == "artist" and r.get("browseId"):
-            title, kind_txt, sub = r.get("artist") or arts or "?", "künstler", r.get("subscribers") or ""
-            if sub:
-                sub = f"{sub} abonnenten"
-            open_fn = lambda b=r["browseId"]: self.open_detail("artist", b)
-            acts.append(tui.Button("󰠃 öffnen", open_fn))
-            t = None
-        elif rtype == "album" and r.get("browseId"):
-            title, kind_txt, sub = r.get("title") or "?", "album", arts
-            open_fn = lambda b=r["browseId"]: self.open_detail("album", b)
-            acts.append(tui.Button("󰀥 öffnen", open_fn))
-            t = None
-        elif rtype == "playlist" and r.get("browseId"):
-            b = r["browseId"]
-            title, kind_txt, sub = r.get("title") or "?", "playlist", r.get("author") or arts
-            open_fn = lambda b=b: self.open_detail("playlist", b[2:] if b.startswith("VL") else b)
-            acts.append(tui.Button("󰲸 öffnen", open_fn))
-            t = None
-        else:
-            self.top_panel.set_visible(False)
-            return
-        tl = label(title, "top-title", ellipsize=True)
-        head = Gtk.Button(hexpand=True)
-        head.add_css_class("rowhead")
-        subw = label(sub, "top-sub", ellipsize=True)
-        if rtype in ("song", "video", "album") and arts:
-            ars = [a for a in r.get("artists") or [] if a.get("name")]
-            subw = artist_link(arts, next((a.get("id") for a in ars if a.get("id")), None), "top-sub", 40)
-            subw.set_halign(Gtk.Align.START)
-        link = isinstance(subw, Gtk.Button)       # Künstler-Link nicht in den Knopf schachteln (bekäme keinen Klick)
-        head.set_child(vbox(label(kind_txt, "top-kind"), tl, None if link else subw, spacing=2))
-        head.connect("clicked", lambda *_: open_fn())
-        card = hbox(cover, vbox(head, subw if link else None, acts, spacing=6, hexpand=True,
-                                valign=Gtk.Align.CENTER), spacing=14)
-        card.add_css_class("top-card")
-        if t is not None:
-            self.songs.attach(card, t)
-        self.top_box.append(card)
-        self.top_panel.set_visible(True)
-
-    def show_results(self, res, kind, q, gen=None):
-        if gen is not None and gen != self.search_gen:
-            return                          # inzwischen weitergetippt
-        if isinstance(res, Exception):
-            self.say(f"suche: {res}", error=True)
-            self.results_panel.set_title("ergebnisse")
-            return
-        self.shown_q = (q, kind)
-        tui.clear(self.results)
-        self.results_panel.set_visible(True)
-        self.results_panel.set_title(f"ergebnisse <span alpha='60%'>{esc(kind)} · {len(res)}</span>", markup=True)
-        if kind in ("songs", "videos"):
-            tracks = [t for t in map(engine.track, res) if t]
-            for t in tracks:
-                self.results.append(self.song_row(t, tracks))
-        elif kind == "alben":
-            for a in res:
-                ars = [x for x in a.get("artists") or [] if x.get("name")]
-                self.results.append(coll_row("󰀥", a.get("title", "?"), str(a.get("year") or ""),
-                                             lambda b=a["browseId"]: self.open_detail("album", b),
-                                             artist=(", ".join(x["name"] for x in ars),
-                                                     next((x.get("id") for x in ars if x.get("id")), None))))
-        elif kind == "playlists":
-            for pl in res:
-                self.results.append(coll_row("󰲸", pl.get("title", "?"),
-                                             f"{pl.get('author', '')} · {pl.get('itemCount', '')}",
-                                             lambda b=pl["browseId"]: self.open_detail(
-                                                 "playlist", b[2:] if b.startswith("VL") else b)))
-        elif kind == "künstler":
-            for a in res:
-                self.results.append(coll_row("󰠃", a.get("artist", "?"), "",
-                                             lambda b=a["browseId"]: self.open_detail("artist", b)))
-        if not res:
-            self.results.append(label("nichts gefunden", "empty", xalign=0.5))
-
-    def song_row(self, t, context):
-        return track_row(t, lambda: (self.p.play_now(t), self.p.start_radio(t) if self.p.autoplay else None),
-                         [("+", "An Warteschlange anhängen", lambda: (self.p.add(t), self.say(f"+ {t['title']}"))),
-                          ("»", "Als nächstes spielen", lambda: (self.p.add(t, next_=True),
-                                                                 self.say(f"» {t['title']}"))),
-                          ("󰐒", "Zu Playlist hinzufügen", lambda b: self.songs.picker(b, [t]), True),
-                          ("󰐹", "Radio zu diesem Titel", lambda: self.p.start_radio(t))],
-                         menus=self.songs)
-
-    # ---------- Bibliothek ----------
-    def build_lib(self):
-        self.lib_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.SLIDE_LEFT_RIGHT, transition_duration=120)
-        home = vbox(spacing=8)
-        home.set_margin_top(6)
-        self.login_panel = tui.Panel("󰀄 konto")
-        self.login_body = vbox(spacing=8)
-        self.login_body.add_css_class("loginbox")
-        self.login_panel.body.append(self.login_body)
-        home.append(self.login_panel)
-        self.coll_panel = tui.Panel("sammlung")
-        self.coll = vbox(spacing=0)
-        self.coll_panel.body.append(self.coll)
-        home.append(self.coll_panel)
-        self.lib_stack.add_named(home, "home")
-
-        detail = vbox(spacing=8)
-        detail.set_margin_top(6)
-        self.detail_panel = tui.Panel("")
-        self.detail_box = vbox(spacing=0)
-        self.detail_panel.body.append(hbox(
-            self._sh(tui.Button("‹ zurück", self.lib_home), "‹ zurück", "‹"),
-            label("", hexpand=True),
-            self._sh(tui.Button("󰐊 abspielen", lambda: self.p.play_tracks(self.detail_tracks)), "󰐊 abspielen", "󰐊"),
-            self._sh(tui.Button("󰒝 zufällig", lambda: self.p.play_tracks(self.detail_tracks, shuffle=True)),
-                       "󰒝 zufällig", "󰒝"),
-            self._sh(tui.Button("+ alle anhängen", lambda: [self.p.add(t) for t in self.detail_tracks]),
-                       "+ alle anhängen", "+ alle"), spacing=8))
-        self.detail_panel.body.append(self.detail_box)
-        detail.append(self.detail_panel)
-        self.lib_stack.add_named(detail, "detail")
-        self.add_page("lib", self.lib_stack)
-
-    def refresh_account(self):
-        authed = os.path.exists(engine.BROWSER_JSON)
-        self.p.music.reset()
-        if not authed:
-            self.account = None
-            self.fill_login()
-            return
-        self.acct_lbl.set_label("󰀄 …")
-        tui.background(engine.account_name, done=self.account_done)
-
-    def account_done(self, res):
-        if isinstance(res, Exception):
-            self.account = None
-            self.say(f"anmeldung abgelaufen? {str(res)[:120]}", error=True, seconds=12)
-        else:
-            self.account = res
-        self.fill_login()
-        if self.account:
-            self.load_library()
-
-    def fill_login(self):
-        self.fill_settings_account()
-        tui.clear(self.login_body)
-        if self.account:
-            # Kontoname wird bewusst nirgends angezeigt – nur der Status
-            self.acct_lbl.set_label("󰀄 ●")
-            self.acct_lbl.set_tooltip_text("Angemeldet")
-            self.login_body.append(hbox(label("● angemeldet", "accent", hexpand=True),
-                                        tui.Button("neu einlesen", self.login),
-                                        tui.Button("abmelden", self.do_logout, danger=True), spacing=8))
-        else:
-            self.acct_lbl.set_label("󰀄 ○")
-            self.acct_lbl.set_tooltip_text("Nicht angemeldet")
-            self.login_body.append(label(
-                "melde dich in zen oder firefox bei music.youtube.com an und klicke dann hier. der player übernimmt die "
-                "anmeldung aus dem browser – dein passwort sieht er nie. ohne anmeldung gehen suche und abspielen trotzdem.",
-                "dim", wrap=True))
-            self.login_body.append(hbox(tui.Button("󰈹 mit zen/firefox anmelden", self.login), spacing=8))
-            tui.clear(self.coll)
-            self.coll_panel.set_visible(False)
-
-    def login(self):
-        self.say("lese anmeldung aus dem browser … (falls nötig öffnet sich der browser zum einloggen)", seconds=240)
-
-        def done(res):
-            if isinstance(res, Exception):
-                self.say(str(res), error=True, seconds=15)
-                return
-            self.say("angemeldet")
-            self.p.music.reset()
-            self.p.resolver.reset()
-            self.account_done(res)
-        tui.background(lambda: engine.login_from_browser(
-            progress=lambda t: GLib.idle_add(lambda: self.say(t, seconds=240) and False)), done=done)
-
-    def do_logout(self):
-        engine.logout()
-        self.p.music.reset()
-        self.p.resolver.reset()
-        self.account = None
-        self.fill_login()
-        self.say("abgemeldet")
-
-    def load_library(self):
-        self.coll_panel.set_visible(True)
-        tui.clear(self.coll)
-        self.coll.append(coll_row("󰋑", "lieblingssongs", "", lambda: self.open_detail("playlist", "LM")))
-        self.coll.append(coll_row("󰋚", "verlauf", "", lambda: self.open_detail("history", "")))
-
-        def done(res):
-            if isinstance(res, Exception):
-                self.say(f"bibliothek: {res}", error=True)
-                return
-            for pl in res:
-                if pl["id"] == "LM":
-                    continue
-                self.coll.append(coll_row("󰲸", pl["title"], str(pl["count"] or ""),
-                                          lambda i=pl["id"]: self.open_detail("playlist", i)))
-        tui.background(self.p.music.library, done=done)
-
-    def open_artist(self, t):
-        """Künstlerseite zum Titel t – ohne gespeicherte ID per Suche nach dem Namen."""
-        if not t:
-            return
-        if t.get("artistId"):
-            self.open_detail("artist", t["artistId"])
-            return
-        self.say(f"suche künstler {t['artist']} …")
-
-        def done(res):
-            if isinstance(res, Exception) or not res:
-                self.say(f"künstler nicht gefunden: {t['artist']}", error=True)
-                return
-            t["artistId"] = res
-            self.open_detail("artist", res)
-        tui.background(self.p.music.artist_id, t["artist"], done=done)
-
-    def fill_artist(self, ident, d):
-        """Künstlerseite: Top-Titel, dann Alben, Singles, ähnliche Künstler."""
-        self.detail_names[("artist", ident)] = d["name"]
-        tracks = d["tracks"]
-        self.detail_tracks = tracks
-        sub = f" · {d['subscribers']} abonnenten" if d["subscribers"] else ""
-        self.detail_panel.set_title(f"󰠃 {esc(d['name'])} <span alpha='60%'>künstler{esc(sub)}</span>", markup=True)
-        box = self.detail_box
-        btns = hbox(spacing=8)
-        if d.get("radio"):
-            btns.append(tui.Button("󰐹 radio", lambda: self.play_playlist_id(d["radio"], "radio"),
-                                   tooltip="Mix aus diesem Künstler und ähnlicher Musik"))
-        if d.get("all_songs"):
-            btns.append(tui.Button("alle titel ›", lambda: self.open_detail("playlist", d["all_songs"])))
-        box.append(btns)
-
-        def head(txt):
-            h = label(txt, "accent", xalign=0)
-            h.set_margin_top(10)
-            box.append(h)
-        if tracks:
-            head("top-titel")
-        for i, t in enumerate(tracks):
-            row = track_row(t, lambda i=i: self.p.play_tracks(tracks, start=i),
-                            [("+", "An Warteschlange anhängen", lambda t=t: self.p.add(t)),
-                             ("»", "Als nächstes spielen", lambda t=t: self.p.add(t, next_=True))],
-                            menus=self.songs)
-            row.mark.set_label(str(i + 1))
-            box.append(row)
-        for key, title, glyph, kind in (("albums", "alben", "󰀥", "album"), ("singles", "singles & eps", "󰀥", "album"),
-                                        ("related", "ähnliche künstler", "󰠃", "artist")):
-            if d.get(key):
-                head(title)
-                for c in d[key]:
-                    box.append(coll_row(glyph, c["title"], c["sub"], lambda k=kind, i=c["id"]: self.open_detail(k, i)))
-
-    def play_playlist_id(self, pid, name):
-        def done(res):
-            if isinstance(res, Exception) or not res[1]:
-                self.say(f"{name}: nichts gefunden", error=True)
-                return
-            self.p.play_tracks(res[1], start=0)
-        tui.background(self.p.music.watch_list, pid, done=done)
-
-    def open_detail(self, kind, ident):
-        self.detail_key = (kind, ident)
-        self.show_tab("lib")
-        self.lib_stack.set_visible_child_name("detail")
-        self.nav_note()
-        self.detail_panel.set_title("lädt …")
-        tui.clear(self.detail_box)
-        fn = {"playlist": self.p.music.playlist, "album": self.p.music.album,
-              "artist": self.p.music.artist, "history": lambda _i: ("verlauf", self.p.music.history())}[kind]
-
-        def done(res):
-            if self.detail_key != (kind, ident):     # inzwischen woanders hin
-                return
-            if isinstance(res, Exception):
-                self.say(f"laden: {res}", error=True)
-                self.detail_panel.set_title("fehler")
-                return
-            if kind == "artist":
-                self.fill_artist(ident, res)
-                return
-            title, tracks = res
-            self.detail_names[(kind, ident)] = title
-            self.detail_tracks = tracks
-            total = sum(t["duration"] or 0 for t in tracks)
-            self.detail_panel.set_title(f"{esc(title)} <span alpha='60%'>{len(tracks)} · {fmt(total)}</span>",
-                                        markup=True)
-            for i, t in enumerate(tracks):
-                row = track_row(t, lambda i=i: self.p.play_tracks(tracks, start=i),
-                                [("+", "An Warteschlange anhängen", lambda t=t: self.p.add(t)),
-                                 ("»", "Als nächstes spielen", lambda t=t: self.p.add(t, next_=True))],
-                                menus=self.songs)
-                row.mark.set_label(str(i + 1))
-                self.detail_box.append(row)
-        tui.background(fn, ident, done=done)
-
-    # ---------- Songtext ----------
-    def build_lyrics(self):
-        # Songtext mittig gesetzt; die aktuelle Zeile wird weich in die Fenstermitte gescrollt.
-        # Ober-/Unterkante bekommen je eine halbe Fensterhöhe Luft, damit auch Zeile 1 und die
-        # letzte Zeile in die Mitte können.
-        self.lyr_top = Gtk.Box()
-        self.lyr_bottom = Gtk.Box()
-        self.lyr_box = vbox(spacing=2)
-        self.lyr_src = label("", "dim", xalign=0.5)
-        inner = vbox(self.lyr_top, self.lyr_box, self.lyr_src, self.lyr_bottom, spacing=0)
-        self.lyr_inner = inner
-        self.lyr_scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, child=inner, vexpand=True)
-        self.lyr_scroll.add_css_class("lyrics")
-        sc = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
-        sc.connect("scroll", self._lyr_user_scroll)
-        self.lyr_scroll.add_controller(sc)
-        self.lyr_manual_until = 0
-        self.lyr_anim = None
-        self._lyr_cur = None
-        self.lyr_synced = False
-        self.lyr_offset = 0.0
-        self.add_page("lyrics", self.lyr_scroll, scroll=False)
-
-    def _lyr_user_scroll(self, *_):
-        self.lyr_manual_until = GLib.get_monotonic_time() + 4_000_000  # 4 s selbst scrollen lassen
-        return False
-
-    def lyr_message(self, text):
-        tui.clear(self.lyr_box)
-        self.lyric_lines = []
-        self.lyr_box.append(label(text, "empty", xalign=0.5))
-
-    def load_lyrics(self):
-        """Songtext des aktuellen Titels anzeigen. Geladen wird er schon beim Titelwechsel (engine.Lyrics.preload),
-        meist liegt er hier also schon bereit."""
-        t = self.p.current
-        if not t or t["videoId"] == self.lyrics_vid:
-            return
-        vid = self.lyrics_vid = t["videoId"]
-        self.lyr_src.set_label("")
-        self._lyr_cur = None
-        self.lyr_offset = 0.0
-        cached = self.p.lyrics.cached(vid)
-        if cached is not False:
-            self.show_lyrics(vid, cached)
-            return
-        self.lyr_message("lädt …")
-        tui.background(self.p.lyrics.fetch, t, self.p.dur or 0, done=lambda res: self.show_lyrics(vid, res))
-
-    def show_lyrics(self, vid, res):
-        if vid != self.lyrics_vid:
-            return
-        if isinstance(res, Exception) or not res or not res.get("lyrics"):
-            self.lyr_message("kein songtext gefunden")
-            return
-        tui.clear(self.lyr_box)
-        self.lyric_lines = []
-        lyr = res["lyrics"]
-        self.lyr_synced = bool(res.get("synced")) and not isinstance(lyr, str)
-        lines = lyr if self.lyr_synced else [(None, x) for x in (lyr if isinstance(lyr, str) else
-                                                                  "\n".join(x for _s, x in lyr)).splitlines()]
-        for start, text in lines:
-            lbl = label(text or "♪", "lyric", xalign=0.5, wrap=True)
-            lbl.set_justify(Gtk.Justification.CENTER)
-            if not self.lyr_synced:
-                lbl.add_css_class("plain")
-            self.lyric_lines.append((start, lbl))
-            self.lyr_box.append(lbl)
-        self.lyr_source = res.get("source") or ""
-        self.update_lyr_src()
-        if self.lyr_synced:
-            GLib.idle_add(lambda: self.sync_lyrics(jump=True) and False)
-        else:                                      # ohne Zeitstempel: nichts raten, oben anfangen
-            GLib.idle_add(lambda: self.lyr_scroll.get_vadjustment().set_value(0) and False)
-
-    def update_lyr_src(self):
-        src = getattr(self, "lyr_source", "")
-        if not self.lyr_synced:
-            src += "  ·  ohne zeitstempel – zum mitlesen scrollen"
-        elif self.lyr_offset:
-            src += f"  ·  versatz {self.lyr_offset:+.2f} s  ( [ ] )"
-        self.lyr_src.set_label(src)
-
-    def shift_lyrics(self, d):
-        if not self.lyr_synced or not self.lyric_lines:
-            self.say("dieser songtext hat keine zeitstempel")
-            return
-        self.lyr_offset = round(getattr(self, "lyr_offset", 0.0) + d, 2)
-        self.update_lyr_src()
-        self.say(f"lyrics {'später' if self.lyr_offset > 0 else 'früher'}: {self.lyr_offset:+.2f} s"
-                 if self.lyr_offset else "lyrics-versatz zurückgesetzt")
-        self.sync_lyrics(jump=True)
-
-    def lyrics_pad(self):
-        """Halbe Fensterhöhe Luft oben/unten. True = hat sich geändert (Layout erst im nächsten Bild)."""
-        half = max(0, self.lyr_scroll.get_height() // 2 - 20)
-        if self.lyr_top.get_size_request()[1] == half:
-            return False
-        self.lyr_top.set_size_request(-1, half)
-        self.lyr_bottom.set_size_request(-1, half)
-        return True
-
-    def current_lyric(self):
-        n = len(self.lyric_lines)
-        if not n:
-            return None
-        if not self.lyr_synced:
-            return None                            # ohne Zeitstempel wird nichts markiert (früher geraten → falsch)
-        pos = self.p.pos + 0.25 - getattr(self, "lyr_offset", 0.0)   # Zeile kurz vor dem Einsatz zeigen
-        cur = None
-        for i, (start, _l) in enumerate(self.lyric_lines):
-            if start <= pos:
-                cur = i
-            else:
-                break
-        return cur if cur is not None else 0
-
-    def sync_lyrics(self, jump=False):
-        cur = self.current_lyric()
-        if cur is None:
-            return
-        if cur != self._lyr_cur or jump:
-            self._lyr_cur = cur
-            for i, (_s, lbl) in enumerate(self.lyric_lines):
-                want = "now" if i == cur else "past" if i < cur else ""
-                for c in ("now", "past"):
-                    (lbl.add_css_class if c == want else lbl.remove_css_class)(c)
-            GLib.idle_add(lambda: self.center_lyric(jump) and False)  # nach dem Neu-Layout (größere Schrift)
-
-    def center_lyric(self, jump=False):
-        if self._lyr_cur is None or self._lyr_cur >= len(self.lyric_lines):
-            return
-        if not jump and GLib.get_monotonic_time() < self.lyr_manual_until:
-            return
-        if self.lyrics_pad() or self.lyr_box.get_height() == 0:  # erst neu layouten lassen, dann zentrieren
-            GLib.timeout_add(40, lambda: self.center_lyric(jump) and False)
-            return
-        lbl = self.lyric_lines[self._lyr_cur][1]
-        ok, pt = lbl.compute_point(self.lyr_inner, Graphene.Point().init(0, 0))
-        if not ok:
-            return
-        adj = self.lyr_scroll.get_vadjustment()
-        target = pt.y + lbl.get_height() / 2 - adj.get_page_size() / 2
-        target = max(adj.get_lower(), min(target, adj.get_upper() - adj.get_page_size()))
-        if jump:
-            adj.set_value(target)
-            return
-        start, t0 = adj.get_value(), None
-
-        def step(_w, clock):  # 300 ms, easeOutCubic
-            nonlocal t0
-            now = clock.get_frame_time()
-            t0 = t0 or now
-            k = min(1.0, (now - t0) / 300_000)
-            adj.set_value(start + (target - start) * (1 - (1 - k) ** 3))
-            if k >= 1.0:
-                self.lyr_anim = None
-                return GLib.SOURCE_REMOVE
-            return GLib.SOURCE_CONTINUE
-        if self.lyr_anim:
-            self.lyr_scroll.remove_tick_callback(self.lyr_anim)
-        self.lyr_anim = self.lyr_scroll.add_tick_callback(step)
-
     # ---------- Zustand ----------
     def on_player(self, what):
         if what == "track":
@@ -1943,13 +823,22 @@ class MusicWindow(tui.TuiWindow):
             self.update_state()
         elif what == "pos":
             self.update_pos()
+        elif what == "queue_new":
+            self.queue_reset_window()           # neue Warteschlange: Fenster wieder klein
         elif what == "queue":
             self.update_queue()
             self.schedule_relayout()
         elif what == "history":
             self.update_hist_info()
+        elif what == "sleep":
+            self.update_sleep()
         elif what.startswith("error:"):
             self.say(what[6:], error=True, seconds=10)
+        elif what.startswith("notice:"):
+            if what[7:]:
+                self.say(what[7:], seconds=8)
+            if hasattr(self, "ytdlp_info"):
+                self.update_ytdlp_info()
 
     def update_track(self):
         if hasattr(self, "_relayout_id"):
@@ -2132,9 +1021,6 @@ class MusicWindow(tui.TuiWindow):
             GLib.timeout_add(60, self.fix_overflow, row_h, upcoming)
         return False
 
-    def on_compact(self, compact):
-        pass
-
     def on_resize(self, width, height):
         # Stufen: so passt musicalist auch in eine Achtel-Kachel (360 px) – vorher war das Fenster
         # mindestens ~530 px breit, Hyprland und GTK stritten dann um die Größe (ruckeln).
@@ -2207,6 +1093,10 @@ class MusicWindow(tui.TuiWindow):
             self.shift_lyrics(-0.25 if kv == Gdk.KEY_bracketleft else 0.25)
         elif kv == Gdk.KEY_comma:
             self.show_tab("settings")
+        elif kv == Gdk.KEY_s:
+            self.sleep_menu()
+        elif kv == Gdk.KEY_e:
+            self.sound_menu()
         elif kv == Gdk.KEY_f and self.current_tab() == "visuals":
             self.toggle_focus()
         elif kv == Gdk.KEY_v and self.current_tab() == "visuals":
@@ -2222,13 +1112,6 @@ class MusicWindow(tui.TuiWindow):
         return True
 
 
-# ---------- Vorschau unten mittig ----------
-def preview_supported():
-    """Vorschau-Karte braucht gtk4-layer-shell (geladen per LD_PRELOAD) und einen Compositor mit Layer-Shell."""
-    try:
-        return Layer is not None and Layer.is_supported()
-    except Exception:
-        return False
 
 
 class NoPreview:
@@ -2262,8 +1145,6 @@ def cursor_pos():
         return None
 
 
-DESK_POS = [("bottom", "unten mittig"), ("bottom-left", "unten links"), ("bottom-right", "unten rechts"),
-            ("top-left", "oben links"), ("top-right", "oben rechts")]
 
 
 class Preview:

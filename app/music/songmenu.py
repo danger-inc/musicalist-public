@@ -2,13 +2,14 @@
 # Playlist-Auswahl („zu playlist hinzufügen“). Im Stil des Kontomenüs (.kpop): Kopf, Rubriken mit Linie,
 # Einträge mit Symbol und Taste rechts. Die Playlist-Liste ist eine zweite Seite im selben Popover.
 # Außerdem: Maus länger als 0,18 s auf einem Titel → Stream-Adresse vorwärmen (Klick spielt dann sofort).
-import subprocess, time
+import os, subprocess, time
 
 import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
 import engine
+import localmusic
 import tui
 from tui import label, hbox, vbox
 
@@ -118,16 +119,18 @@ class SongMenus:
             s.set_max_width_chars(36)
             main.append(s)
         cur = p.current is not None and p.current.get("videoId") == t.get("videoId")
+        loc = localmusic.is_local(t)
         it = lambda *a, **k: self._item(main, pop, *a, **k)
         self._rub(main, "abspielen")
         if not cur:
-            it("󰐊", "jetzt abspielen", lambda: (p.play_now(t), p.start_radio(t) if p.autoplay else None), "klick")
+            it("󰐊", "jetzt abspielen", lambda: (p.play_now(t), p.start_radio(t) if p.autoplay and not loc else None), "klick")
         it("»", "als nächstes", lambda: (p.add(dict(t), next_=True), w.say(f"» {t['title']}")))
         it("+", "an warteschlange anhängen", lambda: (p.add(dict(t)), w.say(f"+ {t['title']}")))
-        it("󰐹", "radio zu diesem titel", lambda: (p.start_radio(t), w.say("radio startet …")))
-        self._rub(main, "sammeln")
-        it("󰐒", "zu playlist hinzufügen", lambda: self._show_pl(stack, pl_box, pop, [t]), "›", close=False)
-        if w.account is not None:
+        if not loc:
+            it("󰐹", "radio zu diesem titel", lambda: (p.start_radio(t), w.say("radio startet …")))
+            self._rub(main, "sammeln")
+            it("󰐒", "zu playlist hinzufügen", lambda: self._show_pl(stack, pl_box, pop, [t]), "›", close=False)
+        if w.account is not None and not loc:
             liked = bool(t.get("liked"))
             it("󰋑" if liked else "󰋕", "gefällt mir nicht mehr" if liked else "gefällt mir",
                lambda: p.rate(t, not liked), "l" if cur else "")
@@ -140,10 +143,20 @@ class SongMenus:
         if cur:
             it("󰗊", "lyrics", lambda: w.show_tab("lyrics"), "4")
         self._rub(main)
-        url = f"https://music.youtube.com/watch?v={t['videoId']}"
-        it("󰆏", "link kopieren", lambda: (Gdk.Display.get_default().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(url)),
-                    w.say("link kopiert")))
-        it("↗", "im browser öffnen", lambda: engine.open_url(url))
+        if not loc:
+            off = p.offline
+            if off.is_pinned(t["videoId"]):
+                it("󰇚", "offline nicht mehr halten", lambda: (off.unpin([t["videoId"]]), w.say("offline: freigegeben")))
+            else:
+                it("󰇚", "offline speichern", lambda: (off.pin([t]), w.say(f"offline: {t['title']} wird geladen …")))
+        if loc:
+            folder = os.path.dirname(localmusic.path_of(t["videoId"]))
+            it("󰉋", "im ordner zeigen", lambda: engine.open_url(folder))
+        else:
+            url = f"https://music.youtube.com/watch?v={t['videoId']}"
+            it("󰆏", "link kopieren", lambda: (Gdk.Display.get_default().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(url)),
+                        w.say("link kopiert")))
+            it("↗", "im browser öffnen", lambda: engine.open_url(url))
         if extra:
             self._rub(main)
             for e in extra:
