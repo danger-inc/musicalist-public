@@ -15,6 +15,7 @@ except (ImportError, ValueError):
 import shutil
 
 import tui
+import istheme
 from tui import label, hbox, vbox, esc
 import engine
 from engine import fmt
@@ -351,6 +352,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
 
         player.listeners.append(self.on_player)
         cava.listeners.append(self.on_spectrum)
+        self._shown, self._spec_state = False, self.spec_on()
+        GLib.timeout_add_seconds(1, self._eco_poll)      # Energiesparmodus an/aus: Spektrum folgt
         self.update_track()
         self.update_state()
         self.update_queue()
@@ -890,14 +893,33 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
             self.visuals.update_pos()
 
     # ---------- Fenster ----------
+    def spec_on(self):
+        """Live-Spektrum unten auf Seite 1: im Energiesparmodus aus (Einstellung „eco_spec“ hält es an)."""
+        return not istheme.eco() or bool(engine.setting("eco_spec"))
+
+    def sync_cava(self):
+        # cava läuft nur, solange es jemand sieht: Spektrum unten, oder die Seite „visuals“
+        want = self._shown and (self.spec_on() or self.current_tab() == "visuals")
+        self.cava.want("window", want)
+
+    def _eco_poll(self):
+        on = self.spec_on()
+        if on != self._spec_state:
+            self._spec_state = on
+            self.sync_cava()
+            self.schedule_relayout()
+        return True
+
     def on_show(self):
-        self.cava.want("window", True)
+        self._shown = True
+        self.sync_cava()
         self.srcs.want("window", True)
         self.update_track()
         self.update_state()
 
     def on_hide(self):
-        self.cava.want("window", False)
+        self._shown = False
+        self.sync_cava()
         self.srcs.want("window", False)
 
     # ---------- Platz einteilen: Tab 1 passt immer genau ins Fenster ----------
@@ -997,7 +1019,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
             GLib.timeout_add(60, self.fix_overflow, row_h, upcoming)
         else:
             self.spec.set_height(max(self.SPEC_MIN, min(96, int(H * 0.09))))
-        self.spec.set_visible(H >= 300 and self.current_tab() != "visuals" and not self.focus_mode)
+        self.spec.set_visible(H >= 300 and self.current_tab() != "visuals" and not self.focus_mode and self.spec_on())
         return False
 
     def fix_overflow(self, row_h, upcoming):
@@ -1030,6 +1052,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
             self.center_lyric(jump=True)
 
     def tab_changed(self, tab):
+        self.sync_cava()
         self.schedule_relayout()
         self.nav_note()
         self.update_tab_labels()

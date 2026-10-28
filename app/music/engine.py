@@ -30,6 +30,7 @@ DEFAULT_SETTINGS = {"last_playlist": None,   # [id, titel] der zuletzt benutzten
                     "history_pinned": False,  # Hörverlauf-Leiste angeheftet
                     "history": True,          # Hörverlauf führen (aus = nichts wird gemerkt, Leiste weg)
                     "yt_history": True,       # Wiedergaben an YouTube melden (Verlauf, Statistik, Empfehlungen)
+                    "eco_spec": False,        # live-Spektrum (Seite 1 unten) auch im Energiesparmodus zeigen
                     "desk": False,            # Anzeige dauerhaft auf dem Hintergrundbild
                     "desk_pos": "bottom",
                     "offline": True,          # meistgehörte Titel als Datei speichern (geht ohne Netz, startet sofort)
@@ -852,7 +853,7 @@ class Resolver:
 
     def __init__(self):
         self.cache = {}
-        self.locks = {"fast": threading.Lock(), "warm": threading.Lock(), "hq": threading.Lock(), "m4a": threading.Lock()}
+        self.locks = {"fast": threading.Lock(), "warm": threading.Lock(), "hls": threading.Lock(), "hq": threading.Lock(), "m4a": threading.Lock()}
         self.ydls = {}
         self.queue_lock = threading.Lock()
         self.wanted = []
@@ -872,7 +873,8 @@ class Resolver:
         key = (kind, cookies)
         if key not in self.ydls:
             opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
-                    "format": "bestaudio[ext=m4a]/140/bestaudio" if kind == "m4a" else "bestaudio/best",
+                    "format": {"m4a": "bestaudio[ext=m4a]/140/bestaudio", "hls": "234/233/bestaudio[protocol=m3u8_native]"}
+                    .get(kind, "bestaudio/best"),
                     "js_runtimes": js_runtimes(), "skip_download": True}
             if cookies:
                 opts["cookiefile"] = cookies
@@ -883,9 +885,28 @@ class Resolver:
         hit = self.cache.get(vid)
         return hit[1] if hit and hit[0] > time.time() else None
 
+    @staticmethod
+    def _reachable(info):
+        """YouTube verlangt für die direkten https-Formate neuerdings oft einen PO-Token → 403 beim Laden.
+        Kurze Probe (1 Byte), damit wir gleich auf die HLS-Adresse ausweichen, die ohne Token geht."""
+        import urllib.request
+        req = urllib.request.Request(info["url"], headers={
+            "Range": "bytes=0-1", **{k: v for k, v in (info.get("http_headers") or {}).items() if k != "Range"}})
+        try:
+            urllib.request.urlopen(req, timeout=6).close()
+            return True
+        except urllib.error.HTTPError as e:
+            return e.code not in (403, 404, 410)
+        except Exception:  # noqa: BLE001 – Netzfehler: nicht umleiten, mpv meldet es selbst
+            return True
+
     def _extract(self, vid, kind):
         with self.locks[kind]:  # ein yt-dlp-Objekt ist nicht threadsicher
             info = self.ydl(kind).extract_info(f"https://music.youtube.com/watch?v={vid}", download=False)
+        if kind != "hls" and info.get("protocol", "").startswith("http") and not self._reachable(info):
+            log(f"{vid}: https-Adresse abgelehnt (403, PO-Token) → HLS")
+            with self.locks["hls"]:
+                info = self.ydl("hls").extract_info(f"https://music.youtube.com/watch?v={vid}", download=False)
         res = {"url": info["url"], "ua": (info.get("http_headers") or {}).get("User-Agent", UA),
                "abr": info.get("abr"), "codec": info.get("acodec", ""), "duration": info.get("duration"),
                "proto": info.get("protocol", ""),

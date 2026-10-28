@@ -16,6 +16,16 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk, Pango, PangoCairo
 
 import tui
+
+
+def _eco():
+    """Energy-saving mode (istheme.eco): animations off."""
+    try:
+        import istheme
+        return istheme.eco()
+    except Exception:      # noqa: BLE001
+        return False
+
 from tui import label, hbox, vbox
 
 MODES = [("orbit", "orbit", "󰽥"), ("saeulen", "säulen", "󰐰"), ("linien", "linien", "󱑽"), ("matrix", "matrix", "󰝘")]
@@ -87,6 +97,8 @@ class Canvas(Gtk.DrawingArea):
 
     def _on_tick(self, _w, clock):
         now = time.monotonic()
+        if _eco() and now - self.last < 1 / 12:     # energy-saving mode: ~12 images per second
+            return GLib.SOURCE_CONTINUE
         dt = min(0.1, now - self.last)
         self.last = now
         k_up, k_dn = 1 - math.exp(-dt * 28), 1 - math.exp(-dt * 7)

@@ -8,6 +8,16 @@ from engine import fmt
 from rows import track_row, coll_row, artist_link
 
 
+def _eco():
+    """Energy-saving mode (istheme.eco): animations off."""
+    try:
+        import istheme
+        return istheme.eco()
+    except Exception:      # noqa: BLE001
+        return False
+
+
+
 class LyricsMixin:
 
     # ---------- Songtext ----------
@@ -169,6 +179,9 @@ class LyricsMixin:
                 self.lyr_anim = None
                 return GLib.SOURCE_REMOVE
             return GLib.SOURCE_CONTINUE
+        if _eco():                      # energy-saving mode: no scroll animation
+            adj.set_value(target)
+            return
         if self.lyr_anim:
             self.lyr_scroll.remove_tick_callback(self.lyr_anim)
         self.lyr_anim = self.lyr_scroll.add_tick_callback(step)

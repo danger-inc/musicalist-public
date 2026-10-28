@@ -12,6 +12,16 @@ from gi.repository import GLib, Gtk, Pango
 import tui
 from tui import label, hbox, vbox
 
+
+def _eco():
+    """Energy-saving mode (istheme.eco): animations off."""
+    try:
+        import istheme
+        return istheme.eco()
+    except Exception:      # noqa: BLE001
+        return False
+
+
 EDGE = 6
 WIDTH = 290
 ROWS = 120
@@ -63,9 +73,17 @@ class Rail(Gtk.DrawingArea):
             self.connect("map", lambda *_: self._run(True))
             self.connect("unmap", lambda *_: self._run(False))
 
+    def _pulse(self, *_):
+        t = time.monotonic()
+        if _eco() and t - getattr(self, "_pt", 0) < 0.5:     # energy-saving mode: dot pulses only twice per second
+            return True
+        self._pt = t
+        self.queue_draw()
+        return True
+
     def _run(self, on):
         if on and self._tick is None:
-            self._tick = self.add_tick_callback(lambda *_: (self.queue_draw(), True)[1])
+            self._tick = self.add_tick_callback(self._pulse)
         elif not on and self._tick is not None:
             self.remove_tick_callback(self._tick)
             self._tick = None

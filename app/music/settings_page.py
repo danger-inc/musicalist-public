@@ -33,6 +33,12 @@ class SettingsMixin:
             hint = "hier nicht verfügbar: braucht gtk4-layer-shell und einen wayland-compositor mit layer-shell."
             self.hover_chk.set_sensitive(False)
         panel.body.append(label(hint, "dim", wrap=True, xalign=0))
+        self.eco_chk = tui.Check("live-spektrum auch im energiesparmodus zeigen", engine.setting("eco_spec"),
+                                 lambda on: engine.set_setting("eco_spec", on),
+                                 tooltip="Standard: aus – im Energiesparmodus (Waybar-Akku oder Design-Einstellungen)\n"
+                                         "verschwindet das Spektrum unten auf Seite 1 und cava wird beendet.")
+        self.eco_chk.set_margin_top(10)
+        panel.body.append(self.eco_chk)
         self.bg_chk = tui.Check("beim schließen im hintergrund weiterspielen", engine.setting("background"),
                                 lambda on: engine.set_setting("background", on),
                                 tooltip="Aus: ✕ / q beendet musicalist ganz, die Musik stoppt.\n"
