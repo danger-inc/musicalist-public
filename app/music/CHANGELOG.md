@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 1.15.0 (2026-11-01)
+- **Scroll-Ende**: Wer am Ende einer Seite weiterscrollt, sieht aus der Kante einen Verlauf aus ░ ▒ ▓ █ aufsteigen, am Mauszeiger am höchsten. Die Liste bewegt sich dabei nicht und der Effekt läuft ohne Überschwingen aus. Er erscheint nur, wenn kein umgebendes Scroll-Fenster mehr weiterscrollen kann. Abschalten: `"scroll_end": false` in ~/.config/rice-apps/settings.json oder Energiesparmodus.
+
 ## 1.14.1 (2026-10-28)
 - **Absturz in der Warteschlange behoben**: Beim ersten Überfahren einer Zeile mit der Maus stürzte musicalist ab (GTK-Absturz, weil sich ein Maus-Controller mitten in seinem eigenen Signal entfernte). Das Anhängen der Zieh-Funktion und die „weitere anzeigen“-Knöpfe laufen jetzt im Leerlauf. Der Fehler kam mit 1.13.0 (Drag&Drop erst beim Überfahren anhängen) und wurde mit echter Mausbewegung nachgestellt.
 
