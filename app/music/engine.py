@@ -901,10 +901,19 @@ class Resolver:
             return True
 
     def _extract(self, vid, kind):
-        with self.locks[kind]:  # ein yt-dlp-Objekt ist nicht threadsicher
-            info = self.ydl(kind).extract_info(f"https://music.youtube.com/watch?v={vid}", download=False)
-        if kind != "hls" and info.get("protocol", "").startswith("http") and not self._reachable(info):
+        # Lehnt YouTube die https-Adressen gerade ohnehin ab (PO-Token), gleich HLS holen: spart den
+        # zweiten Durchlauf (~6,5 s → ~3 s). Alle 10 min wird https wieder probiert.
+        direct_hls = kind in ("fast", "warm") and time.time() < getattr(self, "_po_blocked_until", 0)
+        if direct_hls:
+            with self.locks["hls"]:
+                info = self.ydl("hls").extract_info(f"https://music.youtube.com/watch?v={vid}", download=False)
+        else:
+            with self.locks[kind]:  # ein yt-dlp-Objekt ist nicht threadsicher
+                info = self.ydl(kind).extract_info(f"https://music.youtube.com/watch?v={vid}", download=False)
+        if kind != "hls" and not direct_hls and info.get("protocol", "").startswith("http") and not self._reachable(info):
             log(f"{vid}: https-Adresse abgelehnt (403, PO-Token) → HLS")
+            if kind in ("fast", "warm"):
+                self._po_blocked_until = time.time() + 600
             with self.locks["hls"]:
                 info = self.ydl("hls").extract_info(f"https://music.youtube.com/watch?v={vid}", download=False)
         res = {"url": info["url"], "ua": (info.get("http_headers") or {}).get("User-Agent", UA),
@@ -2098,12 +2107,19 @@ class Player:
             if then_next:
                 self.mpv.set("pause", True)
             return
+        if getattr(self, "_ext_busy", False):           # Anfrage läuft schon (z. B. n schnell gedrückt) → nur merken
+            if then_next:
+                self._ext_skips = getattr(self, "_ext_skips", 1) + 1
+            return
         if cur is None or (getattr(self, "_extending", None) == cur["videoId"] and not then_next):
             return  # läuft schon (bzw. für diesen Titel schon versucht)
         self._extending = cur["videoId"]
+        self._ext_busy, self._ext_skips = True, 1
         seen = {x["videoId"] for x in self.queue}
 
         def done(res):
+            self._ext_busy = False
+            skips, self._ext_skips = self._ext_skips, 1
             if isinstance(res, Exception):
                 self.emit(f"error:autoplay: {res}")
                 return
@@ -2111,7 +2127,7 @@ class Player:
             self.queue += new[:25]
             self.emit("queue")
             if then_next and self.index + 1 < len(self.queue):
-                self.index += 1
+                self.index = min(self.index + skips, len(self.queue) - 1)
                 self.load()
         tui.background(self.music.radio, cur["videoId"], done=done)
 

@@ -821,7 +821,15 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
     # ---------- Zustand ----------
     def on_player(self, what):
         if what == "track":
-            self.update_track()
+            # schnelles Durchskippen (n gedrückt halten): nur einmal pro Frame neu zeichnen
+            if not getattr(self, "_track_sched", False):
+                self._track_sched = True
+
+                def run():
+                    self._track_sched = False
+                    self.update_track()
+                    return False
+                GLib.timeout_add(40, run)
         elif what in ("state", "volume"):
             self.update_state()
         elif what == "pos":

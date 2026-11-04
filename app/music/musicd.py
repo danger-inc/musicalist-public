@@ -8,7 +8,8 @@
 # Braucht LD_PRELOAD=libgtk4-layer-shell.so (für die Vorschau-Karte) – setzt rice-music.
 import os, time, signal, sys, warnings
 
-os.environ.setdefault("GSK_RENDERER", "cairo")  # gleiche Optik, halber Speicher
+# GPU-Renderer (ngl): flüssige 2fz-/Scroll-Animationen; Cairo (CPU) spart RAM, ruckelt aber – per GSK_RENDERER=cairo wählbar
+os.environ.setdefault("GSK_RENDERER", "cairo" if os.name == "nt" else "ngl")   # Windows: wie bisher
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.dirname(HERE)]
 if os.name == "nt":
