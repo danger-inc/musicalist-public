@@ -2,7 +2,8 @@
 # musicalist (~/.local/share/rice-apps/music): Super+M = rice-music (ein/aus).
 #   rice-music [toggle|show|hide|play-pause|next|prev|quit|search:<begriff+mit+plus>]  – sofort
 #   rice-music --daemon                                  – Hintergrund-Prozess starten (Autostart)
-dir=$HOME/.local/share/rice-apps/music
+# MUSICALIST_DIR / MUSICALIST_PYTHON / MUSICALIST_LAYER_SHELL: von Paketen (Nix) gesetzt, sonst die Installation hier
+dir=${MUSICALIST_DIR:-$HOME/.local/share/rice-apps/music}
 run=${XDG_RUNTIME_DIR:-/tmp/musicalist-$UID}
 mkdir -p "$run" 2>/dev/null
 fifo=$run/rice-music.fifo
@@ -11,6 +12,7 @@ fifo=$run/rice-music.fifo
 # musicalist ohne Vorschau.
 layer_shell() {
     local p
+    [[ -n $MUSICALIST_LAYER_SHELL ]] && { echo "$MUSICALIST_LAYER_SHELL"; return; }
     for p in /usr/lib/libgtk4-layer-shell.so.0 /usr/lib64/libgtk4-layer-shell.so.0 \
              /usr/lib/*-linux-gnu/libgtk4-layer-shell.so.0 /usr/local/lib/libgtk4-layer-shell.so.0 \
              /usr/local/lib/*-linux-gnu/libgtk4-layer-shell.so.0 /usr/local/lib64/libgtk4-layer-shell.so.0 \
@@ -20,7 +22,7 @@ layer_shell() {
 }
 
 start() {
-    local py=$dir/venv/bin/python
+    local py=${MUSICALIST_PYTHON:-$dir/venv/bin/python}
     if [[ ! -x $py ]]; then
         echo "musicalist ist nicht (vollständig) installiert – bitte ./install.sh im Quellordner ausführen." >&2
         command -v notify-send >/dev/null && notify-send musicalist "Nicht vollständig installiert – ./install.sh ausführen."
@@ -34,6 +36,8 @@ start() {
         local d=${pre%/*}/girepository-1.0
         [[ -d $d ]] && export GI_TYPELIB_PATH=$d${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}
     fi
+    # MUSICALIST_FOREGROUND=1: im Vordergrund bleiben (systemd-Dienst, Ausgabe ins Journal)
+    [[ -n $MUSICALIST_FOREGROUND ]] && XDG_RUNTIME_DIR=$run exec "$py" "$dir/musicd.py" "$@"
     XDG_RUNTIME_DIR=$run setsid -f "$py" "$dir/musicd.py" "$@" >"$run/rice-music.log" 2>&1 </dev/null
 }
 { read -r pid < "$run/rice-music.pid"; } 2>/dev/null

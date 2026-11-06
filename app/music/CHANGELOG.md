@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.15.1 (2026-11-06)
+- **NixOS**: musicalist gibt es jetzt als Nix-Flake (`flake.nix` im Repo) mit Paket, home-manager-Modul (`programs.musicalist.enable`, optional `autostart` als Benutzerdienst) und NixOS-Modul. Damit gehört musicalist zur Konfiguration und überlebt jeden Rebuild. Anleitung im README unter „nixos / nix“.
+- Liegt das Programm schreibgeschützt (wie im Nix-Store), speichert musicalist Anmeldung, Einstellungen und Verlauf in `~/.local/share/musicalist`, und yt-dlp aktualisiert sich nach `~/.local/share/musicalist/pylibs`. Bei der normalen Installation ändert sich nichts, alles bleibt am alten Ort.
+- Geprüft: Build mit nixpkgs 26.05 und unstable (Python 3.13/3.14), Start, Suche, Abspielen, yt-dlp-Update sowie beide Module.
+
 ## 1.15.0 (2026-11-01)
 - **Scroll-Ende**: Wer am Ende einer Seite weiterscrollt, sieht aus der Kante einen Verlauf aus ░ ▒ ▓ █ aufsteigen, am Mauszeiger am höchsten. Die Liste bewegt sich dabei nicht und der Effekt läuft ohne Überschwingen aus. Er erscheint nur, wenn kein umgebendes Scroll-Fenster mehr weiterscrollen kann. Abschalten: `"scroll_end": false` in ~/.config/rice-apps/settings.json oder Energiesparmodus.
 

@@ -12,15 +12,33 @@ import localmusic
 import audiofx
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-AUTH_DIR = os.path.join(HERE, "auth")
+
+
+def _data_dir():
+    """Ordner für Anmeldung, Einstellungen und Verlauf: wie bisher neben dem Code. Liegt der Code schreibgeschützt
+    (Nix-Paket in /nix/store), stattdessen ~/.local/share/musicalist. MUSICALIST_DATA legt den Ordner fest."""
+    d = os.environ.get("MUSICALIST_DATA")
+    if not d:
+        d = HERE if os.access(HERE, os.W_OK) else os.path.join(GLib.get_user_data_dir(), "musicalist")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+DATA = _data_dir()
+# eigene pip-Pakete (yt-dlp-Updates): Windows im App-Ordner, bei schreibgeschütztem Code im Datenordner
+PYLIBS = (os.path.join(HERE, "pylibs") if os.name == "nt"
+          else os.path.join(DATA, "pylibs") if not os.access(HERE, os.W_OK) else None)
+if PYLIBS and os.path.isdir(PYLIBS) and PYLIBS not in sys.path:
+    sys.path.insert(0, PYLIBS)
+AUTH_DIR = os.path.join(DATA, "auth")
 BROWSER_JSON = os.path.join(AUTH_DIR, "browser.json")   # Anmeldung für ytmusicapi
 COOKIES_TXT = os.path.join(AUTH_DIR, "cookies.txt")      # Anmeldung für yt-dlp
-STATE = os.path.join(HERE, "state.json")
-SETTINGS = os.path.join(HERE, "settings.json")
-HISTORY = os.path.join(HERE, "history.json")
-LISTENS = os.path.join(HERE, "listens.json")     # langes Hörprotokoll für den Rückblick (nur lokal)
-PINS = os.path.join(HERE, "offline_pins.json")  # von Hand für offline gemerkte Titel (nur lokal)
-PLAYS = os.path.join(HERE, "plays.json")       # Wiedergaben je Titel (für „meistgehört“, nur lokal)
+STATE = os.path.join(DATA, "state.json")
+SETTINGS = os.path.join(DATA, "settings.json")
+HISTORY = os.path.join(DATA, "history.json")
+LISTENS = os.path.join(DATA, "listens.json")     # langes Hörprotokoll für den Rückblick (nur lokal)
+PINS = os.path.join(DATA, "offline_pins.json")  # von Hand für offline gemerkte Titel (nur lokal)
+PLAYS = os.path.join(DATA, "plays.json")       # Wiedergaben je Titel (für „meistgehört“, nur lokal)
 # Audiodateien bewusst außerhalb von rice-apps (wird gesichert/veröffentlicht) – lassen sich jederzeit neu laden
 OFFLINE_DIR = os.path.join(GLib.get_user_data_dir(), "musicalist", "offline")   # eigener Hörverlauf (nur lokal, wird nie veröffentlicht)
 DEFAULT_SETTINGS = {"last_playlist": None,   # [id, titel] der zuletzt benutzten Playlist
@@ -184,12 +202,12 @@ def ensure_deps(progress=None):
     if progress:
         progress("installiere ytmusicapi und yt-dlp (einmalig, dauert kurz) …")
     cmd = [sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check", "--upgrade"]
-    libs = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pylibs")
-    if IS_WIN:      # MSYS2-Python ist „externally managed“: Pakete wie der Installer nach <App>\pylibs
+    libs = PYLIBS
+    if libs:        # Windows (MSYS2-Python ist „externally managed“) / Nix: Pakete nach pylibs
         cmd += ["--target", libs]
     r = subprocess.run(cmd + ["ytmusicapi>=1.10", "yt-dlp", "yt-dlp-ejs", "requests", "mutagen"],
                        capture_output=True, text=True, timeout=600)
-    if IS_WIN and libs not in sys.path:
+    if libs and libs not in sys.path:
         sys.path.insert(0, libs)
     importlib.invalidate_caches()
     try:
@@ -257,8 +275,10 @@ def update_ytdlp(min_age=0):
         set_setting("ytdlp_checked", time.time())
         old = ytdlp_version()
         cmd = [sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check", "--upgrade"]
-        if IS_WIN:
-            cmd += ["--target", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pylibs")]
+        if PYLIBS:     # Windows / Nix: eigener Ordner (der Store ist schreibgeschützt), liegt vorn in sys.path
+            cmd += ["--target", PYLIBS]
+            if PYLIBS not in sys.path:
+                sys.path.insert(0, PYLIBS)
         r = subprocess.run(cmd + ["yt-dlp", "yt-dlp-ejs"], capture_output=True, text=True, timeout=300)
         if r.returncode:
             out = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
@@ -1589,7 +1609,7 @@ class Player:
         self.history = History()
         self.offline = Offline(self.history)
         self.stats = Stats(self.history)
-        self.locallib = localmusic.Library(os.path.join(HERE, "local.json"))
+        self.locallib = localmusic.Library(os.path.join(DATA, "local.json"))
         self.resolver.local = self.offline.path
         self.queue, self.index = [], -1
         self.pos, self.dur, self.paused, self.loading, self.volume = 0.0, 0.0, True, False, 70

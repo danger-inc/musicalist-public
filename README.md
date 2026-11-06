@@ -37,6 +37,41 @@ start with `musicalist` or from the application menu. calling it again shows/hid
 ✕ / `q` exits musicalist completely and the music stops. to keep playing with the window closed:
 settings (⚙ or `,`) → "beim schließen im hintergrund weiterspielen".
 
+## nixos / nix
+
+on nixos don't run `install.sh` – use the flake instead, so musicalist is part of your config.
+add the input to your system or home-manager flake:
+
+```nix
+inputs.musicalist = {
+  url = "github:danger-inc/musicalist-public";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+then **either** home-manager (recommended – can also start musicalist with the session):
+
+```nix
+imports = [ inputs.musicalist.homeManagerModules.default ];
+programs.musicalist.enable = true;
+programs.musicalist.autostart = true;   # optional: background service with graphical-session.target
+```
+
+**or** system-wide in `configuration.nix`:
+
+```nix
+imports = [ inputs.musicalist.nixosModules.default ];
+programs.musicalist.enable = true;
+```
+
+(there is also `overlays.default` → `pkgs.musicalist`, and `nix run <flake>` to just try it.)
+the package brings everything along (gtk4, gtk4-layer-shell, mpv, cava, playerctl, node, ytmusicapi, yt-dlp).
+because the program lives read-only in `/nix/store`, musicalist keeps its login, settings and history in
+`~/.local/share/musicalist` – that survives every rebuild and garbage collection. yt-dlp still updates itself
+(into `~/.local/share/musicalist/pylibs`), since youtube changes faster than nixpkgs.
+update musicalist with `nix flake update musicalist` + rebuild; the update button only opens the repo page.
+on hyprland without home-manager autostart: `exec-once = musicalist --daemon`.
+
 ## runs on
 
 | system | status |
@@ -45,6 +80,7 @@ settings (⚙ or `,`) → "beim schließen im hintergrund weiterspielen".
 | fedora 39+ | tested (fedora 44) |
 | arch, endeavouros, cachyos, manjaro | tested (arch) |
 | openSUSE Tumbleweed | should work (untested) |
+| nixos (nixpkgs 26.05 / unstable) | via flake, see [nixos / nix](#nixos--nix) – tested build + playback |
 | windows | core features (player, search, library, lyrics); no hover preview, spectrum or media keys – run install-windows.bat |
 | macos | no |
 
