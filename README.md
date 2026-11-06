@@ -16,8 +16,9 @@
 <p align="center"><!-- gh-note --><sub>tip: the glass button (󰃝, top right) makes the window see-through, like the terminal – needs a compositor with blur, e.g. hyprland.</sub></p>
 
 youtube music player in the terminal look of the suite (gtk4): search, library, radio/autoplay, lyrics, spectrum
-(cava), media keys (mpris) and, if you want, a **preview card** that slides up at the bottom when the mouse
-hits the screen edge (space = pause, ←/→ = previous/next track).
+(cava), media keys (mpris), a detailed **listening analysis** with weekly, monthly and yearly reviews (tab 7) and,
+if you want, a **preview card** that slides up at the bottom when the mouse hits the screen edge
+(space = pause, ←/→ = previous/next track).
 
 ## install
 
@@ -106,8 +107,22 @@ uploaded anywhere.
 
 ## keys
 
-space play/pause · n/p next/previous · ←/→ seek · +/− volume · l ♥ · a add to playlist · / search · 1–6 tabs ·
+space play/pause · n/p next/previous · ←/→ seek · +/− volume · l ♥ · a add to playlist · / search · 1–7 tabs ·
 h history bar · v/f visuals mode/fullscreen · ? all keys · q closes (not esc – so you don't close it by accident).
+in "analyse": w/m/j/g week/month/year/all time · page up/down earlier/later period · home back to now.
+
+## listening analysis (tab 7)
+
+musicalist keeps a precise log of what you play – only on your device (`hoerprotokoll.jsonl` next to the
+settings), only while the history is switched on (settings), and you can delete it in the tab. per track it notes
+how long you really listened, how it ended (finished, skipped, back, switched), seeking and pauses, where it came
+from (radio, playlist, album, search …), the album, likes, volume and the output (headphones, speakers, bluetooth).
+
+the tab shows a week, month, year or all time – flip back with ‹ ›, compared with the period before (up to the
+same point while it's still running): listening time, plays, artists, albums, a calendar heatmap, top tracks /
+artists / albums, discoveries and comebacks, a weekday × hour heatmap, typical start and end of your music day,
+sessions and streaks, skip behaviour, sources and devices, variety, taste over time and milestones. when a week,
+month or year is over, the status line says that its review is ready.
 
 ## hyprland (optional)
 

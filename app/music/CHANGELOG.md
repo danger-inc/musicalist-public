@@ -1,5 +1,12 @@
 # musicalist – Änderungen
 
+## 1.16.0 (2026-11-06)
+- **Neuer Tab 7 „analyse“**: dein Hörverhalten im Detail, für eine **Woche, einen Monat, ein Jahr oder insgesamt**. Mit ‹ › (Bild↑/Bild↓) blätterst du zurück, `w` `m` `j` `g` wählen den Zeitraum. Verglichen wird mit dem Zeitraum davor, bei laufenden Zeiträumen fair bis zum gleichen Zeitpunkt.
+  Zu sehen sind: Zusammenfassung in Sätzen, Kennzahlen mit Veränderung, Verlauf als Säulen und Kalender-Heatmap, Top-Titel (nach Wiedergaben oder Hörzeit), Top-Künstler und Top-Alben (anklickbar), Entdeckungen und Comebacks, Obsession, Ohrwurm und Dauerbrenner, eine Heatmap Wochentag × Uhrzeit, Tageszeiten, typischer Start und typisches Ende, Sitzungen und Serien, Überspringen, Spulen und Pausen, Quellen (Radio, Playlists …) und Geräte (Kopfhörer, Lautsprecher, Bluetooth), Vielfalt, Geschmack im Verlauf und Meilensteine. Über jedem Diagramm zeigt ein Tooltip die genauen Werte.
+- **Rückblicke**: Ist eine Woche, ein Monat oder ein Jahr vorbei, meldet die Statuszeile „dein …rückblick ist da“. Tab 7 öffnet dann direkt diesen Zeitraum.
+- **Genaues Hörprotokoll** (`hoerprotokoll.jsonl`, nur lokal, nur bei eingeschaltetem Hörverlauf, im Tab löschbar): Jeder angespielte Titel wird festgehalten, auch kurz übersprungene. Dazu kommen die echte Hörzeit ohne Spulen und Pausen, wie er endete, Quelle, Album, Like, Lautstärke und Ausgabegerät. Die Einträge des bisherigen Rückblicks werden übernommen. Der Rückblick in der Bibliothek führt jetzt zum neuen Tab.
+- Windows-Installer: Das Hörprotokoll bleibt bei Updates erhalten.
+
 ## 1.15.1 (2026-11-06)
 - **NixOS**: musicalist gibt es jetzt als Nix-Flake (`flake.nix` im Repo) mit Paket, home-manager-Modul (`programs.musicalist.enable`, optional `autostart` als Benutzerdienst) und NixOS-Modul. Damit gehört musicalist zur Konfiguration und überlebt jeden Rebuild. Anleitung im README unter „nixos / nix“.
 - Liegt das Programm schreibgeschützt (wie im Nix-Store), speichert musicalist Anmeldung, Einstellungen und Verlauf in `~/.local/share/musicalist`, und yt-dlp aktualisiert sich nach `~/.local/share/musicalist/pylibs`. Bei der normalen Installation ändert sich nichts, alles bleibt am alten Ort.

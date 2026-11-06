@@ -32,8 +32,8 @@ class LibraryMixin:
         self.local_panel.set_visible(False)
         home.append(self.local_panel)
         self.stat_panel = tui.Panel("󰄨 rückblick")
-        self.stat_panel.body.append(coll_row("󰄨", "was ich gehört habe", "",
-                                             lambda: self.open_detail("stats", "")))
+        self.stat_panel.body.append(coll_row("󰄨", "was ich gehört habe – woche, monat, jahr", "tab 7",
+                                             lambda: self.show_tab("stats")))
         home.append(self.stat_panel)
         self.lib_stack.add_named(home, "home")
 
@@ -318,6 +318,8 @@ class LibraryMixin:
         self.detail_tools.set_visible(bool(widgets))
 
     def open_detail(self, kind, ident):
+        if kind == "stats":            # alter Rückblick (z. B. aus dem 2fz-Verlauf) → jetzt Tab „analyse“
+            return self.show_tab("stats")
         self.detail_key = (kind, ident)
         self.show_tab("lib")
         self.lib_stack.set_visible_child_name("detail")
@@ -331,9 +333,6 @@ class LibraryMixin:
                          if url else []))
         if kind == "local":
             self.fill_local(ident)
-            return
-        if kind == "stats":
-            self.fill_stats()
             return
         fn = {"playlist": self.p.music.playlist, "album": self.p.music.album, "podcast": self.p.music.podcast,
               "artist": self.p.music.artist, "history": lambda _i: ("verlauf", self.p.music.history()),
@@ -486,88 +485,6 @@ class LibraryMixin:
             if row.get_parent() is not None:
                 row.get_parent().remove(row)
         tui.background(self.p.music.remove_from_playlist, pid, [t], done=done)
-
-    # ---------- Rückblick ----------
-    STAT_PERIODS = [("7", "7 tage"), ("30", "30 tage"), ("365", "1 jahr"), ("0", "gesamt")]
-    BLOCKS = " ▁▂▃▄▅▆▇█"
-
-    @classmethod
-    def spark(cls, vals):
-        top = max(vals) or 1
-        return "".join(cls.BLOCKS[min(8, int(round(v / top * 8)))] if v else cls.BLOCKS[0] for v in vals)
-
-    @staticmethod
-    def hours_text(sec):
-        h, m = divmod(int(sec) // 60, 60)
-        return f"{h} h {m:02d} min" if h else f"{m} min"
-
-    def fill_stats(self, period=None):
-        self.detail_names[("stats", "")] = "rückblick"
-        period = period or getattr(self, "stat_period", "30")
-        self.stat_period = period
-        sel = tui.Select(lambda v: self.fill_stats(v), tooltip="Zeitraum")
-        sel.set_options(self.STAT_PERIODS, period)
-        clear = tui.Button("protokoll löschen", self.clear_stats, danger=True,
-                           tooltip="Löscht nur den Rückblick (nicht den Verlauf links)")
-        self.set_tools(sel, clear)
-        tui.clear(self.detail_box)
-        days = int(period)
-        r = self.p.stats.report(days or None)
-        title = dict(self.STAT_PERIODS)[period]
-        self.detail_tracks = [self.p.stats.rebuild(vid, t, a, d) for _n, vid, t, a, d in r["top_titles"]]
-        self.detail_panel.set_title(f"󰄨 rückblick <span alpha='60%'>{esc(title)}</span>", markup=True)
-        box = self.detail_box
-        if not r["plays"]:
-            box.append(label("in diesem zeitraum noch nichts gehört – der rückblick füllt sich beim hören "
-                             "(hörverlauf muss an sein)", "empty", xalign=0.5, wrap=True))
-            return
-
-        def head(txt):
-            h = label(txt, "accent", xalign=0)
-            h.set_margin_top(10)
-            h.set_margin_bottom(2)
-            box.append(h)
-
-        def line(txt, cls=None):
-            box.append(label(txt, *([cls] if cls else []), xalign=0, wrap=True))
-        per_day = r["plays"] / max(1, r["span_days"])
-        line(f"{r['plays']} wiedergaben · bis zu {self.hours_text(r['seconds'])} musik · {r['unique']} verschiedene "
-             f"titel · {r['artists_n']} künstler")
-        line(f"an {r['days_active']} von {r['span_days']} tagen gehört · Ø {per_day:.1f} titel pro tag", "dim")
-
-        def bars(rows, name_w=30):
-            top = rows[0][0] if rows else 1
-            for n, text, play in rows:
-                row = Gtk.Box()
-                row.add_css_class("row")
-                b = Gtk.Button(hexpand=True)
-                b.add_css_class("rowhead")
-                bar = "█" * max(1, round(n / top * 14))
-                b.set_child(hbox(label(f"{n:>3}×", "dim"), label(bar, "accent"),
-                                 label(text, hexpand=True, ellipsize=True, xalign=0), spacing=10))
-                if play:
-                    b.connect("clicked", lambda _b, f=play: f())
-                row.append(b)
-                box.append(row)
-        head("meistgehörte titel")
-        tracks = self.detail_tracks
-        bars([(n, f"{t} · {a}" if a else t, lambda i=i: self.p.play_tracks(tracks, start=i))
-              for i, (n, _vid, t, a, _d) in enumerate(r["top_titles"])])
-        head("meistgehörte künstler")
-        bars([(n, a, (lambda a=a: self.open_artist({"artist": a, "artistId": None}))) for n, a in r["top_artists"]])
-        head("tageszeit  (0 – 23 uhr)")
-        line(self.spark(r["hours"]), "mono-pct")
-        best = max(range(24), key=lambda h: r["hours"][h])
-        line(f"am meisten um {best} uhr", "dim")
-        head("wochentag  (mo – so)")
-        line(self.spark(r["wdays"]), "mono-pct")
-        names = ["montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag", "sonntag"]
-        line(f"am meisten am {names[max(range(7), key=lambda d: r['wdays'][d])]}", "dim")
-
-    def clear_stats(self):
-        self.p.stats.clear()
-        self.say("rückblick gelöscht")
-        self.fill_stats()
 
     # ---------- lokale Musik ----------
     def update_local_panel(self):

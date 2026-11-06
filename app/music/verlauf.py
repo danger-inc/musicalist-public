@@ -331,7 +331,8 @@ class HistoryDrawer:
         b.set_child(hbox(tl, Rail(first, last, now), text, spacing=5))
         b.set_tooltip_text(" · ".join(x for x in (t["title"], t["artist"], t.get("album")) if x))
         p = self.p
-        b.connect("clicked", lambda *_: (p.play_now(t), p.start_radio(t) if p.autoplay else None))
+        b.connect("clicked", lambda *_: (setattr(p, "ctx_once", ("verlauf", "")), p.play_now(t),
+                                          p.start_radio(t) if p.autoplay else None))
         acts = hbox(spacing=0, valign=Gtk.Align.CENTER)
         acts.add_css_class("hv-acts")
         for glyph, tip, fn in (("+", "an warteschlange anhängen", lambda: p.add(t)),

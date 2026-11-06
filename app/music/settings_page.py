@@ -106,6 +106,7 @@ class SettingsMixin:
         engine.set_setting("history", on)
         if not on:
             self.p._hist = None             # laufender Titel wird auch nicht mehr eingetragen
+            self.p.journal.cur = None
         self.drawer.set_enabled(on)
         self.update_hist_info()
         self.say("hörverlauf an" if on else "hörverlauf aus – es wird nichts mehr gemerkt")

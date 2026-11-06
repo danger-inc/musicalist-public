@@ -34,6 +34,7 @@ from search_page import SearchMixin
 from library_page import LibraryMixin
 from lyrics_page import LyricsMixin
 from sound_page import SoundMixin
+from stats_page import StatsMixin
 
 RUNTIME = engine.RUNTIME
 
@@ -278,11 +279,12 @@ class Spectrum(Gtk.DrawingArea):
 
 
 # ---------- Hauptfenster ----------
-class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMixin, SoundMixin, tui.TuiWindow):
+class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMixin, SoundMixin, StatsMixin,
+                  tui.TuiWindow):
     APP_ID = "de.invincible.Music"
     TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"),
             ("lyrics", "lyrics", "󰗊"), ("visuals", "visuals", "󱑽"), ("search", "suchen", "󰍉"),
-            ("settings", "einstellungen", "󰒓")]   # einstellungen: kein Tab, sondern ⚙ oben rechts
+            ("stats", "analyse", "󰄨"), ("settings", "einstellungen", "󰒓")]   # einstellungen: kein Tab, sondern ⚙ oben rechts
     ESC_CLOSES = False          # Esc soll den Player nicht zumachen (nur Tastenkürzel aus der Config / q / ✕)
 
     def __init__(self, app, player, cava, srcs):
@@ -319,6 +321,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
         self.build_lib()
         self.build_lyrics()
         self.build_visuals()
+        self.build_stats()
         self.build_settings()
         self.spec = Spectrum(rows=2, cell=9, height=34)
         self.spec.set_margin_top(6)
@@ -349,6 +352,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
         self.add_controller(keys)
         self.on_tab = self.tab_changed
         self.on_refresh = self.refresh_account
+        player.ctx_fn = self.play_ctx            # Quelle neu gestarteter Titel fürs Hörprotokoll
 
         player.listeners.append(self.on_player)
         cava.listeners.append(self.on_spectrum)
@@ -402,11 +406,12 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
         self.header_extra.append(self.gear_btn)
 
     # Tastenhinweise unten: breit alle, halbes Fenster die wichtigsten, schmal keine; ? zeigt immer alle
-    HINTS = [(0, "1-6", "tab"), (1, "leer", "play"), (1, "n/p", "weiter/zurück"), (1, "/", "suche"),
+    HINTS = [(0, "1-7", "tab"), (1, "leer", "play"), (1, "n/p", "weiter/zurück"), (1, "/", "suche"),
              (0, "l", "♥"), (0, "a", "playlist"), (1, "?", "alle tasten")]
     KEYS = [("leertaste", "play / pause"), ("n · p", "nächster / voriger titel"), ("← →", "5 s spulen"),
             ("+ −", "lauter / leiser"), ("l", "gefällt mir"), ("a", "titel zu playlist hinzufügen"),
-            ("1 – 6", "tabs"), ("/", "suchen (tab übernimmt den 1. vorschlag)"), ("h", "hörverlauf-leiste"),
+            ("1 – 7", "tabs"), ("bild↑ · bild↓", "analyse: früherer / späterer zeitraum"),
+            ("w · m · j · g", "analyse: woche / monat / jahr / gesamt"), ("/", "suchen (tab übernimmt den 1. vorschlag)"), ("h", "hörverlauf-leiste"),
             (",", "einstellungen"), ("[ ]", "lyrics früher / später"), ("s", "sleep-timer"), ("e", "klang: equalizer / überblenden"), ("v · f", "visuals: modus / vollbild"),
             ("rechtsklick", "mehr zu jedem titel"), ("q", "schließen"), ("?", "diese liste"),
             ("super+alt+n / p", "weiter / zurück – auch wenn musicalist zu ist"),
@@ -535,13 +540,18 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
         self.drawer.set_narrow(tier >= 2)
         self.update_track_labels()
         self.update_tab_labels()
+        if getattr(self, "an_res", None) is not None:   # analyse: Balken/Angaben passen sich der Breite an
+            if self.current_tab() == "stats":
+                self._an_rerender()
+            else:
+                self.an_dirty = True
 
     def _sh(self, btn, long, short):
         self._shorten.append((btn, long, short))
         return btn
 
     # ---------- Navigation (2-Finger-Zurück) ----------
-    TAB_SUP = {"now": "¹ ", "queue": "² ", "lib": "³ ", "lyrics": "⁴ ", "visuals": "⁵ ", "search": "⁶ ", "settings": ""}
+    TAB_SUP = {"now": "¹ ", "queue": "² ", "lib": "³ ", "lyrics": "⁴ ", "visuals": "⁵ ", "search": "⁶ ", "stats": "⁷ ", "settings": ""}
 
     def nav_loc(self):
         tab = self.current_tab() or "now"
@@ -554,6 +564,20 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
             return self.detail_names.get(loc[1:], self.DETAIL_NAMES.get(loc[1], "playlist"))
         names = {t: n for t, n, _i in self.TABS}
         return self.TAB_SUP.get(loc[1], "") + names.get(loc[1], loc[1])
+
+    SRC_KIND = {"album": "album", "artist": "künstler", "history": "verlauf", "podcast": "podcast",
+                "subs": "künstler", "new": "album", "local": "lokal", "liked": "liked"}
+
+    def play_ctx(self):
+        """Woher ein Titel gerade gestartet wird (für das Hörprotokoll): (art, name)."""
+        tab = self.current_tab() or "now"
+        if tab == "lib" and self.lib_stack.get_visible_child_name() == "detail" and self.detail_key:
+            kind = self.detail_key[0]
+            name = self.detail_names.get(self.detail_key, "")
+            return (self.SRC_KIND.get(kind, "playlist"), name)
+        if tab == "search":
+            return ("suche", self.query.get_text().strip())
+        return ({"lib": "bibliothek", "queue": "warteschlange", "stats": "analyse"}.get(tab, "jetzt"), "")
 
     def nav_where(self):
         loc = self.nav_loc()
@@ -1069,6 +1093,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
         if tab == "lyrics":
             self.load_lyrics()
             GLib.timeout_add(60, lambda: self.sync_lyrics(jump=True) and False)
+        if tab == "stats":
+            self.an_shown()
         if tab == "search":
             GLib.idle_add(lambda: self.query.grab_focus() and False)
 
@@ -1097,6 +1123,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
         if isinstance(focus, (Gtk.Text, Gtk.Entry)) or state & (Gdk.ModifierType.CONTROL_MASK |
                                                                  Gdk.ModifierType.ALT_MASK):
             return False
+        if self.current_tab() == "stats" and self.an_key(kv):
+            return True
         if kv == Gdk.KEY_space:
             self.p.toggle()
         elif kv == Gdk.KEY_n:

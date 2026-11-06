@@ -1334,8 +1334,189 @@ class Stats:
                 "hours": hours, "wdays": wdays, "days_active": len(perday), "span_days": span_days}
 
 
+JOURNAL = os.path.join(DATA, "hoerprotokoll.jsonl")   # genaues Hörprotokoll für den Tab „analyse“ (nur lokal)
+
+
+def output_kind():
+    """Wohin der Ton gerade geht: kopfhörer / bluetooth / hdmi / usb / lautsprecher (None: unbekannt, z. B. Windows)."""
+    if IS_WIN or not shutil.which("pactl"):
+        return None
+    try:
+        name = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True, timeout=3).stdout.strip()
+        sinks = json.loads(subprocess.run(["pactl", "-f", "json", "list", "sinks"], capture_output=True,
+                                          text=True, timeout=3).stdout or "[]")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    s = next((x for x in sinks if x.get("name") == name), None)
+    if not s:
+        return None
+    props = s.get("properties") or {}
+    port = (s.get("active_port") or "").lower()
+    text = " ".join([name.lower(), port, str(props.get("device.form_factor", "")).lower()])
+    if props.get("device.bus") == "bluetooth" or "bluez" in text:
+        return "bluetooth"
+    if "headphone" in text or "headset" in text:
+        return "kopfhörer"
+    if "hdmi" in text or "displayport" in text:
+        return "hdmi"
+    if props.get("device.bus") == "usb":
+        return "usb"
+    return "lautsprecher"
+
+
+class Journal:
+    """Genaues Hörprotokoll (eine JSON-Zeile je angespieltem Titel, auch kurz übersprungene). Felder:
+    at/end (Beginn/Ende), id, t (Titel), a (Künstler), aid, al (Album), alid, d (Länge), p (wirklich gehörte
+    Sekunden ohne Spulen/Pausen), mx (weiteste Stelle), why (ende / skip / zurück / wechsel / stop / fehler),
+    sk (Spulen), pa/ps (Pausen/Pausensekunden), src/sn (Quelle + Name), lk (geliked), v (Lautstärke),
+    out (Ausgabe), k (offline/lokal/stream), xf (überblendet), sh (Zufall), rp (Wiederholen).
+    Alte Einträge aus listens.json haben nur at/id/t/a/d und alt=1. Nur lokal, nur bei eingeschaltetem Hörverlauf."""
+
+    def __init__(self):
+        self.cur = None            # laufender Eintrag (noch nicht geschrieben)
+        self.rows = None           # alle Einträge – erst geladen, wenn die Analyse sie braucht
+        self.lock = threading.Lock()
+        self.listeners = []        # fn() nach jedem neuen Eintrag (Analyse aktualisieren)
+        self._out = (0, None)      # (Zeitpunkt, Ausgabe) – pactl höchstens alle 30 s
+
+    # ----- Laden / Speichern -----
+    def load(self):
+        """Alle Einträge (blockierend; aus einem Hintergrund-Thread aufrufen). Beim allerersten Mal werden die
+        Einträge des alten Rückblicks (listens.json) übernommen."""
+        with self.lock:
+            if self.rows is not None:
+                return self.rows
+            rows = []
+            if not os.path.exists(JOURNAL):
+                rows = self._migrate()
+            else:
+                try:
+                    with open(JOURNAL, encoding="utf-8") as f:
+                        for line in f:
+                            try:
+                                e = json.loads(line)
+                            except ValueError:
+                                continue                   # halb geschriebene Zeile (Absturz) überspringen
+                            if isinstance(e, dict) and "at" in e and "id" in e:
+                                rows.append(e)
+                except OSError:
+                    pass
+            rows.sort(key=lambda e: e["at"])
+            self.rows = rows
+            return rows
+
+    def _migrate(self):
+        try:
+            with open(LISTENS) as f:
+                old = [r for r in json.load(f) if isinstance(r, list) and len(r) == 5]
+        except (OSError, ValueError):
+            old = []
+        rows = [{"at": at, "id": vid, "t": t, "a": a, "d": d or 0, "alt": 1} for at, vid, t, a, d in old]
+        self._write(rows)
+        return rows
+
+    def _write(self, rows, mode="a"):
+        try:
+            with open(JOURNAL, mode, encoding="utf-8") as f:
+                for e in rows:
+                    f.write(json.dumps(e, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except OSError as e:
+            log(f"hörprotokoll: {e}")
+
+    def clear(self):
+        with self.lock:
+            self.cur = None
+            self.rows = []
+            self._write([], "w")
+        for fn in list(self.listeners):
+            fn()
+
+    # ----- laufender Titel -----
+    def begin(self, t, player, src=None):
+        """Neuer Titel beginnt (vorigen vorher mit finish() abschließen)."""
+        loc = localmusic.is_local(t)
+        e = {"at": round(time.time(), 1), "id": t["videoId"], "t": t.get("title") or "?", "a": t.get("artist") or "",
+             "d": round(t.get("duration") or 0), "p": 0.0, "mx": 0.0, "sk": 0, "pa": 0, "ps": 0.0,
+             "v": player.volume, "sh": bool(player.shuffle), "rp": player.repeat,
+             "k": "lokal" if loc else ("offline" if player.offline.path(t["videoId"]) else "stream")}
+        for key, field in (("aid", "artistId"), ("al", "album"), ("alid", "albumId")):
+            if t.get(field):
+                e[key] = t[field]
+        src = src or t.get("_src")
+        if src:
+            e["src"] = src[0]
+            if len(src) > 1 and src[1]:
+                e["sn"] = str(src[1])[:80]
+        self.cur = {"e": e, "t": t, "last": None, "pause_at": None}
+        now, out = self._out
+        if time.time() - now < 30:
+            if out:
+                e["out"] = out
+        else:
+            def done(res):
+                self._out = (time.time(), res)
+                if self.cur is not None and self.cur["e"] is e and res:
+                    e["out"] = res
+            tui.background(output_kind, done=done)
+
+    def tick(self, pos, playing):
+        c = self.cur
+        if c is None:
+            return
+        e = c["e"]
+        if playing and c["last"] is not None and 0 < pos - c["last"] < 1.5:
+            e["p"] += pos - c["last"]
+        c["last"] = pos if playing else None
+        if pos > e["mx"]:
+            e["mx"] = pos
+
+    def paused(self, on):
+        c = self.cur
+        if c is None:
+            return
+        if on and c["pause_at"] is None:
+            c["pause_at"] = time.time()
+            c["e"]["pa"] += 1
+            c["last"] = None
+        elif not on and c["pause_at"] is not None:
+            c["e"]["ps"] += time.time() - c["pause_at"]
+            c["pause_at"] = None
+
+    def seeked(self):
+        if self.cur is not None:
+            self.cur["e"]["sk"] += 1
+            self.cur["last"] = None
+
+    def mark(self, **kw):
+        if self.cur is not None:
+            self.cur["e"].update(kw)
+
+    def finish(self, why):
+        c, self.cur = self.cur, None
+        if c is None:
+            return
+        e = c["e"]
+        if c["pause_at"] is not None:
+            e["ps"] += time.time() - c["pause_at"]
+        e["why"] = e.pop("err", None) and "fehler" or why
+        e["end"] = round(time.time(), 1)
+        e["p"], e["mx"], e["ps"] = round(e["p"], 1), round(e["mx"], 1), round(e["ps"])
+        if c["t"].get("liked"):
+            e["lk"] = 1
+        if e["p"] < 1 and e["why"] != "fehler":
+            return                       # nie wirklich gelaufen (z. B. sofort weitergeklickt, Ladefehler)
+        for k in [k for k, v in e.items() if (v is None or v in (0, 0.0, False, "aus")) and k not in ("p", "d")]:
+            del e[k]                     # Standardwerte weglassen – hält die Datei klein
+        self._write([e])
+        with self.lock:
+            if self.rows is not None:
+                self.rows.append(e)
+        for fn in list(self.listeners):
+            GLib.idle_add(lambda f=fn: f() and False)
+
+
 class Offline:
-    """Meistgehörte Titel offline: Wiedergaben werden gezählt (mit Halbwertszeit – was man länger nicht hört,
+    """Meistgehörte Titel offline:Wiedergaben werden gezählt (mit Halbwertszeit – was man länger nicht hört,
     rutscht von allein raus), die besten N liegen als Audiodatei in OFFLINE_DIR. Abgleich beim Start, alle 6 h
     und wenn ein Titel neu in die Spitze kommt; herausgefallene Dateien werden gelöscht."""
     HALF = 21 * 86400        # Halbwertszeit einer Wiedergabe
@@ -1609,6 +1790,10 @@ class Player:
         self.history = History()
         self.offline = Offline(self.history)
         self.stats = Stats(self.history)
+        self.journal = Journal()
+        self.ctx_fn = None          # Fenster: () → (quelle, name) – woher ein Titel gestartet wurde
+        self.ctx_once = None        # einmalige Quelle für den nächsten Start (Verlauf-Leiste, Radio …)
+        self._why = None            # wie der laufende Titel endet (für das Hörprotokoll)
         self.locallib = localmusic.Library(os.path.join(DATA, "local.json"))
         self.resolver.local = self.offline.path
         self.queue, self.index = [], -1
@@ -1802,7 +1987,9 @@ class Player:
         self._fail_streak = 0
         self.emit("track")
         self.emit("state")
+        self._why = "ende"                          # Überblendung = voriger Titel lief bis (fast) zum Ende
         self._begin_track(t)
+        self.journal.mark(xf=1)
         self.prefetch()
 
     def _begin_track(self, t):
@@ -1810,6 +1997,12 @@ class Player:
         # In den Verlauf erst nach 5 s echter Wiedergabe (Durchskippen zählt nicht) – siehe on_mpv „time-pos“.
         # Hörverlauf in den Einstellungen aus → gar nichts merken.
         self._hist = {"t": t, "played": 0.0, "last": None} if setting("history") else None
+        why, self._why = self._why or "wechsel", None
+        jc = self.journal.cur
+        if not (why == "retry" and jc is not None and jc["e"]["id"] == t["videoId"]):
+            self.journal.finish("ende" if why == "retry" else why)
+            if setting("history"):
+                self.journal.begin(t, self)
         self.yt_end()                 # vorigen Titel bei YouTube abschließen
         self._ytr = {"t": t, "played": 0.0, "last": None, "rep": None, "sent": False, "from": None} \
             if setting("yt_history") and not localmusic.is_local(t) else None
@@ -1826,6 +2019,7 @@ class Player:
         self.emit("state")
         self.emit("notice:abspielprogramm (mpv) war abgestürzt – neu gestartet")
         if was_playing:
+            self._why = "retry"
             self.load(resume=self.restore_pos)
 
     # ----- lokale Musik -----
@@ -1869,10 +2063,25 @@ class Player:
         return self.queue[self.index] if 0 <= self.index < len(self.queue) else None
 
     # ----- Steuerung -----
-    def play_tracks(self, tracks, start=0, shuffle=False):
+    def _src(self):
+        """Quelle für neu gestartete Titel: einmalig gesetzt, sonst vom Fenster (Tab/Detailseite)."""
+        src, self.ctx_once = self.ctx_once, None
+        if src is None and self.ctx_fn is not None:
+            try:
+                src = self.ctx_fn()
+            except Exception:  # noqa: BLE001 – Statistik darf nie das Abspielen stören
+                src = None
+        return src
+
+    def play_tracks(self, tracks, start=0, shuffle=False, src=None):
         tracks = [t for t in tracks if t]
         if not tracks:
             return
+        src = src or self._src()
+        if src:
+            for t in tracks:
+                t["_src"] = src
+        self._why = "wechsel"
         if shuffle:
             tracks = tracks[:]
             random.shuffle(tracks)
@@ -1884,6 +2093,10 @@ class Player:
 
     def play_now(self, t):
         """Titel sofort spielen, Rest der Warteschlange bleibt dahinter."""
+        src = self._src()
+        if src:
+            t["_src"] = src
+        self._why = "wechsel"
         if self.current is None:
             self.play_tracks([t])
             return
@@ -1893,6 +2106,9 @@ class Player:
         self.load()
 
     def add(self, t, next_=False):
+        src = self._src()
+        if src:
+            t["_src"] = src
         if next_ and self.current is not None:
             self.queue.insert(self.index + 1, t)
         else:
@@ -1911,6 +2127,7 @@ class Player:
             self.index -= 1
         elif i == self.index:
             self.index = min(self.index, len(self.queue) - 1)
+            self._why = "wechsel"
             if self.current:
                 self.load()
             else:
@@ -1944,6 +2161,7 @@ class Player:
 
     def jump(self, i):
         if 0 <= i < len(self.queue):
+            self._why = "wechsel"
             self.index = i
             self.load()
 
@@ -2003,6 +2221,7 @@ class Player:
 
     def stop(self):
         self._xf_cancel()
+        self.journal.finish("stop")
         self.yt_end()
         self.mpv.cmd("stop")
         self.started = False
@@ -2055,6 +2274,7 @@ class Player:
         return True
 
     def next(self, auto=False):
+        self._why = "ende" if auto else "skip"
         if auto and self.sleep_track:                 # „nach diesem Titel“: Ende erreicht → stehen bleiben
             self._sleep_stop()
             if self.index + 1 < len(self.queue):
@@ -2082,11 +2302,13 @@ class Player:
         if self.pos > 3 or self.index <= 0:
             self.seek(0)
         else:
+            self._why = "zurück"
             self.index -= 1
             self.load()
 
     def seek(self, sec, relative=False):
         self._xf_cancel()
+        self.journal.seeked()
         self.mpv.cmd("seek", sec, "relative" if relative else "absolute")
         self.pos = max(0, sec if not relative else self.pos + sec)
         self.mpris.seeked()
@@ -2114,12 +2336,14 @@ class Player:
             self.emit(f"error:radio: {res}")
             return
         rest = [x for x in res if x["videoId"] != t["videoId"]]
+        for x in rest:
+            x["_src"] = ("radio", t.get("title"))
         if self.current and self.current["videoId"] == t["videoId"]:
             self.queue = self.queue[:self.index + 1] + rest
             self.emit("queue")
             self.prefetch()
         else:
-            self.play_tracks([t] + rest)
+            self.play_tracks([t] + rest, src=("radio", t.get("title")))
 
     def extend_radio(self, then_next=False):
         cur = self.current
@@ -2144,6 +2368,8 @@ class Player:
                 self.emit(f"error:autoplay: {res}")
                 return
             new = [x for x in res if x["videoId"] not in seen]
+            for x in new[:25]:
+                x["_src"] = ("autoplay", cur.get("title"))
             self.queue += new[:25]
             self.emit("queue")
             if then_next and self.index + 1 < len(self.queue):
@@ -2200,6 +2426,7 @@ class Player:
                 return
             if isinstance(res, Exception):
                 self.loading = False
+                self.journal.mark(err=1)
                 self._fail_streak += 1
                 self.emit(f"error:{t['title']}: {explain(res)}")
                 self.maybe_update_for(str(res))
@@ -2243,6 +2470,7 @@ class Player:
             name, val = msg.get("name"), msg.get("data")
             if name == "time-pos" and val is not None:
                 self.pos = val
+                self.journal.tick(val, not self.paused and not self.loading)
                 h = getattr(self, "_hist", None)
                 if h is not None and not self.paused and not self.loading:
                     if h["last"] is not None and 0 < val - h["last"] < 1.5:   # Sprünge (Spulen) zählen nicht
@@ -2268,6 +2496,7 @@ class Player:
                 if not val and not self.started:
                     return              # leerer mpv (Start/Neustart) meldet „nicht pausiert“ – es läuft aber nichts
                 self.paused = val
+                self.journal.paused(val)
                 self.emit("state")
             elif name == "volume" and val is not None and abs(val - self.volume) >= 1 and not self._sleep_faded and time.monotonic() - self._fade_t > 1.5:
                 self.volume = int(val)
@@ -2297,6 +2526,7 @@ class Player:
                 if vid and self._retry_n.get(vid, 0) < 3:   # bis 3× mit anderer Adresse/anderem Format erneut
                     self._retry_n[vid] = self._retry_n.get(vid, 0) + 1
                     self._retry_kind = si.get("kind")
+                    self._why = "retry"
                     self.load(self.pos)
                     return False
                 self._retry_n.pop(vid, None)
@@ -2338,6 +2568,7 @@ class Player:
         self.autoplay = d.get("autoplay", True)
 
     def shutdown(self):
+        self.journal.finish("stop")
         self.yt_end()
         self.save_state()
         self._xf_cancel()
