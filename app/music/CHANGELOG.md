@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.22.0 (2026-11-07)
+- **Marmelade im WLAN anklicken = beitreten.** Ohne Code klopfst du an: Beim Gastgeber (PC oder Handy) erscheint „… möchte beitreten“ mit „reinlassen“. Gemerkte Geräte kommen sofort rein. Mit eingetipptem Code geht es wie bisher direkt.
+- Als Gastgeber siehst du Anklopfende oben im Marmeladen-Kasten, auch wenn er eingeklappt ist.
+- **Cover-Raster bei hellem Design** ist kein Negativ mehr: Die Punkte zeigen jetzt die dunklen Stellen, wenn die Akzentfarbe dunkler als der Hintergrund ist.
+
 ## 1.21.0 (2026-11-07)
 - **Marmelade: alle sehen dasselbe.** Als Gast zeigen „jetzt“, die Warteschlange, die Vorschau und MPRIS, was beim Gastgeber läuft, mit mitlaufender Zeit. Deine eigene Wiedergabe pausiert solange und ist nach dem Verlassen wieder da.
 - **Steuern als Gast:** Mit Gastgeber-Rechten steuern Zurück, Play/Pause, Weiter und die Zeitleiste die Marmelade. Ohne Rechte sind die Knöpfe ausgegraut.

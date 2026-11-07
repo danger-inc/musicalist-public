@@ -89,6 +89,15 @@ class QueueMixin:
             box.append(head)
             if getattr(self, "jam_rename", None) is not None:
                 box.append(self.jam_rename)
+            import time as _t
+            from rows import who_chip
+            for key, k in list(j.knocks.items()):
+                if k["state"] != "wait" or _t.time() - k["at"] > 120:
+                    continue
+                box.append(hbox(label("󰌹", "accent"), who_chip(k["name"]), label("möchte beitreten", hexpand=True),
+                                tui.Button("reinlassen", lambda key=key: (j.answer_knock(key, True), self.update_jam())),
+                                tui.Button("✕", lambda key=key: (j.answer_knock(key, False), self.update_jam()), danger=True,
+                                           tooltip="ablehnen")))
             if collapsed:
                 return False
             url = j.url() if j.lan_ok else None
@@ -273,19 +282,45 @@ class QueueMixin:
                     self.update_jam()
             tui.background(go, done=done)
 
+        state = label("", "accent", wrap=True)
+        state.set_visible(False)
+
+        def show_state(txt):
+            state.set_label(txt or "")
+            state.set_visible(bool(txt))
+
+        def tap(f):
+            """Gefundene Marmelade anklicken: mit Code gleich beitreten, sonst anklopfen (Gastgeber lässt rein)."""
+            picked["f"] = f
+            if len(__import__("jam").norm_code(code.get_text())) == 6:
+                join()
+                return
+            engine.set_setting("jam_name", name.get_text().strip())
+            show_state(f"klopft bei „{f[0]}“ an …")
+
+            def done(res):
+                show_state(None)
+                if isinstance(res, Exception):
+                    self.say(f"marmelade: {res}", error=True)
+                else:
+                    self.jam_form = None
+                    self.say(f"󰀂 in der marmelade von {res}")
+                    self.update_jam()
+            tui.background(j.knock_join, f, name.get_text(),
+                           lambda s: GLib.idle_add(lambda: show_state(s) and False), done=done)
+
         def found(res):
             tui.clear(found_box)
             res = [] if isinstance(res, Exception) else res
             if not res:
                 found_box.append(label("keine marmelade im wlan gefunden – mit dem code geht es übers internet", "dim"))
+                return
+            found_box.append(label("im wlan – anklicken zum beitreten (ohne code klopfst du an, der gastgeber lässt dich rein):", "dim", wrap=True))
             for f in res:
-                b = tui.Button(f"󰀂 {f[0]}", lambda f=f: (picked.update(f=f), self.say(f"ausgewählt: {f[0]} – jetzt den code eintippen"),
-                                                          code.grab_focus()))
-                found_box.append(b)
-            if len(res) == 1:
-                picked["f"] = res[0]
+                found_box.append(tui.Button(f"󰀂 {f[0]}", lambda f=f: tap(f), tooltip="beitreten"))
         tui.background(j.discover, done=found)
         form.append(found_box)
+        form.append(state)
         form.append(hbox(name, code))
         form.append(addr)
         form.append(hbox(tui.Button("beitreten", join), tui.Button("abbrechen", lambda: (setattr(self, "jam_form", None),

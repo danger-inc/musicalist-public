@@ -40,8 +40,19 @@ BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
 
 DOTS = [(0, 0, 0x01), (0, 1, 0x02), (0, 2, 0x04), (1, 0, 0x08), (1, 1, 0x10), (1, 2, 0x20), (0, 3, 0x40), (1, 3, 0x80)]
 
-def dither(pb, w, h):
-    """Bild → w×h Punkte (True = an): Histogramm-Ausgleich + Bayer-Rasterung."""
+def ink_darker():
+    """Helles Design: die Punkte (Akzentfarbe) sind dunkler als der Hintergrund → dunkle Bildstellen bekommen Punkte,
+    sonst wirkt das Cover wie ein Negativ."""
+    c = tui.colors()
+    p, bg = c.get("primary"), c.get("background")
+    if p is None or bg is None:
+        return False
+    lum = lambda x: 0.299 * x.red + 0.587 * x.green + 0.114 * x.blue
+    return lum(p) < lum(bg)
+
+
+def dither(pb, w, h, flip=False):
+    """Bild → w×h Punkte (True = an): Histogramm-Ausgleich + Bayer-Rasterung. flip: dunkle Stellen = an."""
     pb = pb.scale_simple(w, h, GdkPixbuf.InterpType.BILINEAR)
     px, stride, nch = pb.get_pixels(), pb.get_rowstride(), pb.get_n_channels()
     lum = [[0.0] * w for _ in range(h)]
@@ -57,12 +68,12 @@ def dither(pb, w, h):
     for i, v in enumerate(flat):   # gleiche Helligkeit → mittlerer Rang (große einfarbige Flächen = Halbton)
         first.setdefault(v, i)
         rank[v] = (first[v] + i) / 2 / total
-    return [[rank[lum[y][x]] * 16 > BAYER[y % 4][x % 4] + 0.5 for x in range(w)] for y in range(h)]
+    return [[(1 - rank[lum[y][x]] if flip else rank[lum[y][x]]) * 16 > BAYER[y % 4][x % 4] + 0.5 for x in range(w)] for y in range(h)]
 
-def braille(pb, cols, rows):
+def braille(pb, cols, rows, flip=False):
     """Bild → Braille-Zeichen (2×4 Punkte je Zeichen)."""
     # Cover sind quadratisch; Zeichen sind ~2× so hoch wie breit → Braille passt (2×4 Punkte) 1:1
-    on = dither(pb, cols * 2, rows * 4)
+    on = dither(pb, cols * 2, rows * 4, flip)
     lines = []
     for cy in range(rows):
         line = []
@@ -128,7 +139,8 @@ class Cover(Gtk.Label):
             return
 
         def work():
-            return braille(fetch_pixbuf(big_thumb(url)), self.cols, self.rows)
+            return braille(fetch_pixbuf(big_thumb(url)), self.cols, self.rows, flip)
+        flip = ink_darker()
 
         def done(res):
             if self.url == url and isinstance(res, str):
@@ -173,7 +185,8 @@ class DotCover(Gtk.DrawingArea):
             if self.url == url and isinstance(res, list):
                 self.on = res
                 self.queue_draw()
-        tui.background(lambda: dither(fetch_pixbuf(big_thumb(url)), self.DOTS, self.DOTS), done=done)
+        flip = ink_darker()
+        tui.background(lambda: dither(fetch_pixbuf(big_thumb(url)), self.DOTS, self.DOTS, flip), done=done)
 
     def _draw(self, _a, cr, width, height):
         c = tui.colors()

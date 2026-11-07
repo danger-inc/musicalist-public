@@ -192,9 +192,64 @@ class Jam:
         self._net_state = None
         self._net_state_at = 0
         self._kick = False
+        self.knocks = {}            # Gastgeber: Anklopfende key → {"name", "at", "state": wait|ok|no}
         self.remote = None          # Gast: letzter Stand des Gastgebers (+ "_at" = abgeholt, ms)
         self._poll_gen = 0
         self._poke_at = 0
+
+    # ----- Anklopfen (im WLAN gefunden, ohne Code): Gastgeber lässt rein, gemerkte Geräte sofort -----
+    def knock(self, name, dev):
+        key = _gkey(name, dev)
+        if key in self.kicked:
+            return {"status": "no"}
+        if key in trusted():
+            return {"status": "ok", "code": self.code}
+        now = time.time()
+        k = self.knocks.get(key)
+        if k is None or (k["state"] == "wait" and now - k["at"] > 120):
+            self.knocks = {kk: v for kk, v in self.knocks.items() if now - v["at"] < 120}
+            self.knocks[key] = {"name": name, "at": now, "state": "wait"}
+            self._event(f"{name} möchte beitreten – „reinlassen“ unter marmelade")
+            if self.say:
+                GLib.idle_add(lambda: self.say(f"󰌹 {name} möchte der marmelade beitreten (warteschlange → reinlassen)") and False)
+            return {"status": "wait"}
+        if k["state"] == "ok":
+            return {"status": "ok", "code": self.code}
+        return {"status": k["state"]}
+
+    def answer_knock(self, key, ok):
+        k = self.knocks.get(key)
+        if k:
+            k["state"], k["at"] = ("ok" if ok else "no"), time.time()
+            self._notify()
+
+    def knock_join(self, found, name, status=None):
+        """Gast: gefundene Marmelade ohne Code – anklopfen, warten bis reingelassen (max. 2 min), dann beitreten."""
+        nm = (name or host_name()).strip()
+        hosts = list(found[3]) if len(found) > 3 else [found[1]]
+        last = None
+        for h in hosts:
+            url = f"http://{h}:{found[2]}/api/knock?" + urllib.parse.urlencode({"n": nm, "d": device_id()})
+            end = time.time() + 120
+            try:
+                while time.time() < end:
+                    r = self._get(url, timeout=3)
+                    if r.get("status") == "ok":
+                        return self.join(h, found[2], r["code"], nm, hosts)
+                    if r.get("status") == "no":
+                        raise RuntimeError("der gastgeber hat abgelehnt")
+                    if status:
+                        status("wartet, bis der gastgeber dich reinlässt …")
+                    time.sleep(1.5)
+                raise RuntimeError("der gastgeber hat nicht reagiert – code eintippen geht auch")
+            except RuntimeError as e:
+                # ältere Gastgeber kennen /api/knock nicht → „code falsch“ bzw. 404
+                if str(e) in ("code falsch", "http 404", "?"):
+                    raise RuntimeError("der gastgeber hat eine ältere version – bitte code eintippen") from None
+                raise
+            except OSError as e:
+                last = e
+        raise RuntimeError(f"gastgeber im wlan nicht erreichbar ({last})")
 
     # ----- Gast: Stand mitlesen und im Player spiegeln („läuft“ zeigt überall dasselbe) -----
     def poke(self):
@@ -263,7 +318,7 @@ class Jam:
             return True
         from http.server import ThreadingHTTPServer
         self.code = "".join(secrets.choice(ALPHA) for _ in range(6))
-        self.guests, self.events, self.error, self.kicked = {}, [], None, set()
+        self.guests, self.events, self.error, self.kicked, self.knocks = {}, [], None, set(), {}
         self._hosting = True
         # im WLAN (auch für Browser-Gäste) – geht der Port nicht, läuft die Jam trotzdem übers Internet
         try:
@@ -474,6 +529,8 @@ class Jam:
                 q = dict(urllib.parse.parse_qsl(u.query))
                 if u.path in ("/", "/index.html"):
                     return self._send(200, jam.page(), "text/html; charset=utf-8")
+                if u.path == "/api/knock":
+                    return self._send(200, jam.knock((q.get("n") or "gast").strip()[:24] or "gast", q.get("d")))
                 if norm_code(q.get("c")) != jam.code:
                     return self._send(401, {"error": "code falsch"})
                 name = (q.get("n") or "gast").strip()[:24] or "gast"
