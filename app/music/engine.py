@@ -409,6 +409,14 @@ def browser_auth():
     return headers
 
 
+def browser_cookie():
+    """Cookie-Zeile der Anmeldung (für die gekoppelte Handy-App) oder None."""
+    try:
+        return browser_auth().get("cookie") or None
+    except (OSError, ValueError):
+        return None
+
+
 def account_name():
     from ytmusicapi import YTMusic
     info = YTMusic(browser_auth()).get_account_info()
@@ -1431,6 +1439,54 @@ class Journal:
         for fn in list(self.listeners):
             fn()
 
+    # ----- Abgleich mit der Handy-App (handy_sync.py) -----
+    def merge(self, rows):
+        """Fremde Einträge übernehmen (doppelte = gleiches at + id überspringen). Gibt die Zahl neuer zurück."""
+        rows = [e for e in rows if isinstance(e, dict) and "at" in e and "id" in e]
+        if not rows:
+            return 0
+        have = {(round(float(e["at"]), 1), e["id"]) for e in self.load()}
+        new = []
+        for e in rows:
+            k = (round(float(e["at"]), 1), e["id"])
+            if k not in have:
+                have.add(k)
+                new.append(e)
+        if new:
+            with self.lock:
+                self._write(new)
+                if self.rows is not None:
+                    self.rows.extend(new)
+                    self.rows.sort(key=lambda e: e["at"])
+            for fn in list(self.listeners):
+                GLib.idle_add(lambda f=fn: f() and False)
+        return len(new)
+
+    def lines_from(self, start, limit=4000, skip_dev=None):
+        """Einträge ab Zeile start der Datei (Reihenfolge des Schreibens) → (einträge, nächster stand, mehr?).
+        Ist die Datei kürzer als start (gelöscht), geht es bei 0 los."""
+        self.load()                      # legt die Datei beim ersten Mal an (Übernahme aus listens.json)
+        out, n = [], 0
+        try:
+            with open(JOURNAL, encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError:
+            return [], 0, False
+        if start > len(lines):
+            start = 0
+        n = start
+        for line in lines[start:]:
+            if len(out) >= limit:
+                return out, n, True
+            n += 1
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and "at" in e and "id" in e and (skip_dev is None or e.get("dev") != skip_dev):
+                out.append(e)
+        return out, n, False
+
     # ----- laufender Titel -----
     def begin(self, t, player, src=None):
         """Neuer Titel beginnt (vorigen vorher mit finish() abschließen)."""
@@ -2073,9 +2129,50 @@ class Player:
                 src = None
         return src
 
+    # ----- Jam (jam.py): als Gast gehen Titel an den Gastgeber, als Gastgeber kommen Gäste-Titel herein -----
+    jam = None
+
+    def jam_route(self, t, next_=False):
+        """Beigetreten? Dann den Titel zur Jam schicken statt selbst zu spielen. True = erledigt."""
+        j = self.jam
+        if j is None or j.joined is None or not t:
+            return False
+        t = dict(t)
+
+        def done(res):
+            if j.say:
+                j.say(f"marmelade: {res}" if isinstance(res, Exception) else f"󰀂 „{t.get('title')}“ in die marmelade")
+        tui.background(j.add_remote, t, next_, done=done)
+        return True
+
+    def queue_slot(self, next_=False):
+        """Platz für eingereihte Titel: hinter dem laufenden und den schon eingereihten, aber vor Radio/Autoplay."""
+        if self.current is None:
+            return len(self.queue)
+        if next_:
+            return self.index + 1
+        i = self.index + 1
+        while i < len(self.queue) and (self.queue[i].get("_src") or ("",))[0] not in ("radio", "autoplay"):
+            i += 1
+        return i
+
+    def jam_insert(self, t, next_=False):
+        """Titel eines Jam-Gasts einreihen (GTK-Thread)."""
+        was_empty = self.current is None
+        pos = self.queue_slot(next_)
+        self.queue.insert(pos, t)
+        if was_empty:
+            self.index = pos
+            self._why = "wechsel"
+            self.load()
+        self.emit("queue")
+        self.prefetch()
+
     def play_tracks(self, tracks, start=0, shuffle=False, src=None):
         tracks = [t for t in tracks if t]
         if not tracks:
+            return
+        if self.jam_route(tracks[min(start, len(tracks) - 1)]):
             return
         src = src or self._src()
         if src:
@@ -2093,6 +2190,8 @@ class Player:
 
     def play_now(self, t):
         """Titel sofort spielen, Rest der Warteschlange bleibt dahinter."""
+        if self.jam_route(t):
+            return
         src = self._src()
         if src:
             t["_src"] = src
@@ -2106,11 +2205,13 @@ class Player:
         self.load()
 
     def add(self, t, next_=False):
+        if self.jam_route(t, next_):
+            return
         src = self._src()
         if src:
             t["_src"] = src
-        if next_ and self.current is not None:
-            self.queue.insert(self.index + 1, t)
+        if self.current is not None:
+            self.queue.insert(self.queue_slot(next_), t)     # vor Radio/Autoplay, wie „Warteschlange“ bei Spotify
         else:
             self.queue.append(t)
         if self.current is None:
@@ -2323,6 +2424,8 @@ class Player:
         self.emit("state")
 
     def start_radio(self, t=None):
+        if self.jam is not None and self.jam.joined is not None:
+            return                     # als Gast spielt der Gastgeber
         t = t or self.current
         if not t:
             return

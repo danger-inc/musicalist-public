@@ -4,7 +4,9 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Graphene, Gtk, Pango, Pango
 
 import tui
 from tui import label, hbox, vbox, esc
+import engine
 from engine import fmt
+from jam import host_name as jam_host_name
 from rows import track_row, coll_row, artist_link
 
 
@@ -32,8 +34,260 @@ class QueueMixin:
         self.queue_panel.body.append(self.queue_box)
         self.queue_panel.body.append(self.queue_more_bottom)
         self.queue_panel.body.append(self.queue_empty)
+        page.append(self.build_jam())
         page.append(self.queue_panel)
         self.add_page("queue", page)
+
+    # ---------- Jam (jam.py) ----------
+    def build_jam(self):
+        panel = tui.Panel("󰀂 marmelade")
+        self.jam_box = vbox(spacing=6)
+        panel.body.append(self.jam_box)
+        self.jam_form = None
+        self.jam_remote = None          # letzter Zustand des Gastgebers (als Gast)
+        j = self.p.jam
+        if j is not None:
+            j.say = self.say
+            c = tui.colors()
+
+            def hx(name, fb):
+                v = c.get(name)
+                return "#%02x%02x%02x" % (int(v.red * 255), int(v.green * 255), int(v.blue * 255)) if v else fb
+            j.colors = (hx("background", "#faf8ff"), hx("on_background", hx("foreground", "#1b1b21")), hx("primary", "#4c5c92"))
+            j.listeners.append(self.update_jam)
+        self.update_jam()
+        GLib.timeout_add_seconds(3, self._jam_poll)
+        return panel
+
+    def _jam_poll(self):
+        j = self.p.jam
+        if j is not None and j.joined is not None and self.get_visible():
+            def done(res):
+                self.jam_remote = None if isinstance(res, Exception) else res
+                self.update_jam()
+            tui.background(j.remote_state, done=done)
+        return True
+
+    def update_jam(self):
+        j = self.p.jam
+        box = getattr(self, "jam_box", None)
+        if box is None:
+            return False
+        tui.clear(box)
+        if j is None:
+            box.append(label("marmelade nicht verfügbar", "dim"))
+            return False
+        jm = __import__("jam")
+        collapsed = bool(engine.setting("jam_collapsed"))
+
+        def fold():
+            engine.set_setting("jam_collapsed", not collapsed)
+            self.update_jam()
+        fold_btn = tui.Button("󰅀" if collapsed else "󰅃", fold, tooltip="marmelade auf-/zuklappen")
+        if j.hosting:
+            head = hbox(label(jm.jam_title(), "accent", ellipsize=True, hexpand=True),
+                        label(f"code {j.code[:3]} {j.code[3:]} · " + (f"{len(j.guests)} gäste" if j.guests else "noch keine gäste"), "dim"),
+                        tui.Button("󰏫", self.jam_rename_form, tooltip="marmelade umbenennen"), fold_btn)
+            box.append(head)
+            if getattr(self, "jam_rename", None) is not None:
+                box.append(self.jam_rename)
+            if collapsed:
+                return False
+            url = j.url() if j.lan_ok else None
+            qr = __import__("jam").qr_matrix(url) if url else None
+            info = vbox(spacing=2)
+            info.append(label("code", "dim"))
+            big = label(j.code, "accent")
+            big.set_markup(f"<span size='xx-large' weight='bold'>{j.code[:3]} {j.code[3:]}</span>")
+            info.append(big)
+            info.append(label("app (handy oder pc): marmelade beitreten → code – klappt überall, auch übers internet. "
+                              "browser ohne app: qr-code, nur im selben wlan.", "dim", wrap=True))
+            info.append(label("internet: " + (j.net_status or "startet …"), "accent" if j.net_status == "verbunden" else "dim"))
+            if url:
+                a = label(url.split("/?")[0], "dim")
+                a.set_selectable(True)
+                info.append(a)
+            info.set_hexpand(True)
+            row = hbox(spacing=16)
+            if qr:
+                n = len(qr)
+                cell = max(3, 168 // n)
+                area = Gtk.DrawingArea(content_width=n * cell, content_height=n * cell)
+                fg = tui.colors().get("on_background") or tui.colors().get("foreground")
+                bg = tui.colors().get("background")
+
+                def draw(_a, cr, _w, _h, m=qr, cell=cell, fg=fg, bg=bg):
+                    if bg is not None:
+                        cr.set_source_rgb(bg.red, bg.green, bg.blue)
+                    else:
+                        cr.set_source_rgb(1, 1, 1)
+                    cr.paint()
+                    if fg is not None:
+                        cr.set_source_rgb(fg.red, fg.green, fg.blue)
+                    else:
+                        cr.set_source_rgb(0, 0, 0)
+                    for y, line in enumerate(m):
+                        for x, on in enumerate(line):
+                            if on:
+                                cr.rectangle(x * cell, y * cell, cell, cell)
+                    cr.fill()
+                area.set_draw_func(draw)
+                area.set_valign(Gtk.Align.START)
+                row.append(area)
+            row.append(info)
+            box.append(row)
+            if not j.guests:
+                box.append(label("noch keine gäste", wrap=True))
+            for key, g in sorted(j.guests.items(), key=lambda kv: (kv[1].get("name") or "").lower()):
+                admin = j.is_admin(key)
+                tr = bool(g.get("dev")) and g["dev"] in jm.trusted()
+                row = hbox(label("󰌆" if admin else "󰀄", "accent" if admin else "dim"),
+                           label(g.get("name") or "gast", "accent" if admin else "jamguest", ellipsize=True, hexpand=True),
+                           label(f"{g.get('added', 0)} titel" if g.get("added") else "", "dim"),
+                           label("gemerkt" if tr else "", "accent"))
+                row.append(tui.Button("rechte weg" if admin else "󰌆 rechte", lambda k=key, a=admin: (j.set_admin(k, not a), self.update_jam()),
+                                      tooltip="gastgeber-rechte: überspringen, pause, titel entfernen"))
+                if g.get("dev"):
+                    row.append(tui.Button("vergessen" if tr else "merken", lambda k=key, t=tr: (j.trust(k, not t), self.update_jam()),
+                                          tooltip="gerät merken: hat in jeder deiner marmeladen sofort rechte"))
+                row.append(tui.Button("entfernen", lambda k=key: (j.kick(k), self.update_jam()), danger=True,
+                                      tooltip="aus der marmelade entfernen (kann bis zum ende dieser marmelade nicht wieder beitreten)"))
+                box.append(row)
+            for e in j.events[:3]:
+                box.append(label(f"‣ {e}", "dim", ellipsize=True))
+            box.append(hbox(label(j.error or f"für browser-gäste im wlan: port {__import__('jam').PORT}/tcp in der firewall "
+                                  f"öffnen (sudo ufw allow {__import__('jam').PORT}/tcp)", "dim", wrap=True, hexpand=True),
+                            tui.Button("marmelade beenden", lambda: (j.stop(), self.say("marmelade beendet")), danger=True)))
+        elif j.joined is not None:
+            st = self.jam_remote
+            via = " · übers internet" if j.joined.get("net") else ""
+            title = (st or {}).get("title") or f"marmelade von {j.joined['host_name']}"
+            admin = j.am_admin(st)
+            now = (st or {}).get("now")
+            box.append(hbox(label(f"● {title}{via}", "accent", ellipsize=True, hexpand=True),
+                            label(f"läuft: {now.get('t')}" if collapsed and now else "", "dim", ellipsize=True), fold_btn))
+
+            def ctl(op, vid=None):
+                def done(res):
+                    if isinstance(res, Exception):
+                        self.say(f"marmelade: {res}", error=True)
+                    GLib.timeout_add(1800 if j.joined and j.joined.get("net") else 400, lambda: self._jam_poll() and False)
+                tui.background(j.ctl_remote, op, vid, done=done)
+            if admin:
+                playing = bool((st or {}).get("playing"))
+                box.append(hbox(label("󰌆 du hast gastgeber-rechte", "accent", hexpand=True),
+                                tui.Button("󰒮", lambda: ctl("prev"), tooltip="zurück"),
+                                tui.Button("󰏤" if playing else "󰐊", lambda: ctl("toggle"), tooltip="pause/weiter"),
+                                tui.Button("󰒭", lambda: ctl("next"), tooltip="überspringen")))
+            if collapsed:
+                return False
+            if st is None:
+                box.append(label("wartet auf den stand vom gastgeber …", "dim"))
+            else:
+                if now:
+                    box.append(label(f"läuft: {now.get('t')} · {now.get('a')}", ellipsize=True))
+                ppl = st.get("people") or [{"n": n, "a": False} for n in st.get("guests") or []]
+                if ppl:
+                    box.append(label("gäste: " + ", ".join(p["n"] + (" 󰌆" if p.get("a") else "") for p in ppl), "dim", wrap=True))
+                for t in (st.get("queue") or [])[:8]:
+                    who = f"  · {t['sn']}" if t.get("src") == "jam" and t.get("sn") else ""
+                    r = hbox(label(f"  {t.get('t')} – {t.get('a')}{who}", "dim", ellipsize=True, hexpand=True))
+                    if admin:
+                        r.append(tui.Button("✕", lambda v=t.get("id"): ctl("remove", v), tooltip="aus der marmeladen-warteschlange entfernen"))
+                    box.append(r)
+            box.append(hbox(label("abspielen, „als nächstes“ und „+“ schicken titel jetzt in die marmelade.", "dim", wrap=True,
+                                  hexpand=True),
+                            tui.Button("verlassen", lambda: (j.leave(), setattr(self, "jam_remote", None)), danger=True)))
+        else:
+            box.append(hbox(tui.Button("󰀂 marmelade starten", self.jam_start,
+                                       tooltip="Andere im WLAN (Handy-App oder Browser) können Titel hinzufügen"),
+                            tui.Button("󰌹 marmelade beitreten", self.jam_join_form), label("", hexpand=True)))
+            if self.jam_form is not None:
+                box.append(self.jam_form)
+        return False
+
+    def jam_rename_form(self):
+        if getattr(self, "jam_rename", None) is not None:
+            self.jam_rename = None
+            self.update_jam()
+            return
+        jm = __import__("jam")
+        e = tui.Entry(f"marmelade von {jm.host_name()}", text=engine.setting("jam_title") or "")
+
+        def save(*_):
+            self.p.jam.rename(e.get_text())
+            self.jam_rename = None
+            self.say(f"marmelade heißt jetzt „{jm.jam_title()}“")
+            self.update_jam()
+        e.connect("activate", save)
+        self.jam_rename = hbox(e, tui.Button("speichern", save), tui.Button("abbrechen", self.jam_rename_form))
+        self.update_jam()
+
+    def jam_start(self):
+        j = self.p.jam
+        if j.start():
+            self.say(f"marmelade läuft – code {j.code}")
+        else:
+            self.say(f"marmelade startet nicht: {j.error}", error=True)
+        self.update_jam()
+
+    def jam_join_form(self):
+        j = self.p.jam
+        form = vbox(spacing=6)
+        found_box = vbox(spacing=4)
+        found_box.append(label("sucht marmeladen im wlan …", "dim"))
+        name = tui.Entry("dein name", text=engine.setting("jam_name") or jam_host_name())
+        code = tui.Entry("code (6 zeichen)", width=10)
+        addr = tui.Entry("adresse im wlan (optional)")
+        picked = {"f": None}
+
+        def join():
+            f = picked["f"]
+            host, port = (f[1], f[2]) if f else (addr.get_text().split(":")[0].strip(), (addr.get_text().split(":") + [""])[1] or 37530)
+            c = __import__("jam").norm_code(code.get_text())
+            if len(c) != 6:
+                self.say("der code hat 6 zeichen", error=True)
+                return
+            engine.set_setting("jam_name", name.get_text().strip())
+
+            def go(host=host, port=port, c=c, nm=name.get_text()):
+                # im WLAN gefunden/angegeben → direkt; sonst (oder wenn das WLAN Geräte trennt) übers Internet
+                if host:
+                    try:
+                        return j.join(host, port, c, nm)
+                    except Exception:  # noqa: BLE001
+                        pass
+                return j.join_net(c, nm)
+
+            def done(res):
+                if isinstance(res, Exception):
+                    self.say(f"marmelade: {res}", error=True)
+                else:
+                    self.jam_form = None
+                    self.say(f"󰀂 in der marmelade von {res}")
+                    self.update_jam()
+            tui.background(go, done=done)
+
+        def found(res):
+            tui.clear(found_box)
+            res = [] if isinstance(res, Exception) else res
+            if not res:
+                found_box.append(label("keine marmelade im wlan gefunden – mit dem code geht es übers internet", "dim"))
+            for f in res:
+                b = tui.Button(f"󰀂 {f[0]}", lambda f=f: (picked.update(f=f), self.say(f"ausgewählt: {f[0]}")))
+                found_box.append(b)
+            if len(res) == 1:
+                picked["f"] = res[0]
+        tui.background(j.discover, done=found)
+        form.append(found_box)
+        form.append(hbox(name, code))
+        form.append(addr)
+        form.append(hbox(tui.Button("beitreten", join), tui.Button("abbrechen", lambda: (setattr(self, "jam_form", None),
+                                                                                         self.update_jam())),
+                         label("", hexpand=True)))
+        code.connect("activate", lambda *_: join())
+        self.jam_form = form
+        self.update_jam()
 
     QUEUE_WINDOW = 100          # so viele Zeilen werden gebaut (jede kostet ~1,5 ms und ~0,3 MB), der Rest auf Wunsch
 

@@ -1,5 +1,30 @@
 # musicalist – Änderungen
 
+## 1.20.0 (2026-11-07)
+- **Jam heißt jetzt Marmelade** 🍓: überall in der Oberfläche und auf der Browser-Seite für Gäste. Technisch bleibt alles gleich: Ältere Versionen finden die Marmelade weiter und treten mit dem Code bei.
+- **Jam: Rechte für Gäste.** Als Gastgeber kannst du jedem Gast in der Jam-Liste Gastgeber-Rechte geben. Wer Rechte hat, kann überspringen, zurückgehen, pausieren und Titel aus der Warteschlange nehmen, aus der App, vom PC oder im Browser.
+- **Geräte merken:** Ein gemerktes Gerät hat in jeder deiner Jams sofort Rechte.
+- **Gäste entfernen:** Ein entfernter Gast kann bis zum Ende dieser Jam nicht wieder beitreten.
+- **Jam umbenennen** (Stift-Knopf): Gäste sehen den neuen Namen sofort, auch in der Jam-Suche im WLAN.
+- Der Jam-Kasten lässt sich einklappen. Als Gast mit Rechten bleiben die Steuerknöpfe dann sichtbar.
+- Gleiches Protokoll wie die Handy-App 0.6.0. Ältere Versionen können weiter beitreten, aber keine Rechte bekommen.
+
+## 1.19.0 (2026-11-07)
+- **Jam auch übers Internet**: Klappt jetzt auch in WLANs, die Geräte voneinander trennen (Uni, Hotel, Gäste-WLAN), und über mobile Daten. Die Jam läuft dann zusätzlich über den Relay-Dienst ntfy.sh – Ende-zu-Ende verschlüsselt, Schlüssel und Thema kommen nur aus dem Jam-Code, der Dienst sieht nur Kauderwelsch.
+- **Ein Code für alles** (6 Zeichen statt 4 Ziffern): im selben WLAN direkt, sonst automatisch übers Internet. Browser-Gäste ohne App (QR-Code) gehen weiterhin nur im selben WLAN. Geht der Port im WLAN nicht (Firewall), läuft die Jam trotzdem übers Internet.
+
+## 1.18.0 (2026-11-07)
+- **Jam im WLAN** (wie Spotify Jam, gleich wie in der Handy-App): In der Warteschlange gibt es den Kasten „jam“. „jam starten“ zeigt einen 4-stelligen Code, die Adresse und einen QR-Code. Andere treten mit der Handy-App bei (die Jam wird im WLAN gefunden), mit musicalist auf einem anderen PC („jam beitreten“) oder ohne App im Browser (QR-Code scannen). Gäste sehen, was läuft, suchen und fügen Titel hinzu; sie können nicht überspringen oder pausieren. Ihre Titel landen vor Radio/Autoplay, mit ihrem Namen.
+- Als Gast schicken „abspielen“, „als nächstes“ und „+“ den Titel an den Gastgeber, statt ihn selbst zu spielen. Der Kasten zeigt, was dort läuft und als Nächstes kommt.
+- **Anhängen** reiht jetzt vor Radio/Autoplay ein (wie „Warteschlange“ bei Spotify), statt hinter 25 Radio-Titel.
+- Der Gastgeber braucht Port 37530/tcp in der Firewall (z. B. `sudo ufw allow 37530/tcp`; NixOS: `programs.musicalist.openFirewall = true`). Neues Paket `qrcode` für den QR-Code (ohne geht alles, nur ohne Bild).
+- Analyse: Quellen „entdecken“ und „jam“ (aus der Handy-App) haben eigene Namen.
+
+## 1.17.0 (2026-11-07)
+- **Abgleich mit der Handy-App im WLAN**: In den Einstellungen gibt es den neuen Kasten „handy-app“. Ein Klick auf „handy koppeln“ zeigt einen Code und die Adresse für 3 Minuten. Danach werden die Hörprotokolle von Handy und PC zusammengeführt, und die Analyse zeigt alles, was du irgendwo gehört hast. Auf Wunsch übernimmt das Handy die YouTube-Anmeldung von hier.
+- Gekoppelt wird per Schlüsseltausch mit Code-Bestätigung, danach ist jeder Abgleich verschlüsselt und signiert. Nur gekoppelte Geräte bekommen Antwort, und ein falscher Code beendet die Kopplung. Der Abgleich läuft erst, nachdem einmal gekoppelt wurde, und braucht Port 37526/tcp in der Firewall (z. B. `sudo ufw allow 37526/tcp`; NixOS: `programs.musicalist.openFirewall = true`). Ist `zeroconf` installiert, findet das Handy den PC von selbst, sonst tippt man die Adresse ein.
+- Analyse: Die Quelle „startseite“ (Titel von der YouTube-Music-Startseite) hat jetzt einen eigenen Namen.
+
 ## 1.16.0 (2026-11-06)
 - **Neuer Tab 7 „analyse“**: dein Hörverhalten im Detail, für eine **Woche, einen Monat, ein Jahr oder insgesamt**. Mit ‹ › (Bild↑/Bild↓) blätterst du zurück, `w` `m` `j` `g` wählen den Zeitraum. Verglichen wird mit dem Zeitraum davor, bei laufenden Zeiträumen fair bis zum gleichen Zeitpunkt.
   Zu sehen sind: Zusammenfassung in Sätzen, Kennzahlen mit Veränderung, Verlauf als Säulen und Kalender-Heatmap, Top-Titel (nach Wiedergaben oder Hörzeit), Top-Künstler und Top-Alben (anklickbar), Entdeckungen und Comebacks, Obsession, Ohrwurm und Dauerbrenner, eine Heatmap Wochentag × Uhrzeit, Tageszeiten, typischer Start und typisches Ende, Sitzungen und Serien, Überspringen, Spulen und Pausen, Quellen (Radio, Playlists …) und Geräte (Kopfhörer, Lautsprecher, Bluetooth), Vielfalt, Geschmack im Verlauf und Meilensteine. Über jedem Diagramm zeigt ein Tooltip die genauen Werte.

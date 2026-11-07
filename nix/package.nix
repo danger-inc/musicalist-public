@@ -35,6 +35,8 @@ let
     p.yt-dlp-ejs
     p.requests
     p.mutagen
+    p.zeroconf # Handy-App findet den PC im WLAN
+    p.qrcode # QR-Code der Jam
     p.pip # für die eingebaute yt-dlp-Aktualisierung (nach ~/.local/share/musicalist/pylibs)
   ]);
   src = lib.cleanSourceWith {

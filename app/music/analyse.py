@@ -21,7 +21,8 @@ SRC_NAMES = {"radio": "radio", "autoplay": "autoplay", "playlist": "playlists", 
              "künstler": "künstlerseiten", "suche": "suche", "verlauf": "verlauf", "bibliothek": "bibliothek",
              "lokal": "lokale musik", "warteschlange": "warteschlange", "jetzt": "jetzt-seite",
              "analyse": "analyse", "liked": "lieblingssongs", "history": "verlauf", "local": "lokale musik",
-             "artist": "künstlerseiten", "podcast": "podcasts", "new": "neuheiten"}
+             "artist": "künstlerseiten", "podcast": "podcasts", "new": "neuheiten",
+             "start": "startseite", "entdecken": "entdecken", "jam": "marmelade"}
 
 
 # ---------- einzelne Einträge ----------

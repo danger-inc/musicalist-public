@@ -61,6 +61,13 @@ class App(Gtk.Application):
         self.hold()
         tui.Theme.get()
         self.player = engine.Player()
+        # Abgleich mit der Handy-App (läuft erst, wenn einmal gekoppelt wurde)
+        import handy_sync
+        self.player.handy = handy_sync.Server(self.player)
+        if engine.setting("handy_sync"):
+            self.player.handy.start()
+        import jam
+        self.player.jam = jam.Jam(self.player)
         self.cava = ui.Cava()
         self.sources = sources.Sources()
         self.win = ui.MusicWindow(self, self.player, self.cava, self.sources)
@@ -191,6 +198,11 @@ class App(Gtk.Application):
             return False
         self.stopped = True
         self.player.shutdown()                # mpv beenden → Musik aus
+        for part in (self.player.handy, self.player.jam):
+            try:
+                part.stop()
+            except Exception:  # noqa: BLE001
+                pass
         if self.cava.proc is not None:
             self.cava.proc.terminate()
         if engine.IS_WIN:             # mpv/Python sicher beenden – sonst bleibt unter Windows ein Rest im Hintergrund

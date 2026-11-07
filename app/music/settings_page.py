@@ -77,6 +77,7 @@ class SettingsMixin:
             self.desk_pos.set_sensitive(False)
         page.append(panel)
         page.append(self.build_offline())
+        page.append(self.build_handy())
         page.append(self.build_local())
         page.append(self.build_ytdlp())
         self.add_page("settings", page)
@@ -187,6 +188,79 @@ class SettingsMixin:
         t = engine.setting("ytdlp_checked") or 0
         when = time.strftime("%d.%m. %H:%M", time.localtime(t)) if t else "noch nie"
         self.ytdlp_info.set_label(f"version {engine.ytdlp_version()} · zuletzt geprüft {when}")
+        return False
+
+    # ---------- handy-app (abgleich im wlan, handy_sync.py) ----------
+    def build_handy(self):
+        panel = tui.Panel("󰄜 handy-app")
+        b = panel.body
+        self.handy_info = label("", "dim", wrap=True, xalign=0, hexpand=True)
+        self.handy_btn = tui.Button("󰌷 handy koppeln", self.handy_pair,
+                                    tooltip="Zeigt einen Code für 3 Minuten – in der Handy-App unter\n"
+                                            "einstellungen → pc-abgleich eintippen.")
+        b.append(hbox(self.handy_info, self.handy_btn, spacing=10))
+        self.handy_code = label("", "accent", xalign=0)
+        self.handy_code.set_selectable(True)
+        self.handy_code.set_visible(False)
+        b.append(self.handy_code)
+        self.handy_list = vbox(spacing=4)
+        b.append(self.handy_list)
+        b.append(label("das hörprotokoll von handy und pc wird im wlan zusammengeführt – die analyse zeigt dann "
+                       "alles. auf wunsch übernimmt das handy die youtube-anmeldung von hier. alles verschlüsselt, "
+                       f"nur gekoppelte geräte. braucht port {self._handy_port()}/tcp in der firewall "
+                       f"(z. b. sudo ufw allow {self._handy_port()}/tcp).", "dim", wrap=True, xalign=0))
+        h = getattr(self.p, "handy", None)
+        if h is not None:
+            h.listeners.append(self.update_handy)
+        self.update_handy()
+        return panel
+
+    @staticmethod
+    def _handy_port():
+        import handy_sync
+        return handy_sync.PORT
+
+    def handy_pair(self):
+        h = getattr(self.p, "handy", None)
+        if h is None:
+            return
+        ok, code, ips = h.start_pairing()
+        if not ok:
+            self.say(f"abgleich startet nicht: {h.error}")
+            return
+        self.handy_code.set_label(f"code  {code}   ·   adresse  {', '.join(ips) or '?'}   ·   3 min gültig")
+        self.handy_code.set_visible(True)
+        until = time.time() + 180
+
+        def tick():
+            if h.pairing is None or time.time() > until:
+                self.handy_code.set_visible(False)
+                h.stop_pairing()
+                return False
+            return True
+        GLib.timeout_add_seconds(2, tick)
+        self.update_handy()
+
+    def update_handy(self):
+        h = getattr(self.p, "handy", None)
+        if h is None or getattr(self, "handy_list", None) is None:
+            return False
+        tui.clear(self.handy_list)
+        if h.pairing is None:
+            self.handy_code.set_visible(False)
+        if h.error:
+            self.handy_info.set_label(f"⚠ {h.error}")
+        elif not h.devices:
+            self.handy_info.set_label("noch kein handy gekoppelt")
+        else:
+            self.handy_info.set_label(("● abgleich bereit" if h.running else "○ aus") + f" · {len(h.devices)} gerät(e)")
+        for dev_id, d in sorted(h.devices.items(), key=lambda kv: kv[1].get("paired") or 0):
+            last = d.get("last")
+            when = time.strftime("%d.%m. %H:%M", time.localtime(last)) if last else "noch nie"
+            self.handy_list.append(hbox(label(f"󰄜 {d.get('name') or 'handy'}", hexpand=True, xalign=0, ellipsize=True),
+                                        label(f"abgleich {when} · {d.get('got', 0)} einträge", "dim"),
+                                        tui.Button("entfernen", lambda i=dev_id: h.remove(i), danger=True),
+                                        spacing=10))
         return False
 
     # ---------- offline (meistgehört) ----------
