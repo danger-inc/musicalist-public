@@ -910,6 +910,14 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
             bits.append(f"{(s['codec'] or '').split('.')[0]} {round(s['abr'] or 0)} kbps")
         if p.current and not p.started:
             bits.append("pausiert · leertaste zum fortsetzen")
+        guest = p._mirror is not None
+        can = not guest or (p.jam is not None and p.jam.am_admin(p.jam.remote))
+        if guest:       # Marmelade als Gast: hier steht, was beim Gastgeber läuft
+            bits = ["󰀂 läuft beim gastgeber" + (" · du darfst steuern" if can else " · steuern nur mit rechten")]
+        for w in (self.prev_btn, self.play_btn, self.next_btn, self.seek):
+            w.set_sensitive(can)
+        for w in (self.shuffle_btn, self.repeat_btn, self.radio_btn):
+            w.set_sensitive(not guest)
         self.info.set_label("  ·  ".join(bits))
 
     def update_pos(self):

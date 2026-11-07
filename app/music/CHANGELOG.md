@@ -1,5 +1,12 @@
 # musicalist – Änderungen
 
+## 1.21.0 (2026-11-07)
+- **Marmelade: alle sehen dasselbe.** Als Gast zeigen „jetzt“, die Warteschlange, die Vorschau und MPRIS, was beim Gastgeber läuft, mit mitlaufender Zeit. Deine eigene Wiedergabe pausiert solange und ist nach dem Verlassen wieder da.
+- **Steuern als Gast:** Mit Gastgeber-Rechten steuern Zurück, Play/Pause, Weiter und die Zeitleiste die Marmelade. Ohne Rechte sind die Knöpfe ausgegraut.
+- **Farben je Person:** Titel von Gästen haben ein Namensschild in einer festen Farbe, auch in der Gästeliste und auf der Browser-Seite. Am Handy hat dieselbe Person dieselbe Farbe.
+- **Beitreten im WLAN klappt zuverlässiger:** Es werden alle Adressen des Gastgebers probiert, nicht nur die erste. Geht es weder im WLAN noch übers Internet, steht da, woran es lag.
+- **Keine doppelten Lieder mehr in Radio und Autoplay**, wenn dasselbe Lied mit anderem Künstler, als feat.-Fassung, Remaster oder Musikvideo vorkommt.
+
 ## 1.20.0 (2026-11-07)
 - **Jam heißt jetzt Marmelade** 🍓: überall in der Oberfläche und auf der Browser-Seite für Gäste. Technisch bleibt alles gleich: Ältere Versionen finden die Marmelade weiter und treten mit dem Code bei.
 - **Jam: Rechte für Gäste.** Als Gastgeber kannst du jedem Gast in der Jam-Liste Gastgeber-Rechte geben. Wer Rechte hat, kann überspringen, zurückgehen, pausieren und Titel aus der Warteschlange nehmen, aus der App, vom PC oder im Browser.

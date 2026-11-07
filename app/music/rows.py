@@ -2,6 +2,7 @@
 # ARTIST_OPEN / OFFLINE_HAS setzt MusicWindow beim Start (set_hooks).
 from gi.repository import GLib, Gtk, Pango
 
+import tui
 from tui import label, hbox, vbox, esc
 from engine import fmt
 
@@ -14,6 +15,18 @@ def set_hooks(artist_open, offline_has):
 # ---------- Listen ----------
 ARTIST_OPEN = None      # setzt MusicWindow: Klick auf einen Künstlernamen → Künstlerseite
 OFFLINE_HAS = None      # setzt MusicWindow: videoId → liegt offline gespeichert?
+
+
+def who_chip(name, extra=""):
+    """Namensschild in der festen Farbe der Person (Marmelade: wer hat den Titel eingereiht)."""
+    import jam
+    bg = tui.colors().get("background")
+    dark = bg is None or (0.299 * bg.red + 0.587 * bg.green + 0.114 * bg.blue) < 0.5
+    col = jam.person_color(name, dark)
+    lb = label("")
+    lb.set_markup(f"<span foreground='{col}' background='{col}' bgalpha='16%' weight='bold' size='small'> {esc(name[:24] + extra)} </span>")
+    lb.set_tooltip_text(f"hinzugefügt von {name} (marmelade)")
+    return lb
 
 
 def track_row(t, on_play, actions, menus=None, extra=None):
@@ -44,7 +57,9 @@ def track_row(t, on_play, actions, menus=None, extra=None):
     # Knöpfe nicht ineinander schachteln (der innere bekam keinen Klick, es startete immer der Titel):
     # Titel | Künstler | Dauer sind drei Geschwister, alle außer dem Künstler spielen den Titel.
     row.add_css_class("trk")
-    head.set_child(hbox(row.mark, row.title, off, spacing=10))
+    src = t.get("_src") or ()
+    who = who_chip(src[1]) if len(src) > 1 and src[0] == "jam" and src[1] else None
+    head.set_child(hbox(row.mark, row.title, who, off, spacing=10))
     head.connect("clicked", lambda *_: on_play())
     dur_btn = Gtk.Button(child=row.dur, focus_on_click=False, valign=Gtk.Align.FILL)
     dur_btn.add_css_class("rowhead")

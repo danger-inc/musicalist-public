@@ -135,6 +135,43 @@ def podcast_secs(text):
     return (int(h.group(1)) * 3600 if h else 0) + (int(m.group(1)) * 60 if m else 0) + (int(sec.group(1)) if sec else 0)
 
 
+_DUP_BR = re.compile(r"[(\[{【][^)\]}】]*[)\]}】]")
+_DUP_EX = re.compile(r"\s+(feat\.?|ft\.?|featuring|prod\.?|with)\s.*$")
+_DUP_TAIL = re.compile(r"\s+-\s+(official|lyric|lyrics|audio|video|remaster(ed)?|live|radio edit|single|\d{4}).*$")
+
+
+def _dup_norm(s):
+    s = _DUP_BR.sub(" ", s.lower())
+    s = _DUP_EX.sub("", _DUP_TAIL.sub("", s))
+    return re.sub(r"[\W_]+", " ", s).strip()
+
+
+def dup_keys(t):
+    """Gleiches Lied, andere Fassung/anderer Künstler („Song“ und „Song (feat. B)“, Musikvideo „A - Song (Official
+    Video)“): Titel ohne Klammern/Zusätze. Gleich wie Dupes in der Handy-App."""
+    title = t.get("title") or ""
+    keys = {_dup_norm(title)}
+    raw = _DUP_BR.sub(" ", title)
+    if " - " in raw:
+        keys.add(_dup_norm(raw.split(" - ", 1)[1]))
+    return {k for k in keys if len(k) >= 2}
+
+
+def drop_dupes(more, have):
+    """Titel aus more ohne Doppelte (untereinander und gegen have)."""
+    ids = {x.get("videoId") for x in have}
+    seen = set().union(*(dup_keys(x) for x in have)) if have else set()
+    out = []
+    for t in more:
+        k = dup_keys(t)
+        if t.get("videoId") in ids or k & seen:
+            continue
+        ids.add(t.get("videoId"))
+        seen |= k
+        out.append(t)
+    return out
+
+
 def track(d):
     """Einheitliches Format aus Suche, Playlist, Album, Radio, Verlauf."""
     if not d or not d.get("videoId"):
@@ -2145,6 +2182,59 @@ class Player:
         tui.background(j.add_remote, t, next_, done=done)
         return True
 
+    # ----- Marmelade als Gast: die Anzeige spiegelt den Gastgeber, die eigene Wiedergabe ruht -----
+    _mirror = None      # gesicherte eigene Wiedergabe, solange gespiegelt wird
+
+    def mirror(self, tracks, playing=False, pos=0.0, dur=0.0, admin=False):
+        """GTK-Thread. tracks = [läuft, als nächstes …] des Gastgebers; None = Marmelade verlassen → eigene zurück."""
+        if tracks is None:
+            if self._mirror is None:
+                return
+            m, self._mirror = self._mirror, None
+            self.queue, self.index, self.pos, self.dur, self.started = m["queue"], m["index"], m["pos"], m["dur"], m["started"]
+            self.paused, self.restore_pos = True, m["pos"]
+            for w in ("track", "queue", "state", "pos"):
+                self.emit(w)
+            return
+        if self._mirror is None:
+            self.pause()
+            self._mirror = {"queue": self.queue, "index": self.index, "pos": self.pos, "dur": self.dur, "started": self.started}
+            self.queue, self.index = [], -1
+        old = self.current
+        changed = [t.get("videoId") for t in tracks] != [t.get("videoId") for t in self.queue]
+        self.queue, self.index = tracks, (0 if tracks else -1)
+        was = (self.paused, self.started, self._mirror.get("admin"))
+        self.paused, self.started, self.loading = not playing, bool(tracks), False
+        self._mirror["admin"] = admin
+        self.pos, self.dur = pos, dur
+        if (old or {}).get("videoId") != (self.current or {}).get("videoId"):
+            self.emit("track")
+        if changed:
+            self.emit("queue")
+        if was != (self.paused, self.started, admin):
+            self.emit("state")
+        self.emit("pos")
+
+    def _guest_ctl(self, op, arg=None):
+        """Als Gast: Steuerbefehl an den Gastgeber (nur mit Rechten). Immer True (= erledigt)."""
+        j = self.jam
+        if j is None or not j.am_admin(j.remote):
+            self.emit("notice:󰀂 nur der gastgeber (oder gäste mit rechten) steuert die marmelade")
+            return True
+
+        def done(res):
+            if isinstance(res, Exception):
+                self.emit(f"error:marmelade: {res}")
+            j.poke()
+        tui.background(j.ctl_remote, op, arg, done=done)
+        return True
+
+    def _guest_no(self):
+        if self._mirror is None:
+            return False
+        self.emit("notice:󰀂 geht als gast in der marmelade nicht")
+        return True
+
     def queue_slot(self, next_=False):
         """Platz für eingereihte Titel: hinter dem laufenden und den schon eingereihten, aber vor Radio/Autoplay."""
         if self.current is None:
@@ -2223,6 +2313,10 @@ class Player:
     def remove(self, i):
         if not 0 <= i < len(self.queue):
             return
+        if self._mirror is not None:
+            if i != self.index:
+                self._guest_ctl("remove", self.queue[i].get("videoId"))
+            return
         del self.queue[i]
         if i < self.index:
             self.index -= 1
@@ -2236,6 +2330,8 @@ class Player:
         self.emit("queue")
 
     def move(self, i, j):
+        if self._guest_no():
+            return
         if 0 <= i < len(self.queue) and 0 <= j < len(self.queue):
             t = self.queue.pop(i)
             self.queue.insert(j, t)
@@ -2248,12 +2344,16 @@ class Player:
             self.emit("queue")
 
     def clear(self, keep_current=True):
+        if self._guest_no():
+            return
         cur = self.current
         self.queue = [cur] if keep_current and cur else []
         self.index = 0 if self.queue else -1
         self.emit("queue")
 
     def shuffle_queue(self):
+        if self._guest_no():
+            return
         if len(self.queue) > self.index + 2:
             rest = self.queue[self.index + 1:]
             random.shuffle(rest)
@@ -2261,12 +2361,18 @@ class Player:
             self.emit("queue")
 
     def jump(self, i):
+        if self._mirror is not None:
+            self.emit("notice:󰀂 in der marmelade bestimmt der gastgeber die reihenfolge")
+            return
         if 0 <= i < len(self.queue):
             self._why = "wechsel"
             self.index = i
             self.load()
 
     def toggle(self):
+        if self._mirror is not None:
+            self._guest_ctl("toggle")
+            return
         self._xf_cancel()
         if not self.started and self.current:  # nach Neustart: gespeicherten Titel erst laden
             self.load(resume=self.restore_pos)
@@ -2278,6 +2384,10 @@ class Player:
             self.toggle()
 
     def pause(self):
+        if self._mirror is not None:
+            if not self.paused:
+                self._guest_ctl("toggle")
+            return
         self._xf_cancel()
         if not self.paused:
             self.mpv.set("pause", True)
@@ -2375,6 +2485,10 @@ class Player:
         return True
 
     def next(self, auto=False):
+        if self._mirror is not None:
+            if not auto:
+                self._guest_ctl("next")
+            return
         self._why = "ende" if auto else "skip"
         if auto and self.sleep_track:                 # „nach diesem Titel“: Ende erreicht → stehen bleiben
             self._sleep_stop()
@@ -2400,6 +2514,9 @@ class Player:
             self.mpv.set("pause", True)
 
     def prev(self):
+        if self._mirror is not None:
+            self._guest_ctl("prev")
+            return
         if self.pos > 3 or self.index <= 0:
             self.seek(0)
         else:
@@ -2408,6 +2525,9 @@ class Player:
             self.load()
 
     def seek(self, sec, relative=False):
+        if self._mirror is not None:
+            self._guest_ctl("seek", str(int(max(0, sec if not relative else self.pos + sec) * 1000)))
+            return
         self._xf_cancel()
         self.journal.seeked()
         self.mpv.cmd("seek", sec, "relative" if relative else "absolute")
@@ -2420,6 +2540,8 @@ class Player:
         self.emit("volume")
 
     def cycle_repeat(self):
+        if self._guest_no():
+            return
         self.repeat = {"aus": "alle", "alle": "eins", "eins": "aus"}[self.repeat]
         self.emit("state")
 
@@ -2438,7 +2560,8 @@ class Player:
         if isinstance(res, Exception) or not res:
             self.emit(f"error:radio: {res}")
             return
-        rest = [x for x in res if x["videoId"] != t["videoId"]]
+        keep = self.current and self.current["videoId"] == t["videoId"]
+        rest = drop_dupes(res, self.queue[:self.index + 1] if keep else [t])
         for x in rest:
             x["_src"] = ("radio", t.get("title"))
         if self.current and self.current["videoId"] == t["videoId"]:
@@ -2449,6 +2572,8 @@ class Player:
             self.play_tracks([t] + rest, src=("radio", t.get("title")))
 
     def extend_radio(self, then_next=False):
+        if self._mirror is not None:
+            return
         cur = self.current
         if cur is not None and localmusic.is_local(cur):
             if then_next:
@@ -2462,7 +2587,6 @@ class Player:
             return  # läuft schon (bzw. für diesen Titel schon versucht)
         self._extending = cur["videoId"]
         self._ext_busy, self._ext_skips = True, 1
-        seen = {x["videoId"] for x in self.queue}
 
         def done(res):
             self._ext_busy = False
@@ -2470,7 +2594,7 @@ class Player:
             if isinstance(res, Exception):
                 self.emit(f"error:autoplay: {res}")
                 return
-            new = [x for x in res if x["videoId"] not in seen]
+            new = drop_dupes(res, self.queue)
             for x in new[:25]:
                 x["_src"] = ("autoplay", cur.get("title"))
             self.queue += new[:25]
@@ -2643,6 +2767,8 @@ class Player:
 
     def save_state(self):
         self._save_id = None
+        if self._mirror is not None:          # gespiegelte Gastgeber-Liste nie als eigene speichern
+            return False
         # höchstens 300 Titel – als Fenster um den aktuellen, damit der gespeicherte Index stimmt
         lo = max(0, min(self.index - 20, len(self.queue) - 300)) if self.index >= 0 else max(0, len(self.queue) - 300)
         data = {"queue": self.queue[lo:lo + 300], "index": self.index - lo if self.index >= 0 else -1,

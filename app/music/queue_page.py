@@ -62,10 +62,8 @@ class QueueMixin:
     def _jam_poll(self):
         j = self.p.jam
         if j is not None and j.joined is not None and self.get_visible():
-            def done(res):
-                self.jam_remote = None if isinstance(res, Exception) else res
-                self.update_jam()
-            tui.background(j.remote_state, done=done)
+            self.jam_remote = j.remote          # liest jam.py im Hintergrund mit (auch für „läuft“)
+            self.update_jam()
         return True
 
     def update_jam(self):
@@ -142,7 +140,7 @@ class QueueMixin:
                 admin = j.is_admin(key)
                 tr = bool(g.get("dev")) and g["dev"] in jm.trusted()
                 row = hbox(label("󰌆" if admin else "󰀄", "accent" if admin else "dim"),
-                           label(g.get("name") or "gast", "accent" if admin else "jamguest", ellipsize=True, hexpand=True),
+                           __import__("rows").who_chip(g.get("name") or "gast"), label("", hexpand=True),
                            label(f"{g.get('added', 0)} titel" if g.get("added") else "", "dim"),
                            label("gemerkt" if tr else "", "accent"))
                 row.append(tui.Button("rechte weg" if admin else "󰌆 rechte", lambda k=key, a=admin: (j.set_admin(k, not a), self.update_jam()),
@@ -171,7 +169,8 @@ class QueueMixin:
                 def done(res):
                     if isinstance(res, Exception):
                         self.say(f"marmelade: {res}", error=True)
-                    GLib.timeout_add(1800 if j.joined and j.joined.get("net") else 400, lambda: self._jam_poll() and False)
+                    j.poke()
+                    GLib.timeout_add(1800 if j.joined and j.joined.get("net") else 600, lambda: self._jam_poll() and False)
                 tui.background(j.ctl_remote, op, vid, done=done)
             if admin:
                 playing = bool((st or {}).get("playing"))
@@ -188,13 +187,12 @@ class QueueMixin:
                     box.append(label(f"läuft: {now.get('t')} · {now.get('a')}", ellipsize=True))
                 ppl = st.get("people") or [{"n": n, "a": False} for n in st.get("guests") or []]
                 if ppl:
-                    box.append(label("gäste: " + ", ".join(p["n"] + (" 󰌆" if p.get("a") else "") for p in ppl), "dim", wrap=True))
-                for t in (st.get("queue") or [])[:8]:
-                    who = f"  · {t['sn']}" if t.get("src") == "jam" and t.get("sn") else ""
-                    r = hbox(label(f"  {t.get('t')} – {t.get('a')}{who}", "dim", ellipsize=True, hexpand=True))
-                    if admin:
-                        r.append(tui.Button("✕", lambda v=t.get("id"): ctl("remove", v), tooltip="aus der marmeladen-warteschlange entfernen"))
-                    box.append(r)
+                    from rows import who_chip
+                    pr = hbox(label("gäste:", "dim"), spacing=6)
+                    for p_ in ppl[:12]:
+                        pr.append(who_chip(p_["n"], " 󰌆" if p_.get("a") else ""))
+                    box.append(pr)
+                box.append(label("„läuft“ und die warteschlange unten zeigen, was beim gastgeber spielt.", "dim", wrap=True))
             box.append(hbox(label("abspielen, „als nächstes“ und „+“ schicken titel jetzt in die marmelade.", "dim", wrap=True,
                                   hexpand=True),
                             tui.Button("verlassen", lambda: (j.leave(), setattr(self, "jam_remote", None)), danger=True)))
@@ -243,6 +241,7 @@ class QueueMixin:
 
         def join():
             f = picked["f"]
+            more = list(f[3]) if f and len(f) > 3 else []
             host, port = (f[1], f[2]) if f else (addr.get_text().split(":")[0].strip(), (addr.get_text().split(":") + [""])[1] or 37530)
             c = __import__("jam").norm_code(code.get_text())
             if len(c) != 6:
@@ -250,14 +249,20 @@ class QueueMixin:
                 return
             engine.set_setting("jam_name", name.get_text().strip())
 
-            def go(host=host, port=port, c=c, nm=name.get_text()):
+            def go(host=host, port=port, c=c, nm=name.get_text(), more=more):
                 # im WLAN gefunden/angegeben → direkt; sonst (oder wenn das WLAN Geräte trennt) übers Internet
+                lan_err = None
                 if host:
                     try:
-                        return j.join(host, port, c, nm)
-                    except Exception:  # noqa: BLE001
-                        pass
-                return j.join_net(c, nm)
+                        return j.join(host, port, c, nm, more)
+                    except Exception as e:  # noqa: BLE001
+                        lan_err = e
+                        if str(e) in ("code falsch", "kicked"):
+                            raise
+                try:
+                    return j.join_net(c, nm)
+                except Exception as e:  # noqa: BLE001
+                    raise RuntimeError(f"wlan: {lan_err} · internet: {e}" if lan_err else str(e)) from None
 
             def done(res):
                 if isinstance(res, Exception):
@@ -274,7 +279,8 @@ class QueueMixin:
             if not res:
                 found_box.append(label("keine marmelade im wlan gefunden – mit dem code geht es übers internet", "dim"))
             for f in res:
-                b = tui.Button(f"󰀂 {f[0]}", lambda f=f: (picked.update(f=f), self.say(f"ausgewählt: {f[0]}")))
+                b = tui.Button(f"󰀂 {f[0]}", lambda f=f: (picked.update(f=f), self.say(f"ausgewählt: {f[0]} – jetzt den code eintippen"),
+                                                          code.grab_focus()))
                 found_box.append(b)
             if len(res) == 1:
                 picked["f"] = res[0]

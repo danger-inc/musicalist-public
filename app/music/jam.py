@@ -4,7 +4,7 @@
 # Radio/Autoplay. Gast: Jam per mDNS finden oder Adresse eintippen; solange beigetreten, schicken „abspielen“,
 # „als nächstes“ und „anhängen“ den Titel an den Gastgeber statt ihn selbst zu spielen (Player.jam_route).
 # Protokoll (identisch mit der Handy-App): GET /api/state, GET /api/search?q=, POST /api/add {t, next},
-# POST /api/ctl {op: next|prev|toggle|remove, id} (nur Gäste mit Rechten); immer ?c=<code>&n=<name>&d=<geräte-kennung>.
+# POST /api/ctl {op: next|prev|toggle|remove|seek, id} (nur Gäste mit Rechten; seek: id = Millisekunden); immer ?c=<code>&n=<name>&d=<geräte-kennung>.
 # Titel als {id, t, a, al, d, th, src, sn}. Der Gastgeber kann Rechte geben, Geräte dafür merken (Einstellung
 # jam_trusted), Gäste entfernen und die Jam umbenennen (jam_title). Im Stand stehen Rechte/Entfernte nur als Kurzform.
 import base64, hashlib, json, secrets, socket, threading, time, urllib.parse, urllib.request
@@ -57,7 +57,40 @@ def slim(t):
     o = {"id": t.get("id"), "t": (t.get("t") or "")[:70], "a": (t.get("a") or "")[:50]}
     if t.get("src") == "jam":
         o["src"], o["sn"] = "jam", (t.get("sn") or "")[:24]
+    elif t.get("src") in ("radio", "autoplay"):
+        o["src"] = t["src"]
     return o
+
+
+PERSON_HUES = (4, 32, 52, 135, 175, 205, 262, 316)
+
+
+def person_hue(name):
+    """Feste Farbe je Person (wer hat den Titel eingereiht) – gleiche Rechnung wie Handy-App und Browser-Seite."""
+    h = 0
+    for ch in (name or "").lower():
+        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
+    return PERSON_HUES[h % len(PERSON_HUES)]
+
+
+def person_color(name, dark=True):
+    import colorsys
+    r, g, b = colorsys.hls_to_rgb(person_hue(name) / 360, 0.70 if dark else 0.40, 0.70 if dark else 0.62)
+    return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+
+
+def remote_pos(st):
+    """Stelle (s) im laufenden Titel des Gastgebers: st = Startzeit (spielt), pp = Stelle bei Pause (beides ms)."""
+    now = time.time() * 1000
+    if st.get("playing") and st.get("st"):
+        p = now - st["st"]
+    elif "pp" in st:
+        p = st["pp"]
+    else:
+        p = (st.get("pos") or 0) + ((now - st.get("_at", now)) if st.get("playing") else 0)
+    d = st.get("du") or 0
+    p = max(0, min(p, d)) if d else max(0, p)
+    return p / 1000
 
 
 def to_proto(t):
@@ -159,6 +192,55 @@ class Jam:
         self._net_state = None
         self._net_state_at = 0
         self._kick = False
+        self.remote = None          # Gast: letzter Stand des Gastgebers (+ "_at" = abgeholt, ms)
+        self._poll_gen = 0
+        self._poke_at = 0
+
+    # ----- Gast: Stand mitlesen und im Player spiegeln („läuft“ zeigt überall dasselbe) -----
+    def poke(self):
+        """Gleich neu abfragen (nach eigenem Steuerbefehl)."""
+        self._poke_at = time.time()
+
+    def _start_poll(self):
+        self._poll_gen += 1
+        gen = self._poll_gen
+
+        def run():
+            last = 0
+            while gen == self._poll_gen and self.joined is not None:
+                due = 1 if self.joined.get("net") else 2
+                if time.time() - last >= due or self._poke_at > last:
+                    last = time.time()
+                    try:
+                        st = self.remote_state()
+                    except Exception:  # noqa: BLE001 – Gastgeber kurz weg: alten Stand behalten
+                        st = self.remote
+                    if gen != self._poll_gen:
+                        break
+                    if st is not None and st is not self.remote:
+                        st = {**st, "_at": time.time() * 1000}
+                    self.remote = st
+                time.sleep(0.2)
+        threading.Thread(target=run, daemon=True, name="jam-gast").start()
+
+        def tick():
+            if gen != self._poll_gen or self.joined is None:
+                return False
+            st = self.remote
+            if st is not None:
+                tracks = []
+                for o in ([st["now"]] if st.get("now") else []) + list(st.get("queue") or []):
+                    try:
+                        t = from_proto(o)
+                    except (KeyError, TypeError):
+                        continue
+                    if o.get("src"):
+                        t["_src"] = (o["src"], o.get("sn") or "")
+                    tracks.append(t)
+                dur = (st.get("du") or 0) / 1000 or (tracks[0]["duration"] if tracks else 0)
+                self.p.mirror(tracks, bool(st.get("playing")), remote_pos(st), dur, self.am_admin(st))
+            return True
+        GLib.timeout_add(500, tick)
 
     # ----- allgemein -----
     def _notify(self):
@@ -307,6 +389,11 @@ class Jam:
                     p.seek(0)
             elif op == "toggle":
                 p.toggle()
+            elif op == "seek":
+                try:
+                    p.seek(int(vid) / 1000)
+                except (TypeError, ValueError):
+                    return False
             elif op == "remove":
                 i = next((k for k in range(p.index + 1, len(p.queue)) if p.queue[k].get("videoId") == vid), None)
                 if i is None:
@@ -315,7 +402,7 @@ class Jam:
             else:
                 return False
             return True
-        if _on_main(run):
+        if _on_main(run) and op != "seek":
             self._event(f"{name}: " + {"next": "übersprungen", "prev": "zurück", "toggle": "pause/weiter",
                                          "remove": "titel entfernt"}.get(op, op))
             self._kick = True
@@ -325,8 +412,16 @@ class Jam:
             p = self.p
             cur = p.current
             q = [to_proto(t) for t in p.queue[p.index + 1:p.index + 31]] if p.index >= 0 else []
-            return {"now": to_proto(cur) if cur else None, "playing": bool(p.started and not p.paused),
-                    "queue": q}
+            playing = bool(p.started and not p.paused)
+            pos = int((p.pos or 0) * 1000)
+            o = {"now": to_proto(cur) if cur else None, "playing": playing, "queue": q, "pos": pos,
+                 "du": int((p.dur or (cur or {}).get("duration") or 0) * 1000)}
+            # Gäste rechnen die Stelle selbst weiter: Startzeitpunkt beim Spielen, feste Stelle bei Pause
+            if playing:
+                o["st"] = int(time.time() * 1000) - pos
+            else:
+                o["pp"] = pos
+            return o
         st = _on_main(read)
         st["host"] = host_name()
         return self.roles(st)
@@ -430,7 +525,12 @@ class Jam:
             def add_service(self, z, typ, name):
                 info = z.get_service_info(typ, name, timeout=1500)
                 if info and info.addresses:
-                    found[name] = (name.split("._")[0], socket.inet_ntoa(info.addresses[0]), info.port)
+                    # alle Adressen merken, eigenes Netz zuerst (die erste ist oft VPN/Docker → nicht erreichbar)
+                    ips = [socket.inet_ntoa(a) for a in info.addresses if len(a) == 4]
+                    mine = {i.rsplit(".", 1)[0] for i in local_ips()}
+                    ips.sort(key=lambda i: 0 if i.rsplit(".", 1)[0] in mine else 1)
+                    if ips:
+                        found[name] = (name.split("._")[0], ips[0], info.port, ips)
 
             def update_service(self, *a):
                 pass
@@ -449,9 +549,9 @@ class Jam:
         q = {"c": j["code"], "n": j["name"], "d": device_id(), **extra}
         return f"http://{j['host']}:{j['port']}{path}?" + urllib.parse.urlencode(q)
 
-    def _get(self, url):
+    def _get(self, url, timeout=6):
         try:
-            with urllib.request.urlopen(url, timeout=6) as r:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
                 return json.load(r)
         except urllib.error.HTTPError as e:
             try:
@@ -460,12 +560,24 @@ class Jam:
                 msg = None
             raise RuntimeError(msg or f"http {e.code}") from None
 
-    def join(self, host, port, code, name):
-        """Blockierend. Prüft Code + Erreichbarkeit."""
-        j = {"host": host.strip(), "port": int(port or PORT), "code": norm_code(code), "name": (name or host_name()).strip()}
-        st = self._get(self._url(j, "/api/state"))
+    def join(self, host, port, code, name, more=()):
+        """Blockierend. Prüft Code + Erreichbarkeit; mehrere Adressen: die erste, die antwortet."""
+        err = None
+        for h in dict.fromkeys(x.strip() for x in [host, *more] if x and x.strip()):
+            j = {"host": h, "port": int(port or PORT), "code": norm_code(code), "name": (name or host_name()).strip()}
+            try:
+                st = self._get(self._url(j, "/api/state"), timeout=3)
+                break
+            except RuntimeError:
+                raise                   # Code falsch / entfernt – andere Adressen ändern daran nichts
+            except OSError as e:
+                err = e
+        else:
+            raise RuntimeError("gastgeber im wlan nicht erreichbar (firewall oder wlan trennt geräte)" if err else "keine adresse")
         j["host_name"] = st.get("host", "jam")
         self.joined = j
+        self.remote = {**st, "_at": time.time() * 1000}
+        self._start_poll()
         self._notify()
         return j["host_name"]
 
@@ -473,6 +585,9 @@ class Jam:
         if self.joined and self.joined.get("net"):
             self._net_stop()
         self.joined = None
+        self._poll_gen += 1
+        self.remote = None
+        GLib.idle_add(lambda: self.p.mirror(None) and False)
         self._notify()
 
     def _kicked_out(self):
@@ -618,17 +733,19 @@ def _net_host(self):
     gen = _listen(self, code, on_msg)
 
     def publisher():
-        last, last_at = None, 0
+        last, last_at, last_st = None, 0, 0
         while gen == self._net_gen and self._hosting:
             try:
                 st = self.state()
                 o = self.roles({"k": "state", "host": host_name(), "now": slim(st.get("now")), "playing": st.get("playing"),
-                                "queue": [slim(t) for t in (st.get("queue") or [])[:12]]})
-                sig = json.dumps(o, sort_keys=True)
-                if sig != last or time.time() - last_at > 30 or self._kick:
+                                "queue": [slim(t) for t in (st.get("queue") or [])[:12]], "du": st.get("du", 0)})
+                sig = json.dumps(o, sort_keys=True)       # st/pp laufen ständig mit → nicht im Vergleich
+                timing = {k: st[k] for k in ("st", "pp") if k in st}
+                jumped = "st" in timing and abs(timing["st"] - last_st) > 2500        # gespult
+                if sig != last or time.time() - last_at > 30 or self._kick or jumped:
                     self._kick = False
-                    _publish(code, {**o, "ts": int(time.time())})
-                    last, last_at = sig, time.time()
+                    _publish(code, {**o, **timing, "ts": int(time.time())})
+                    last, last_at, last_st = sig, time.time(), timing.get("st", 0)
             except Exception as e:  # noqa: BLE001
                 engine.log(f"jam netz stand: {e!r}")
             time.sleep(1.5)
@@ -655,6 +772,8 @@ def _join_net(self, code, name):
     nm = (name or host_name()).strip()
     self._net_state, self._net_state_at = last, time.time()
     self.joined = {"host": "", "port": 0, "code": code, "name": nm, "host_name": last.get("host", "jam"), "net": True}
+    self.remote = {**last, "_at": time.time() * 1000}
+    self._start_poll()
 
     def on_msg(m):
         if m.get("k") == "state":
@@ -715,6 +834,7 @@ PAGE = r"""<!doctype html>
 button{font:inherit;color:var(--fg);background:none;border:1px solid color-mix(in srgb,var(--pr) 70%,transparent);border-radius:4px;padding:8px 10px;cursor:pointer;min-height:40px}
 button.p{background:var(--pr);color:var(--bg)}input{font:inherit;color:var(--fg);background:none;border:1px solid var(--pr);border-radius:4px;padding:10px;width:100%}
 h1{font-size:16px;margin:0;color:var(--pr)}#msg{min-height:20px;color:var(--pr);font-size:12px}
+.who{font-size:11px;font-weight:bold;padding:1px 5px;border-radius:3px;white-space:nowrap}
 </style></head><body>
 <h1 id="ttl">♫ {{TITLE}}</h1><div id="msg"></div>
 <div id="login" class="panel"><b class="t">beitreten</b>
@@ -730,6 +850,9 @@ h1{font-size:16px;margin:0;color:var(--pr)}#msg{min-height:20px;color:var(--pr);
 const P=new URLSearchParams(location.search);let C=P.get('c')||localStorage.jamCode||'',N=localStorage.jamName||'',A=false,T=null;
 let D=localStorage.jamDev;if(!D||D.length<8){D=(crypto.randomUUID?crypto.randomUUID():String(Math.random())+Date.now()).replace(/[^a-f0-9]/gi,'').slice(0,20);localStorage.jamDev=D}
 document.getElementById('code').value=C;document.getElementById('name').value=N;
+const HUES=[4,32,52,135,175,205,262,316],DARK=(()=>{const c=getComputedStyle(document.body).backgroundColor.match(/\d+/g)||[255,255,255];return (c[0]*.3+c[1]*.59+c[2]*.11)<128})();
+function pc(n){let h=0;for(const ch of (n||'').toLowerCase())h=(h*31+ch.codePointAt(0))>>>0;return 'hsl('+HUES[h%8]+','+(DARK?70:62)+'%,'+(DARK?70:40)+'%)'}
+function who(n,ex){const c=pc(n);return '<span class="who" style="color:'+c+';background:color-mix(in srgb,'+c+' 16%,transparent)">'+esc(n)+(ex||'')+'</span>'}
 const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const api=(p,x)=>p+(p.includes('?')?'&':'?')+'c='+encodeURIComponent(C)+'&n='+encodeURIComponent(N)+'&d='+D+(x||'');
 function msg(m){document.getElementById('msg').textContent=m;setTimeout(()=>{if(document.getElementById('msg').textContent==m)document.getElementById('msg').textContent=''},4000)}
@@ -741,9 +864,9 @@ function out(){clearInterval(T);document.getElementById('app').hidden=true;docum
 async function load(){const r=await fetch(api('/api/state'));if(r.status==403){out();return}if(r.ok)show(await r.json())}
 let Q=[];function show(s){A=!!(s.you&&s.you.admin);Q=s.queue||[];if(s.title)document.getElementById('ttl').textContent='♫ '+s.title;
  document.getElementById('ctl').hidden=!A;document.getElementById('ctl').style.display=A?'flex':'none';
- const ppl=(s.people||[]).map(p=>esc(p.n)+(p.a?' ★':'')).join(', ')||esc((s.guests||[]).join(', '));
+ const ppl=(s.people||[]).map(p=>who(p.n,p.a?' ★':'')).join(' ')||esc((s.guests||[]).join(', '));
  document.getElementById('now').innerHTML=s.now?row(s.now)+'<div class="dim">'+(s.playing?'spielt':'pausiert')+' · gäste: '+ppl+(A?' · du hast gastgeber-rechte':'')+'</div>':'nichts läuft';
- document.getElementById('queue').innerHTML=Q.map((t,i)=>row(t,(t.src=='jam'&&t.sn?'<span class="dim">'+esc(t.sn)+'</span>':'')+(A?'<button onclick="ctl(\'remove\','+i+')">✕</button>':''))).join('')||'<div class="dim">leer</div>'}
+ document.getElementById('queue').innerHTML=Q.map((t,i)=>row(t,(t.src=='jam'&&t.sn?who(t.sn):(t.src=='radio'||t.src=='autoplay'?'<span class="dim">radio</span>':''))+(A?'<button onclick="ctl(\'remove\','+i+')">✕</button>':''))).join('')||'<div class="dim">leer</div>'}
 async function ctl(op,i){const id=i==null?null:Q[i].id;const r=await fetch(api('/api/ctl'),{method:'POST',body:JSON.stringify({op,id})});if(!r.ok)msg('geht nicht (keine rechte?)');setTimeout(load,400)}
 let tm;function typed(){clearTimeout(tm);tm=setTimeout(search,400)}
 let R=[];async function search(){const q=document.getElementById('q').value.trim();if(!q){document.getElementById('res').innerHTML='';return}
