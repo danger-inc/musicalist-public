@@ -2317,6 +2317,37 @@ class Player:
         if what in ("track", "state", "queue", "volume"):
             self.mpris.changed(what)
             self.save_soon()
+        if what == "queue":
+            self._fill_durations()
+
+    _dur_tried = None
+
+    def _fill_durations(self):
+        """Titel ohne Laufzeit (Freunde-Empfehlungen, Links, manche Radio-Treffer) im Hintergrund nachtragen –
+        sonst fehlt die Zeit in „als nächstes“ und in der Warteschlange. Jeder Titel wird nur einmal versucht."""
+        if self._dur_tried is None:
+            self._dur_tried = set()
+        todo = [t for t in self.queue[max(0, self.index):self.index + 31]
+                if not t.get("duration") and t.get("videoId") and not localmusic.is_local(t)
+                and t["videoId"] not in self._dur_tried]
+        if not todo:
+            return
+        self._dur_tried.update(t["videoId"] for t in todo)
+        threading.Thread(target=self._dur_work, args=(todo,), daemon=True).start()
+
+    def _dur_work(self, todo):
+        got = False
+        for t in todo:
+            try:
+                n = int(self.music.yt.get_song(t["videoId"])["videoDetails"]["lengthSeconds"])
+            except Exception as e:  # noqa: BLE001
+                log(f"laufzeit {t.get('videoId')}: {str(e)[:100]}")
+                continue
+            if n > 0:
+                t["duration"] = n
+                got = True
+        if got:
+            GLib.idle_add(lambda: self.emit("queue") and False)
 
     @property
     def current(self):

@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 1.34.1 (2026-11-08)
+- **Laufzeiten in „als nächstes“ und in der Warteschlange:** Titel, die ohne Länge hereinkommen (z. B. Empfehlungen von Freund·innen, Links, manche Radio-Treffer), bekommen sie jetzt im Hintergrund nachgetragen – die Zeit erscheint kurz nach dem Einreihen.
+
 ## 1.34.0 (2026-11-08)
 - **Marmelade: Ultra-Gäste** dürfen jetzt auch die **Lautstärke** des Gastgebers ändern (Regler überall in der App, im Browser ein Schieberegler) und unter „warteschlange“ die **Reihenfolge** ändern (ziehen, ↑/↓, „vorziehen“; im Browser ↑ ↓). Alle anderen Gäste sehen die Lautstärke, ändern sie aber nicht. Protokoll: `ctl`-Befehle `volume` und `move`, im Stand `vol`.
 - **Fernseher-Modus: „als nächstes“** zeigt bis zu 25 Titel und ist scrollbar; der Kasten samt Rand ist immer vollständig zu sehen (nichts wird mehr unten abgeschnitten).
