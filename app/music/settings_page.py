@@ -39,6 +39,16 @@ class SettingsMixin:
                                          "verschwindet das Spektrum unten auf Seite 1 und cava wird beendet.")
         self.eco_chk.set_margin_top(10)
         panel.body.append(self.eco_chk)
+        def set_intern(on):
+            engine.set_setting("spec_src", "intern" if on else "auto")
+            self.p.set_tap(engine.spec_intern_wanted())
+            self.cava.want(None, False)
+            self.sync_cava()
+        self.intern_chk = tui.Check("spektrum ohne cava berechnen (mpv misst selbst)", engine.setting("spec_src") == "intern",
+                                    set_intern,
+                                    tooltip="Standard: aus – cava, wenn es da ist und Töne liefert; sonst übernimmt mpv von selbst.\n"
+                                            "An: immer die eingebaute Messung (läuft überall, auch ohne PipeWire/cava, unter Windows).")
+        panel.body.append(self.intern_chk)
         self.bg_chk = tui.Check("beim schließen im hintergrund weiterspielen", engine.setting("background"),
                                 lambda on: engine.set_setting("background", on),
                                 tooltip="Aus: ✕ / q beendet musicalist ganz, die Musik stoppt.\n"

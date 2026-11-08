@@ -71,6 +71,7 @@ class App(Gtk.Application):
         import friends
         self.player.friends = friends.Friends(self.player)
         self.cava = ui.Cava()
+        self.cava.attach(self.player)
         self.sources = sources.Sources()
         self.win = ui.MusicWindow(self, self.player, self.cava, self.sources)
         # Spektrum (cava) nur, solange wirklich Musik läuft – sonst hält es den Ausgang wach (Kopfhörer rauschen)
@@ -181,6 +182,10 @@ class App(Gtk.Application):
                 w.show_tab(cmd.split(":", 1)[1])
         elif cmd == "hide":
             w.set_visible(False)
+        elif cmd in ("tv", "tv:on", "tv:off"):          # Fernseher-Modus (tv.py)
+            if cmd != "tv:off":
+                self.show_window()
+            w.tv_mode(cmd == "tv:on" or (cmd == "tv" and not w.tv_on))
         elif cmd == "play-pause":
             p.toggle()
         elif cmd == "next":

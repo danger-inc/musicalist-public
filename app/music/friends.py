@@ -85,6 +85,20 @@ class Friends:
         v = engine.setting("friends_share")
         return True if v is None else bool(v)          # Default: an (Freunde sehen nur mit deinem Code etwas)
 
+    LEVELS = ("minimal", "normal", "mehr")
+
+    @property
+    def level(self):
+        v = engine.setting("friends_level")
+        return v if v in self.LEVELS else "mehr"
+
+    def set_level(self, v):
+        """Umfang des Geteilten: minimal (läuft gerade, letzte 5, Stunden der Woche) · normal · mehr."""
+        if v in self.LEVELS:
+            engine.set_setting("friends_level", v)
+            self._pf_at = 0
+            self._touch(0)
+
     def set_share(self, on):
         engine.set_setting("friends_share", bool(on))
         if on:
@@ -161,10 +175,22 @@ class Friends:
             if r.get("empty"):
                 self._pf = None
             else:
-                self._pf = {"h": round(r["base"]["secs"] / 360) / 10, "n": r["base"]["tracks"], "ar": r["base"]["artists"],
-                            "art": [{"n": x["name"][:30], "m": round(x["secs"] / 60)} for x in r["artists"][:5]],
-                            "trk": [{"t": x["t"][:40], "a": x["a"][:30], "n": x["plays"]} for x in r["tracks"][:3]],
-                            "pk": r.get("peak_hour", 0), "sk": round(r.get("skip_rate") or 0)}
+                lv = self.level
+                self._pf = {"h": round(r["base"]["secs"] / 360) / 10}
+                if lv != "minimal":
+                    na, nt = 5, 3
+                    self._pf.update({"n": r["base"]["tracks"], "ar": r["base"]["artists"],
+                            "art": [{"n": x["name"][:30], "m": round(x["secs"] / 60)} for x in r["artists"][:na]],
+                            "trk": [{"t": x["t"][:40], "a": x["a"][:30], "n": x["plays"]} for x in r["tracks"][:nt]],
+                            "pk": r.get("peak_hour", 0), "sk": round(r.get("skip_rate") or 0)})
+                if lv == "mehr":         # die interessantesten weiteren Zahlen aus der Analyse (nur Zahlen/Kurzwörter, keine Titel)
+                    self._pf.update({"ct": r.get("chronotype") or "", "dv": round(r.get("diversity") or 0),
+                                     "t1": round(r.get("top1_share") or 0), "rs": round(r.get("repeat_share") or 0),
+                                     "nw": len(r.get("new_artists") or [])})
+                    if r.get("det_n"):
+                        self._pf["cr"] = round(r.get("complete_rate") or 0)
+                    if r.get("streak_now"):
+                        self._pf["sn"] = int(r["streak_now"])
         except Exception as e:  # noqa: BLE001
             engine.log(f"freunde: profil {e!r}")
             self._pf = None
@@ -174,15 +200,21 @@ class Friends:
         """Genau das sehen Freunde von dir."""
         t = self._cur
         now = entry(t) if t and not str(t["videoId"]).startswith("local:") else None
+        lv = self.level
         o = {"k": "prof", "v": 1, "name": self.name, "ts": int(time.time()), "now": now, "pl": bool(now and self._playing),
              "recent": [{k: r[k] for k in ("id", "t", "a")} for r in self.recent[:5]],
-             "recs": [{k: r[k] for k in ("id", "t", "a")} for r in self.recs[:6]]}
+             "recs": [] if lv == "minimal" else [{k: r[k] for k in ("id", "t", "a")} for r in self.recs[:6]]}
         pf = self.profile()
         if pf:
             o["pf"] = pf
-        if len(json.dumps(o, ensure_ascii=False)) > 2500:       # Nachrichten sind auf 4 kB begrenzt
+        size = lambda: len(json.dumps(o, ensure_ascii=False))
+        if size() > 2500:                       # Nachrichten sind auf 4 kB begrenzt: erst Empfehlungen, dann „zuletzt“, zuletzt das Profil kürzen
+            o["recs"] = o["recs"][:3]
+        if size() > 2500:
+            o["recent"] = o["recent"][:5]
+        if size() > 2500:
             o.pop("pf", None)
-        if len(json.dumps(o, ensure_ascii=False)) > 2500:
+        if size() > 2500:
             o["recent"] = o["recent"][:2]
         return o
 

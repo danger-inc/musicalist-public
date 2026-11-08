@@ -11,14 +11,71 @@ import friends as fr
 
 
 def prof_lines(pf):
-    out = [f"diese woche: {pf.get('h')} h · {pf.get('n')} titel · {pf.get('ar')} künstler"]
+    out = [f"diese woche: {pf.get('h')} h" + (f" · {pf['n']} titel · {pf.get('ar')} künstler" if "n" in pf else "")]
     if pf.get("art"):
         out.append("top künstler: " + " · ".join(f"{a['n']} ({a['m']} min)" for a in pf["art"]))
     if pf.get("trk"):
         out.append("top titel: " + " · ".join(f"{t['t']} {t['n']}×" for t in pf["trk"]))
     if "pk" in pf:
         out.append(f"am liebsten um {pf['pk']} uhr · überspringt {pf.get('sk', 0)} %")
+    if "dv" in pf:
+        l = [f"typ: {pf['ct']}" if pf.get("ct") else "", f"vielfalt {pf['dv']} %", f"{pf.get('t1', 0)} % beim lieblingskünstler",
+             f"{pf.get('rs', 0)} % wiederholt (3×+)", f"{pf.get('nw', 0)} neue künstler"]
+        if "cr" in pf:
+            l.append(f"{pf['cr']} % bis zum ende gehört")
+        if pf.get("sn"):
+            l.append(f"{pf['sn']} tage in folge")
+        out.append(" · ".join(x for x in l if x))
     return out
+
+
+# Rubriken der Wochen-Topliste: (Schlüssel, Name, Wert aus Hörprofil → (Zahl, Text, Zusatz) oder None, absteigend?)
+def _v_h(pf):
+    return (pf["h"], f"{pf['h']} h", "") if "h" in pf else None
+
+
+def _v_rep(pf):
+    t = (pf.get("trk") or [None])[0]
+    return (t["n"], f"{t['n']}×", f"{t['t']} – {t['a']}") if t else None
+
+
+def _v_n(pf):
+    return (pf["n"], f"{pf['n']}", "titel") if "n" in pf else None
+
+
+def _v_ar(pf):
+    return (pf["ar"], f"{pf['ar']}", "künstler") if "ar" in pf else None
+
+
+def _v_art(pf):
+    a = (pf.get("art") or [None])[0]
+    return (a["m"], f"{a['m']} min", a["n"]) if a else None
+
+
+def _v_skip(pf):
+    return (pf["sk"], f"{pf['sk']} %", "übersprungen") if "sk" in pf else None
+
+
+def _num(key, unit, extra=""):
+    return lambda pf: (pf[key], f"{pf[key]}{unit}", extra) if key in pf and (key != "sn" or pf[key]) else None
+
+
+RUBRIKEN = [("h", "hörzeit", _v_h, True), ("rep", "wiederholungen", _v_rep, True), ("n", "titel", _v_n, True),
+            ("ar", "künstler", _v_ar, True), ("art", "lieblingskünstler", _v_art, True), ("sk", "durchhörer", _v_skip, False),
+            ("dv", "vielfalt", _num("dv", " %", "wie breit gestreut"), True), ("nw", "entdecker", _num("nw", "", "neue künstler"), True),
+            ("sn", "serie", _num("sn", "", "tage in folge"), True)]
+
+
+def top_rows(entries, key):
+    """entries: [(name, pf, ich)] → sortierte Zeilen [(name, text, zusatz, ich)] der gewählten Rubrik (nur wer die Angabe teilt)."""
+    _k, _n, fn, desc = next(r for r in RUBRIKEN if r[0] == key)
+    rows = []
+    for name, pf, me in entries:
+        v = fn(pf) if pf else None
+        if v:
+            rows.append((v[0], name, v[1], v[2], me))
+    rows.sort(key=lambda r: (-r[0] if desc else r[0], r[1]))
+    return [(n, t, z, m) for _v, n, t, z, m in rows]
 
 
 def ago(ms):
@@ -111,6 +168,7 @@ class FriendsMixin:
         top = hbox(self._sh(tui.Button("‹ zurück", self.lib_home), "‹ zurück", "‹"), label("", hexpand=True),
                    tui.Button("󰑐", self.refresh_friends, tooltip="neu abfragen"), spacing=8)
         box.append(top)
+        box.append(self._top_list())
         # --- ich ---
         me = vbox(spacing=6)
         me.append(label("ich", "accent"))
@@ -119,6 +177,20 @@ class FriendsMixin:
         me.append(chk)
         me.append(label("freunde mit deinem code sehen, was du hörst." if f.share
                         else "aus – niemand sieht etwas. mit einschalten wird dein code aktiv.", "dim", wrap=True))
+        if f.share:
+            lv = vbox(spacing=4)
+            lv.append(label("umfang – was freunde sehen", "dim"))
+            row = hbox(spacing=6)
+            for key, txt in (("minimal", "minimal"), ("normal", "normal"), ("mehr", "mehr")):
+                b = tui.Button(txt, lambda k=key: (f.set_level(k), self.fill_friends()))
+                if f.level == key:
+                    b.add_css_class("on")
+                row.append(b)
+            lv.append(row)
+            lv.append(label({"minimal": "läuft gerade, letzte 5 titel, gehörte stunden der woche – sonst nichts.",
+                             "normal": "dazu empfehlungen, titel-/künstlerzahl, top künstler & titel, lieblingsstunde, skip-rate.",
+                             "mehr": "wie normal (gleich viele titel), dazu zahlen aus der analyse: typ, vielfalt, lieblingskünstler-anteil, wiederholer, neue künstler, durchhör-quote, serie."}[f.level], "dim", wrap=True))
+            me.append(lv)
         name = tui.Entry("dein name", text=f.name)
         name.connect("activate", lambda *_: (f.set_name(name.get_text()), self.say("name gespeichert")))
         me.append(name)
@@ -197,6 +269,41 @@ class FriendsMixin:
                                 menus=self.songs)
                 mine.append(row)
             box.append(mine)
+
+    def _top_list(self):
+        """Wochen-Topliste aus den geteilten Hörprofilen (ich + Freunde), nach Rubrik wählbar."""
+        f = self.fr
+        cat = getattr(self, "_fr_cat", "h")
+        panel = vbox(spacing=3)
+        panel.append(label("󰔷 top-liste · diese woche", "accent"))
+        chips = hbox(spacing=6)
+        for key, name, _fn, _d in RUBRIKEN:
+            b = tui.Button(name, lambda k=key: (setattr(self, "_fr_cat", k), self.fill_friends()))
+            if key == cat:
+                b.add_css_class("on")
+            chips.append(b)
+        panel.append(chips)
+        entries = []
+        mine = f._payload().get("pf") if f.share else None
+        entries.append((f.name + " (ich)", mine, True))
+        week = time.time() * 1000 - 8 * 86400_000
+        for x in f.friends:
+            if (x.get("at") or 0) >= week:
+                entries.append((x["name"], (x.get("prof") or {}).get("pf"), False))
+        rows = top_rows(entries, cat)
+        if not rows:
+            panel.append(label("noch keine Angaben – Freunde müssen teilen (umfang normal/mehr für alles außer hörzeit; vielfalt, entdecker, serie nur bei „mehr“).", "dim", wrap=True))
+        for i, (n, t, z, me) in enumerate(rows, 1):
+            cls = ("accent",) if me else ()
+            line = hbox(label(f"{i}.", "accent" if me else "dim"), label(n, *cls, hexpand=True, ellipsize=True),
+                        label(t, *cls), spacing=8)
+            panel.append(line)
+            if z:
+                panel.append(label("    " + z, "dim", wrap=True))
+        absent = [n for n, pf, _m in entries if not pf]
+        if absent:
+            panel.append(label("ohne Angabe: " + ", ".join(absent), "dim", wrap=True))
+        return panel
 
     def _friend_card(self, x):
         f = self.fr

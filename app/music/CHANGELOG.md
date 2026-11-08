@@ -1,5 +1,17 @@
 # musicalist – Änderungen
 
+## 1.30.0 (2026-11-08)
+- **Fernseher-Modus** (Knopf 󰔂 in der Kopfzeile, Taste `t`, `musicalist tv`): Vollbild mit derselben Oberfläche wie „jetzt“, nur groß – Cover, Titel, alle Knöpfe (gefällt mir / gefällt mir nicht, Playlist, Radio, Browser, Titel-Menü), Zeitleiste, Zurück/Play/Weiter, mischen, wiederholen, Sleep-Timer, Klang, Autoplay, Lautstärke, mitlaufende Lyrics, „als nächstes“, andere Quellen und das Spektrum über die ganze Breite. Passt sich der Auflösung an (720 p bis 4K), Meldungen erscheinen oben, der Bildschirm bleibt wach. Zurück mit `t`, Esc, einer Zifferntaste oder dem Knopf oben rechts.
+- **Spektrum läuft jetzt überall:** fehlt cava (Windows, GNOME ohne PipeWire …) oder liefert es nichts, misst mpv selbst (18 Frequenzbänder per Audiofilter, automatische Empfindlichkeit). Der Wechsel passiert von allein nach 3 s; erzwingen unter einstellungen („spektrum ohne cava berechnen“). Mit Überblenden zeigt es beide Titel.
+- **Gefällt mir nicht** (Knopf 󰔒 auf „jetzt“, Taste `d`, Titelmenü): der Titel wird übersprungen, kommt nicht mehr in Radio/Autoplay und wird bei YouTube Music als Daumen runter gemeldet (wie in der Handy-App; ohne Anmeldung nur lokal gemerkt). Herz und Daumen runter schließen sich aus.
+- Fix: nach einem mpv-Neustart fehlten Equalizer/Filter.
+
+## 1.29.0 (2026-11-08)
+- **Freunde: Wochen-Topliste** ganz oben: du und deine Freunde, nach Rubrik (hörzeit, wiederholungen eines Titels, titel, künstler, lieblingskünstler, durchhörer). Neue Rubriken vielfalt, entdecker, serie (nur bei umfang „mehr“, das zusätzlich Chronotyp, Vielfalt, Anteil Lieblingskünstler, Wiederholer-Anteil, neue Künstler, Durchhör-Quote und Serie in die Analyse-Zeile legt – gleich viele Titel wie „normal“). Gerechnet wird nur aus dem, was geteilt wird; wer nur „minimal“ teilt, erscheint nur bei hörzeit.
+
+## 1.28.0 (2026-11-08)
+- **Freunde → ich → umfang:** was Freunde von dir sehen, stellst du auf minimal (läuft gerade, letzte 5 Titel, gehörte Stunden der Woche), normal oder mehr (Standard; längere Listen) ein. Die Karte „so sehen dich freunde“ zeigt immer genau das Gesendete.
+
 ## 1.27.0 (2026-11-08)
 - **Anpassen** (Stift oben links neben dem Logo): Leiste unter „steuerung“ (Knöpfe an/aus, ↑ ↓ ordnen; neu: lyrics, künstler, album, empfehlen, titel-menü), Reihenfolge der Bibliothek-Kästen und Anzahl der Schnellauswahl; Link zum Klang-Mixer.
 - **Schnellauswahl** in der Bibliothek: nur Titelbilder (Anzahl 5 bis 50, die Spalten folgen der Fensterbreite), Klick = spielen, Rechtsklick = Titelmenü, „neu“ mischt neu. Geht auch ohne Anmeldung.

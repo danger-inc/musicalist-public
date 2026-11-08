@@ -436,6 +436,8 @@ class QueueMixin:
         self.queue_more_bottom.set_visible(hi < len(q))
         self.queue_more_bottom.set_label(f"↓ {len(q) - hi} weitere anzeigen")
 
+        if getattr(self, "tv_on", False):
+            self.tv.refresh_queue()
         # "als nächstes" auf der Jetzt-Seite
         nxt = q[self.p.index + 1:self.p.index + 1 + self.upnext_n] if self.p.index >= 0 and self.upnext_n else []
         self.upnext_panel.set_visible(bool(nxt))

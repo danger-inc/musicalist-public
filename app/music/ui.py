@@ -22,6 +22,7 @@ from engine import fmt
 import songmenu
 import sources
 import swipe
+import tv
 import verlauf
 import visuals
 from rows import track_row, coll_row, artist_link
@@ -160,6 +161,7 @@ class Cava:
         self.listeners = []
         self.lock = threading.Lock()
         self.latest, self.last_t, self.scheduled = [], 0.0, False
+        self.player = None             # für das eingebaute Spektrum (attach)
         GLib.timeout_add(250, self.watchdog)
         self.cfg = RUNTIME + "/rice-music-cava.conf"
         with open(self.cfg, "w") as f:
@@ -181,6 +183,32 @@ frame_delimiter = 10
 noise_reduction = 70
 """)
 
+    def attach(self, player):
+        """Eingebautes Spektrum (engine.SpecTap) anschließen: wird gebraucht, wenn cava fehlt oder nichts liefert."""
+        self.player = player
+        player.tap_sink = self.push
+        if player.tap_on:
+            self.want(None, False)
+
+    def intern(self):
+        return self.player is not None and self.player.tap_on
+
+    def _check_cava(self, proc):
+        """3 s nach dem Start muss cava Werte liefern (PipeWire fehlt / Pulse-only / Sandbox …) – sonst übernimmt mpv."""
+        if self.proc is proc and self.player is not None and not self.player.tap_on and self.playing:
+            if proc.poll() is not None or not self.latest and self.last_t == 0.0:
+                self.player.set_tap(True)
+                self.want(None, False)
+        return False
+
+    def push(self, vals):
+        with self.lock:
+            self.latest, self.last_t = vals, time.monotonic()
+            schedule = not self.scheduled
+            self.scheduled = True
+        if schedule:
+            GLib.idle_add(self.deliver, priority=GLib.PRIORITY_DEFAULT)   # vor dem Zeichnen, sonst verhungert es bei hoher Last
+
     def set_playing(self, on):
         if bool(on) != self.playing:
             self.playing = bool(on)
@@ -189,12 +217,20 @@ noise_reduction = 70
     def want(self, who, on):
         if who is not None:
             (self.users.add if on else self.users.discard)(who)
+        if self.intern():
+            if self.proc is not None:
+                self.proc.terminate()
+                self.proc = None
+            return
         if self.users and self.playing and self.proc is None:
             if not shutil.which("cava"):
-                return                      # cava fehlt → Spektrum bleibt einfach leer
+                if self.player is not None:
+                    self.player.set_tap(True)
+                return                      # ohne cava misst mpv selbst
             self.proc = tui.spawn_watch(["cava", "-p", self.cfg], stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL, text=True)
             threading.Thread(target=self.read, args=(self.proc,), daemon=True).start()
+            GLib.timeout_add_seconds(3, self._check_cava, self.proc)
         elif (not self.users or not self.playing) and self.proc is not None:
             self.proc.terminate()
             self.proc = None
@@ -210,12 +246,7 @@ noise_reduction = 70
                 vals = [int(v) for v in line.strip().strip(";").split(";")]
             except ValueError:
                 continue
-            with self.lock:
-                self.latest, self.last_t = vals, time.monotonic()
-                schedule = not self.scheduled
-                self.scheduled = True
-            if schedule:
-                GLib.idle_add(self.deliver)
+            self.push(vals)
 
     def deliver(self):
         with self.lock:
@@ -335,11 +366,13 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
                 _b.add_controller(_gc)
         self.build_lyrics()
         self.build_visuals()
+        self.tv_on, self._tv_cookie = False, 0
+        self.build_tv()
         self.build_stats()
         self.build_settings()
         self.spec = Spectrum(rows=2, cell=9, height=34)
         self.spec.set_margin_top(6)
-        self.spec.set_tooltip_text("live-spektrum (cava)")
+        self.spec.set_tooltip_text("live-spektrum")
         self.content.append(self.spec)
 
         # 2-Finger-Zurück (swipe.py, Seitenstapel): Kette endet immer auf Seite 1 „jetzt“
@@ -415,6 +448,9 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.acct_btn.set_popover(pop)
         self.acct_pop = pop
         self.header_extra.append(self.acct_btn)
+        self.tv_btn = tui.Button("󰔂", lambda: self.tv_mode(not self.tv_on), tooltip="fernseher-modus (t)")
+        self.tv_btn.add_css_class("ibtn")
+        self.header_extra.append(self.tv_btn)
         self.gear_btn = tui.Button("󰒓", lambda: self.show_tab("settings"), tooltip="einstellungen (,)")
         self.gear_btn.add_css_class("ibtn")
         self.header_extra.append(self.gear_btn)
@@ -423,7 +459,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
     HINTS = [(0, "1-7", "tab"), (1, "leer", "play"), (1, "n/p", "weiter/zurück"), (1, "/", "suche"),
              (0, "l", "♥"), (0, "a", "playlist"), (1, "?", "alle tasten")]
     KEYS = [("leertaste", "play / pause"), ("n · p", "nächster / voriger titel"), ("← →", "5 s spulen"),
-            ("+ −", "lauter / leiser"), ("l", "gefällt mir"), ("a", "titel zu playlist hinzufügen"),
+            ("+ −", "lauter / leiser"), ("l · d", "gefällt mir / gefällt mir nicht"), ("t", "fernseher-modus an / aus"), ("a", "titel zu playlist hinzufügen"),
             ("1 – 7", "tabs"), ("bild↑ · bild↓", "analyse: früherer / späterer zeitraum"),
             ("w · m · j · g", "analyse: woche / monat / jahr / gesamt"), ("/", "suchen (tab übernimmt den 1. vorschlag)"), ("h", "hörverlauf-leiste"),
             (",", "einstellungen"), ("[ ]", "lyrics früher / später"), ("s", "sleep-timer"), ("e", "klang: equalizer / überblenden"), ("v · f", "visuals: modus / vollbild"),
@@ -665,6 +701,64 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.add_page("visuals", self.visuals, scroll=False)
         self.visuals.update_track()
 
+    # ---------- Fernseher-Modus ----------
+    def build_tv(self):
+        self.tv = tv.TvPage(self)
+        self.add_page("tv", self.tv, scroll=False)
+        GLib.timeout_add_seconds(20, lambda: (self.tv.refresh_clock() if self.tv_on else None) or True)
+
+    def tv_mode(self, on):
+        """Vollbild-Ansicht für den Fernseher (tv.py); aus: zurück zum Tab, auf dem man war."""
+        on = bool(on)
+        if on == self.tv_on:
+            return
+        if on and self.focus_mode:
+            self.toggle_focus(False)
+        self.tv_on = on
+        for w in (self.topbar, self.statusbar):
+            w.set_visible(not on)
+        self.spec.set_visible(not on)
+        self.drawer.set_enabled(False if on else engine.setting("history"))
+        if on:
+            self.stack.set_visible_child_name("tv")
+            self.fullscreen()
+            self.tv.refresh_all()
+            self.tv.resize(self.get_width(), self.get_height())
+            app = self.get_application()
+            try:                                    # Bildschirm nicht abdunkeln/sperren, solange der Fernseher läuft
+                self._tv_cookie = app.inhibit(self, Gtk.ApplicationInhibitFlags.IDLE, "fernseher-modus")
+            except Exception:  # noqa: BLE001 – ohne Inhibit läuft der Modus trotzdem
+                self._tv_cookie = 0
+        else:
+            self.unfullscreen()
+            self.stack.set_visible_child_name(self._tab_before_tv())
+            if self._tv_cookie:
+                try:
+                    self.get_application().uninhibit(self._tv_cookie)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._tv_cookie = 0
+        self.sync_cava()
+        self.apply_hints()
+        self.schedule_relayout()
+        self.update_tab_labels()
+
+    def say(self, text, error=False, seconds=6):
+        tui.TuiWindow.say(self, text, error, seconds)
+        if getattr(self, "tv_on", False):
+            self.tv.toast(text, error, seconds)
+
+    def _tab_before_tv(self):
+        for tid, b in self.tab_btns:
+            if b.get_active():
+                return tid
+        return "now"
+
+    def show_tab(self, tid):
+        if getattr(self, "tv_on", False):
+            self.tv_mode(False)
+        tui.TuiWindow.show_tab(self, tid)
+
     def toggle_focus(self, on=None):
         """Vollbild nur mit der Visualisierung (f, Esc zurück)."""
         on = (not self.focus_mode) if on is None else on
@@ -701,6 +795,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.album = label("", "np-album", ellipsize=True)
         self.info = label("", "dim", ellipsize=True)
         self.like_btn = tui.Button("", lambda: self.p.like(), tooltip="Gefällt mir (l)")
+        self.dislike_btn = tui.Button("󰔒", lambda: self.p.dislike(), tooltip="Gefällt mir nicht – kommt nicht mehr im Radio (d)")
         self.radio_btn = tui.Button("󰐹 radio", lambda: (self.p.start_radio(), self.say("radio startet …")),
                                     tooltip="Ähnliche Titel als Warteschlange")
         self.web_btn = tui.Button("↗ browser", self.open_web, tooltip="In YouTube Music öffnen")
@@ -709,7 +804,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         acts = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=8, row_spacing=6,
                            max_children_per_line=6, homogeneous=False, halign=Gtk.Align.START)
         acts.add_css_class("opts")
-        for w in (self.like_btn, self.pl_btn, self.radio_btn, self.web_btn):
+        for w in (self.like_btn, self.dislike_btn, self.pl_btn, self.radio_btn, self.web_btn):
             acts.append(w)
         self.np_gap = label("")
         self.np_acts = acts
@@ -788,6 +883,9 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         narrow = self.tier >= 2
         liked = bool(t and t.get("liked"))
         self.like_btn.set_label(("󰋑" if liked else "󰋕") + ("" if narrow else " gefällt mir"))
+        dis = bool(t and engine.is_disliked(t.get("videoId")))
+        self.dislike_btn.set_label(("󰔑" if dis else "󰔒") + ("" if narrow else " gefällt mir nicht"))
+        (self.dislike_btn.add_css_class if dis else self.dislike_btn.remove_css_class)("on")
         self.radio_btn.set_label("󰐹" if narrow else "󰐹 radio")
         self.web_btn.set_label("↗" if narrow else "↗ browser")
         self.pl_btn.set_label("󰐒" if narrow else "󰐒 playlist")
@@ -835,6 +933,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self._sleep_was = on
         self.sleep_btn.set_label(txt)
         (self.sleep_btn.add_css_class if on else self.sleep_btn.remove_css_class)("accent")
+        if getattr(self, "tv_on", False):
+            self.tv.refresh_sleep()
 
     def set_autoplay(self, on):
         self.p.autoplay = on
@@ -847,7 +947,9 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
 
     def on_spectrum(self, vals):
         if self.get_visible():
-            if self.current_tab() == "visuals":
+            if self.tv_on:
+                self.tv.on_spectrum(vals)
+            elif self.current_tab() == "visuals":
                 self.visuals.on_spectrum(vals)
             else:
                 self.spec.set_vals(vals)
@@ -904,12 +1006,14 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         if hasattr(self, "np_chip"):
             self.update_tab_labels()
         (self.like_btn.add_css_class if t and t.get("liked") else self.like_btn.remove_css_class)("on")
-        for b in (self.like_btn, self.radio_btn, self.web_btn, self.pl_btn):
-            b.set_sensitive(t is not None)
+        for b in (self.like_btn, self.dislike_btn, self.radio_btn, self.web_btn, self.pl_btn):
+            b.set_sensitive(t is not None and not (self.p._mirror is not None))
         self.like_btn.set_sensitive(t is not None)
         self.update_queue()
         self.update_pos()
         self.load_lyrics()                         # liegt meist schon bereit (vorgeladen beim Titelwechsel)
+        if self.tv_on:
+            self.tv.refresh_track()
 
     def update_state(self):
         p = self.p
@@ -934,6 +1038,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         for w in (self.shuffle_btn, self.repeat_btn, self.radio_btn):
             w.set_sensitive(not guest)
         self.info.set_label("  ·  ".join(bits))
+        if self.tv_on:
+            self.tv.refresh_state()
 
     def update_pos(self):
         p = self.p
@@ -942,6 +1048,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.dur_lbl.set_label(fmt(dur))
         self.seek.set_value(int(p.pos / dur * 1000) if dur else 0)
         tab = self.current_tab()
+        if self.tv_on:
+            self.tv.refresh_pos()
         if tab == "lyrics":
             self.sync_lyrics()
         elif tab == "visuals":
@@ -954,7 +1062,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
 
     def sync_cava(self):
         # cava läuft nur, solange es jemand sieht: Spektrum unten, oder die Seite „visuals“
-        want = self._shown and (self.spec_on() or self.current_tab() == "visuals")
+        want = self._shown and (self.spec_on() or self.current_tab() == "visuals" or self.tv_on)
         self.cava.want("window", want)
 
     def _eco_poll(self):
@@ -1103,6 +1211,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         # mindestens ~530 px breit, Hyprland und GTK stritten dann um die Größe (ruckeln).
         self.set_tier(0 if width >= 820 else 1 if width >= 600 else 2 if width >= 440 else 3)
         self.schedule_relayout()
+        if self.tv_on:
+            self.tv.resize(width, height)
         if self.current_tab() == "lyrics":
             self.center_lyric(jump=True)
 
@@ -1133,6 +1243,9 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
                     self.set_focus(None)
                 self.show_tab(tabs[i])
                 return True
+        if self.tv_on and (kv == Gdk.KEY_Escape or Gdk.KEY_1 <= kv <= Gdk.KEY_9):
+            self.tv_mode(False)
+            return kv == Gdk.KEY_Escape
         if kv == Gdk.KEY_Escape and getattr(self, "focus_mode", False):
             self.toggle_focus(False)
             return True
@@ -1156,6 +1269,10 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
             self.p.prev()
         elif kv == Gdk.KEY_l:
             self.p.like()
+        elif kv == Gdk.KEY_d:
+            self.p.dislike()
+        elif kv == Gdk.KEY_t:
+            self.tv_mode(not self.tv_on)
         elif kv == Gdk.KEY_slash:
             self.show_tab("search")
         elif kv == Gdk.KEY_h:

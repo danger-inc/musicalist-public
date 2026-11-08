@@ -134,6 +134,10 @@ class SongMenus:
             liked = bool(t.get("liked") or (w.account is None and engine.is_local_liked(t.get("videoId"))))
             it("󰋑" if liked else "󰋕", "gefällt mir nicht mehr" if liked else "gefällt mir",
                lambda: p.rate(t, not liked), "l" if cur else "")
+        if not loc:
+            dis = engine.is_disliked(t.get("videoId"))
+            it("󰔑" if dis else "󰔒", "„gefällt mir nicht“ zurücknehmen" if dis else "gefällt mir nicht",
+               lambda: p.dislike(t, not dis), "d" if cur else "")
         if not loc and getattr(p, "friends", None) is not None:
             it("󰡉", "an alle freunde empfehlen", lambda: w.say("freunde sehen: empfohlen" + ("" if p.friends.share else " – sobald du teilen einschaltest (bibliothek → freunde)"))
                if p.friends.recommend(t) else None)

@@ -774,6 +774,9 @@ class Music:
     def rate(self, vid, like):
         self.yt.rate_song(vid, "LIKE" if like else "INDIFFERENT")
 
+    def dislike(self, vid, on):
+        self.yt.rate_song(vid, "DISLIKE" if on else "INDIFFERENT")
+
 
 # ---------- Songtexte ----------
 import re as _re
@@ -1142,11 +1145,72 @@ def mpv_version():
     return _mpv_ver
 
 
+class SpecTap:
+    """Spektrum ohne cava (Windows, Systeme ohne PipeWire/cava): mpv misst selbst. Ein Audiofilter zerlegt den Ton
+    in BANDS Frequenzbänder, astats gibt je Band den Pegel, ametadata schreibt ihn auf mpvs stdout; Mpv liest das
+    und ruft feed(). Hier wird daraus 0–16 wie bei cava (automatische Empfindlichkeit, schneller Anstieg, weiches
+    Abklingen) und auf 64 Balken verteilt. Läuft ein zweiter mpv (Überblendung), gilt je Balken der größere Wert."""
+    BANDS, OUT, FLOOR = 18, 64, 62.0
+    SPAN = (45.0, 10000.0)
+
+    def __init__(self, sink):
+        self.sink = sink                      # sink(vals) – aus jedem Thread aufrufbar
+        self.lock = threading.Lock()
+        self.src = {}                         # Quelle → (Zeit, Werte 0–1)
+        self.ref = 20.0
+        self.sm = [0.0] * self.BANDS
+
+    @classmethod
+    def freqs(cls):
+        lo, hi = cls.SPAN
+        return [lo * (hi / lo) ** (i / (cls.BANDS - 1)) for i in range(cls.BANDS)]
+
+    @classmethod
+    def graph(cls):
+        """mpv-Audiofilter (lavfi): Ton unverändert durchreichen, Kopie messen."""
+        n = cls.BANDS
+        g = "asplit=2[m][a];[a]aresample=22050,aformat=channel_layouts=mono,asplit=%d%s;" % (
+            n, "".join(f"[b{i}]" for i in range(n)))
+        for i, f in enumerate(cls.freqs()):
+            g += f"[b{i}]bandpass=f={f:.0f}:width_type=q:w=4,asetnsamples=n=735:p=0[c{i}];"
+        g += "".join(f"[c{i}]" for i in range(n))
+        g += (f"amerge=inputs={n},astats=metadata=1:reset=1:measure_perchannel=RMS_level:measure_overall=none,"
+              "ametadata=mode=print:file=pipe\\\\:1,anullsink;[m]anull")
+        return "lavfi=[" + g + "]"
+
+    def feed(self, key, db):
+        """db: Pegel je Band in dB (negativ). Kommt ~30× pro Sekunde aus dem Lese-Thread des mpv."""
+        n = self.BANDS
+        if len(db) != n:
+            return
+        # oberhalb der Grundlinie, nach oben leicht angehoben (Höhen tragen weniger Energie, wirken sonst tot)
+        lv = [max(0.0, d + self.FLOOR) + 0.55 * i for i, d in enumerate(db)]
+        now = time.monotonic()
+        with self.lock:
+            self.ref = max(self.ref * 0.9985, max(lv), 16.0)
+            cur = [min(1.0, v / self.ref) for v in lv]
+            cur = [c ** 1.5 for c in cur]    # etwas Kontrast: leise Bänder nicht ständig halb voll
+            old = self.src.get(key, (0, self.sm))[1]
+            sm = [c if c > o else o * 0.80 + c * 0.2 for c, o in zip(cur, old)]
+            self.src[key] = (now, sm)
+            live = [v for t, v in self.src.values() if now - t < 0.25]
+            band = [max(col) for col in zip(*live)]
+        out = []
+        for j in range(self.OUT):
+            x = j * (n - 1) / (self.OUT - 1)
+            i = int(x)
+            k = min(i + 1, n - 1)
+            v = band[i] + (band[k] - band[i]) * (x - i)
+            out.append(int(round(v * 16)))
+        self.sink(out)
+
+
 class Mpv:
     """mpv per JSON-IPC. Stirbt der Prozess (Absturz, Speichermangel, kill), startet er neu und on_restart() darf
     die Wiedergabe fortsetzen; nach 3 Neustarts in 2 Minuten wird aufgegeben (on_event "mpv-dead")."""
 
-    def __init__(self, on_event, on_restart=None, path=None):
+    def __init__(self, on_event, on_restart=None, path=None, tap=None):
+        self.tap = tap                 # SpecTap oder None: mpv schreibt Bandpegel auf stdout (siehe SpecTap)
         self.on_event = on_event
         self.on_restart = on_restart
         self.path = path or MPV_SOCK
@@ -1171,7 +1235,10 @@ class Mpv:
                                      "--gapless-audio=weak", "--replaygain=track"] +
                                     ([f"--log-file={os.path.join(os.environ.get('TEMP', '.'), 'rice-mpv.log')}",
                                       "--msg-level=all=warn,ffmpeg=v"] if IS_WIN else []),
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                    stdout=subprocess.PIPE if self.tap is not None else subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, text=True)
+        if self.tap is not None:
+            threading.Thread(target=self._read_tap, args=(self.proc,), daemon=True).start()
         for _ in range(300):
             try:
                 if IS_WIN:
@@ -1193,6 +1260,25 @@ class Mpv:
             else:
                 self.sock.sendall(data)
         threading.Thread(target=self.read, args=(self.sock,), daemon=True).start()
+
+    def _read_tap(self, proc):
+        vals = {}
+        try:
+            for line in proc.stdout:
+                if line.startswith("frame:"):
+                    vals = {}
+                elif line.startswith("lavfi.astats."):
+                    try:
+                        k, v = line.strip().split("=", 1)
+                        vals[int(k.split(".")[2])] = float(v)
+                    except (ValueError, IndexError):
+                        continue
+                    if len(vals) == SpecTap.BANDS:
+                        db = [vals[i + 1] for i in range(SpecTap.BANDS)]
+                        vals = {}
+                        self.tap.feed(id(self), [d if d > -90 else -90.0 for d in db])
+        except (OSError, ValueError):
+            pass
 
     def _died(self, sock):
         if self.closing or sock is not self.sock:
@@ -1431,6 +1517,31 @@ def local_like_set(t, on):
 
 def is_local_liked(vid):
     return any(x.get("videoId") == vid for x in local_likes())
+
+
+def spec_intern_wanted():
+    """Eingebautes Spektrum von Anfang an? Ja ohne cava, unter Windows, oder wenn erzwungen
+    (Einstellung spec_src = "intern" bzw. Umgebungsvariable MUSICALIST_SPEC=intern)."""
+    src = os.environ.get("MUSICALIST_SPEC") or setting("spec_src") or "auto"
+    if src == "cava":
+        return False
+    return src == "intern" or IS_WIN or shutil.which("cava") is None
+
+
+def dislikes():
+    """„Gefällt mir nicht“: immer auch lokal gemerkt (wie in der Handy-App) – so greift es ohne Anmeldung."""
+    return set(setting("dislikes") or [])
+
+
+def is_disliked(vid):
+    return bool(vid) and vid in dislikes()
+
+
+def set_dislike(vid, on):
+    d = [x for x in (setting("dislikes") or []) if x != vid]
+    if on:
+        d.insert(0, vid)
+    set_setting("dislikes", d[:5000])
 
 
 def push_local_likes(music):
@@ -1939,6 +2050,9 @@ class Player:
         self.restore_pos = 0
         self.eq = audiofx.normalize(setting("eq"))
         self.mpv2, self._xf = None, None                  # Standby-mpv + laufende Überblendung
+        self.tap = SpecTap(lambda v: self.tap_sink(v))    # eingebautes Spektrum (Ersatz für cava), siehe SpecTap
+        self.tap_sink = lambda v: None
+        self.tap_on = spec_intern_wanted()
         self.mpv = self._new_mpv(MPV_SOCK)
         self.apply_eq()
         self.load_state()
@@ -1970,8 +2084,14 @@ class Player:
                 self._mpv_restarted()
             else:
                 self._standby_restarted(m)
-        box["m"] = Mpv(on_event, restarted, path)
+        box["m"] = Mpv(on_event, restarted, path, tap=self.tap)
         return box["m"]
+
+    def set_tap(self, on):
+        """Eingebautes Spektrum an/aus (Filter in beiden mpv). An, wenn cava fehlt oder nichts liefert."""
+        if bool(on) != self.tap_on:
+            self.tap_on = bool(on)
+            self.apply_eq()
 
     def ensure_standby(self):
         if self.mpv2 is None:
@@ -2004,7 +2124,7 @@ class Player:
         self.emit("eq")
 
     def apply_eq(self):
-        af = audiofx.build_af(self.eq)
+        af = ",".join(x for x in (audiofx.build_af(self.eq), SpecTap.graph() if self.tap_on else "") if x)
         for m in (self.mpv, self.mpv2):
             if m is not None:
                 m.set("af", af)
@@ -2143,6 +2263,7 @@ class Player:
     def _mpv_restarted(self):
         """mpv war abgestürzt und läuft wieder: Lautstärke setzen, Titel an der alten Stelle fortsetzen."""
         self.mpv.set("volume", self.volume)
+        self.apply_eq()                       # Klang-Filter und Spektrum-Messung gehen mit dem Prozess verloren
         was_playing = not self.paused and self.current is not None and self.started
         self.started, self.restore_pos, self.loading = False, self.pos, False
         self.paused = True
@@ -2557,6 +2678,8 @@ class Player:
             return
         if self.index + 1 < len(self.queue):
             self.index += 1
+            while auto and self.index + 1 < len(self.queue) and is_disliked(self.queue[self.index].get("videoId")):
+                self.index += 1                   # von selbst auf einen „gefällt mir nicht“-Titel getroffen → weiter
             self.load()
         elif self.repeat == "alle" and self.queue:
             self.index = 0
@@ -2614,6 +2737,7 @@ class Player:
             self.emit(f"error:radio: {res}")
             return
         keep = self.current and self.current["videoId"] == t["videoId"]
+        res = [x for x in res if not is_disliked(x.get("videoId"))]
         rest = drop_dupes(res, self.queue[:self.index + 1] if keep else [t])
         for x in rest:
             x["_src"] = ("radio", t.get("title"))
@@ -2647,7 +2771,7 @@ class Player:
             if isinstance(res, Exception):
                 self.emit(f"error:autoplay: {res}")
                 return
-            new = drop_dupes(res, self.queue)
+            new = drop_dupes([x for x in res if not is_disliked(x.get("videoId"))], self.queue)
             for x in new[:25]:
                 x["_src"] = ("autoplay", cur.get("title"))
             self.queue += new[:25]
@@ -2666,6 +2790,10 @@ class Player:
             return
         on = (not t.get("liked")) if on is None else on
         t["liked"] = on
+        if on and is_disliked(t.get("videoId")):
+            set_dislike(t["videoId"], False)
+            if os.path.exists(BROWSER_JSON):
+                tui.background(self.music.dislike, t["videoId"], False)
         self.emit("track")
         if not os.path.exists(BROWSER_JSON):               # ohne Anmeldung: nur lokal merken
             local_like_set(t, on)
@@ -2679,6 +2807,8 @@ class Player:
         for x in [t] + self.queue:
             if x.get("videoId") == t.get("videoId"):
                 x["liked"] = on
+        if on and is_disliked(t.get("videoId")):
+            set_dislike(t["videoId"], False)
         self.emit("track")
         if not os.path.exists(BROWSER_JSON):
             local_like_set(t, on)
@@ -2686,6 +2816,41 @@ class Player:
             return
         tui.background(self.music.rate, t["videoId"], on,
                        done=lambda r: isinstance(r, Exception) and self.emit(f"error:like: {r}"))
+
+    def dislike(self, t=None, on=None):
+        """Daumen runter wie in YT Music: läuft der Titel, geht es gleich weiter; er kommt nicht mehr in Radio/Autoplay
+        und wird übersprungen, wenn die Warteschlange von selbst auf ihn trifft."""
+        if self._guest_no():
+            return
+        t = t or self.current
+        if not t or not t.get("videoId"):
+            return
+        if localmusic.is_local(t):
+            self.emit("notice:lokale titel lassen sich nicht bewerten")
+            return
+        vid = t["videoId"]
+        on = (not is_disliked(vid)) if on is None else bool(on)
+        set_dislike(vid, on)
+        was_cur = on and self.current is not None and self.current.get("videoId") == vid
+        if on:
+            if t.get("liked") or is_local_liked(vid):
+                local_like_set(t, False)
+            for x in [t] + self.queue:
+                if x.get("videoId") == vid:
+                    x["liked"] = False
+            for i in range(len(self.queue) - 1, self.index, -1):   # spätere Radio-/Autoplay-Plätze mit raus
+                x = self.queue[i]
+                if x.get("videoId") == vid and (x.get("_src") or ("",))[0] in ("radio", "autoplay"):
+                    del self.queue[i]
+        self.emit("queue")
+        self.emit("track")
+        self.emit("notice:" + ("gefällt mir nicht – kommt nicht mehr im radio" if on else "„gefällt mir nicht“ zurückgenommen"))
+        if os.path.exists(BROWSER_JSON):
+            tui.background(self.music.dislike, vid, on,
+                           done=lambda r: isinstance(r, Exception) and self.emit(f"notice:nur hier gemerkt ({r})"))
+        if was_cur:
+            self._why = "skip"
+            self.next()
 
     # ----- Laden -----
     def load(self, resume=0):
