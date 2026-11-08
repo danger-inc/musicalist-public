@@ -31,6 +31,22 @@ if { (( UPDATE )) && basics_missing && say "Es fehlen Systempakete – werden na
 fi
 echo
 
+# cava (Live-Spektrum) gehört fest dazu: fehlt es – auch im Update-Modus, ohne Rückfrage – wird es einzeln
+# nachinstalliert. Ubuntu/Mint: cava liegt in „universe“; ist das aus, wird es eingeschaltet.
+ensure_cava() {
+    command -v cava >/dev/null 2>&1 && return 0
+    say "cava (Live-Spektrum) fehlt – wird installiert …"
+    pkg_install "cava" "cava" "cava" "cava" || true
+    command -v cava >/dev/null 2>&1 && return 0
+    if command -v apt-get >/dev/null 2>&1 && command -v add-apt-repository >/dev/null 2>&1; then
+        warn "cava nicht in den Paketquellen – schalte „universe“ ein …"
+        as_root add-apt-repository -y universe >/dev/null 2>&1 || true
+        pkg_install "cava" "cava" "cava" "cava" || true
+    fi
+    command -v cava >/dev/null 2>&1 || warn "cava konnte nicht installiert werden (Paket „cava“) – musicalist rechnet das Spektrum dann selbst (mpv)."
+}
+if ! command -v cava >/dev/null 2>&1 && pkg_manager >/dev/null 2>&1; then ensure_cava; echo; fi
+
 # alten Hintergrundprozess beenden – notfalls hart (alte Versionen konnten unter GNOME hängen);
 # lief er, wird er am Ende neu gestartet
 was_running=0
@@ -73,7 +89,7 @@ for t in mpv cava playerctl pactl; do
     else
         case $t in
             mpv) warn "  mpv: FEHLT – ohne mpv kein Ton (Paket „mpv“)";;
-            cava) echo "  cava: fehlt – nur das Spektrum bleibt leer";;
+            cava) echo "  cava: fehlt – das Spektrum wird dann von mpv berechnet";;
             playerctl) echo "  playerctl: fehlt – optional";;
             pactl) echo "  pactl: fehlt – nur „andere quellen“ bleibt leer";;
         esac

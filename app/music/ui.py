@@ -1,7 +1,7 @@
 # musicalist – Oberfläche: Hauptfenster (Tabs jetzt/warteschlange/bibliothek/lyrics/visuals/suchen) und die
 # Vorschau-Karte unten mittig (erscheint, wenn die Maus an den unteren Bildschirmrand in der Mitte fährt).
 # Alles im TUI-Stil aus ../tui.py: Cover als Braille-Pixelbild, Spektrum aus ▁▂▃▅▇ (cava), ■-Regler.
-import json, os, socket, subprocess, threading, time
+import json, os, re, socket, subprocess, threading, time
 
 import gi
 gi.require_version("GdkPixbuf", "2.0")
@@ -165,13 +165,31 @@ class Cava:
         GLib.timeout_add(250, self.watchdog)
         GLib.timeout_add(40, self.pump)                  # 25 Bilder/s
         self.cfg = RUNTIME + "/rice-music-cava.conf"
+        self.methods = self.pick_methods()
+        self.method = self.methods[0]
+        self.methods_left = self.methods[1:]
+        self.write_cfg()
+
+    @staticmethod
+    def pick_methods():
+        """Eingabe-Methoden in Reihenfolge. cava < 0.8 (Ubuntu 24.04 liefert 0.7.4) kennt „pipewire“ nicht und
+        bricht damit sofort ab – dort „pulse“ (läuft auch unter PipeWire, über pipewire-pulse). Was einmal
+        funktioniert hat, steht in den Einstellungen (cava_method) und kommt beim nächsten Start zuerst."""
+        order = ["pipewire", "pulse"]
+        good = engine.setting("cava_method")
+        if good in order:
+            order.remove(good)
+            order.insert(0, good)
+        return order
+
+    def write_cfg(self):
         with open(self.cfg, "w") as f:
             f.write(f"""[general]
-bars = {bars}
+bars = {self.bars}
 framerate = 30
 sleep_timer = 1
 [input]
-method = pipewire
+method = {self.method}
 source = auto
 [output]
 method = raw
@@ -194,12 +212,28 @@ noise_reduction = 70
     def intern(self):
         return self.player is not None and self.player.tap_on
 
+    def _early_exit(self, proc):
+        """cava sofort wieder beendet (falsche Eingabe-Methode, z. B. pipewire in cava 0.7) → nächste Methode."""
+        if self.proc is proc and proc.poll() is not None and self.methods_left and not self.latest:
+            self.method = self.methods_left.pop(0)
+            self.write_cfg()
+            self.proc = None
+            self.want(None, False)
+        return False
+
     def _check_cava(self, proc):
         """3 s nach dem Start muss cava Werte liefern (PipeWire fehlt / Pulse-only / Sandbox …) – sonst übernimmt mpv."""
-        if self.proc is proc and self.player is not None and not self.player.tap_on and self.playing:
+        if self.proc is proc and not (self.player is not None and self.player.tap_on) and self.playing:
             if proc.poll() is not None or not self.latest and self.last_t == 0.0:
-                self.player.set_tap(True)
-                self.want(None, False)
+                if self.methods_left:                  # andere Eingabe-Methode versuchen, bevor mpv übernimmt
+                    self.method = self.methods_left.pop(0)
+                    self.write_cfg()
+                    proc.terminate()
+                    self.proc = None
+                    self.want(None, False)
+                elif self.player is not None:
+                    self.player.set_tap(True)
+                    self.want(None, False)
         return False
 
     def push(self, vals):
@@ -235,6 +269,7 @@ noise_reduction = 70
             self.proc = tui.spawn_watch(["cava", "-p", self.cfg], stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL, text=True)
             threading.Thread(target=self.read, args=(self.proc,), daemon=True).start()
+            GLib.timeout_add(1200, self._early_exit, self.proc)
             GLib.timeout_add_seconds(3, self._check_cava, self.proc)
         elif (not self.users or not self.playing) and self.proc is not None:
             self.proc.terminate()
@@ -251,6 +286,8 @@ noise_reduction = 70
                 vals = [int(v) for v in line.strip().strip(";").split(";")]
             except ValueError:
                 continue
+            if engine.setting("cava_method") != self.method:      # läuft: diese Methode beim nächsten Mal zuerst
+                engine.set_setting("cava_method", self.method)
             self.push(vals)
 
     def deliver(self):
@@ -1168,7 +1205,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
     def relayout(self):
         self._relayout_id = None
         W, H = self.get_width(), self.get_height()
-        if W <= 0 or H <= 0:
+        if W <= 0 or H <= 0 or getattr(self, "tv_on", False):      # Fernseher-Modus hat sein eigenes Spektrum (tv.py)
             return False
         # Cover: breit groß links, schmal kleiner rechts im "läuft"-Kasten
         wide = W >= 760

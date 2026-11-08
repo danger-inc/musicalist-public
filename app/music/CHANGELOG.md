@@ -1,5 +1,11 @@
 # musicalist – Änderungen
 
+## 1.32.2 (2026-11-08)
+- **Live-Spektrum auf Ubuntu repariert:** Ubuntu 24.04 liefert cava 0.7.4, das die Eingabe „pipewire“ nicht kennt und sofort abbricht – musicalist wechselt jetzt selbst auf „pulse“ (läuft auch unter PipeWire) und merkt sich, was funktioniert. Das Spektrum sieht damit überall gleich aus statt der Ersatzrechnung über mpv.
+- **Fernseher-Modus:** Beim Wechsel in/aus dem Vollbild konnte eine zweite Spektrum-Leiste erscheinen – behoben.
+- **Spektrum im Energiesparmodus** bleibt standardmäßig sichtbar (Schalter in den Einstellungen).
+- **Installer** installiert cava einzeln nach, falls es fehlt (auch beim Update; Ubuntu: „universe“ wird bei Bedarf eingeschaltet).
+
 ## 1.32.1 (2026-11-08)
 - **Fernseher-Modus: Leiste bearbeiten** (Stift oben oder Rechtsklick auf die Leiste): Kästen per Haken ein-/ausblenden und mit ← → ordnen. Zusätzlich wählbar: Schlaf-Timer, Klang/Mixer, Autoplay, Künstler, Album, empfehlen. „zurücksetzen“ stellt die Standardleiste her.
 

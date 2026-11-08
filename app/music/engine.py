@@ -48,7 +48,7 @@ DEFAULT_SETTINGS = {"last_playlist": None,   # [id, titel] der zuletzt benutzten
                     "history_pinned": False,  # Hörverlauf-Leiste angeheftet
                     "history": True,          # Hörverlauf führen (aus = nichts wird gemerkt, Leiste weg)
                     "yt_history": True,       # Wiedergaben an YouTube melden (Verlauf, Statistik, Empfehlungen)
-                    "eco_spec": False,        # live-Spektrum (Seite 1 unten) auch im Energiesparmodus zeigen
+                    "eco_spec": True,         # live-Spektrum (Seite 1 unten) auch im Energiesparmodus zeigen
                     "desk": False,            # Anzeige dauerhaft auf dem Hintergrundbild
                     "desk_pos": "bottom",
                     "offline": True,          # meistgehörte Titel als Datei speichern (geht ohne Netz, startet sofort)
