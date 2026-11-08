@@ -130,8 +130,8 @@ class SongMenus:
             it("󰐹", "radio zu diesem titel", lambda: (p.start_radio(t), w.say("radio startet …")))
             self._rub(main, "sammeln")
             it("󰐒", "zu playlist hinzufügen", lambda: self._show_pl(stack, pl_box, pop, [t]), "›", close=False)
-        if w.account is not None and not loc:
-            liked = bool(t.get("liked"))
+        if not loc:
+            liked = bool(t.get("liked") or (w.account is None and engine.is_local_liked(t.get("videoId"))))
             it("󰋑" if liked else "󰋕", "gefällt mir nicht mehr" if liked else "gefällt mir",
                lambda: p.rate(t, not liked), "l" if cur else "")
         if not loc and getattr(p, "friends", None) is not None:
@@ -146,7 +146,7 @@ class SongMenus:
             if t.get("albumId"):
                 it("󰀥", f"album · {t.get('album') or 'öffnen'}", lambda: w.open_detail("album", t["albumId"]))
         if cur:
-            it("󰗊", "lyrics", lambda: w.show_tab("lyrics"), "4")
+            it("󰍰", "lyrics", lambda: w.show_tab("lyrics"), "4")
         self._rub(main)
         if not loc:
             off = p.offline

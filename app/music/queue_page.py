@@ -34,9 +34,38 @@ class QueueMixin:
         self.queue_panel.body.append(self.queue_box)
         self.queue_panel.body.append(self.queue_more_bottom)
         self.queue_panel.body.append(self.queue_empty)
+        # Rückgängig-Leiste (3 s nach dem Entfernen)
+        self.undo_lbl = label("", hexpand=True, ellipsize=True)
+        self.undo_bar = hbox(self.undo_lbl, tui.Button("rückgängig", self.undo_remove_click), spacing=10)
+        self.undo_bar.add_css_class("loginbox")
+        self.undo_bar.set_visible(False)
+        self._undo_timer = 0
         page.append(self.build_jam())
+        page.append(self.undo_bar)
         page.append(self.queue_panel)
         self.add_page("queue", page)
+
+    def remove_undo(self, t):
+        """Aus der Warteschlange entfernen und kurz „rückgängig“ anbieten."""
+        self.p.remove(self._qi(t))
+        lr = self.p.last_removed
+        if lr:
+            self.undo_lbl.set_label(f"„{lr[0].get('title') or '?'}“ entfernt")
+            self.undo_bar.set_visible(True)
+            if self._undo_timer:
+                GLib.source_remove(self._undo_timer)
+            self._undo_timer = GLib.timeout_add(3000, self._undo_hide)
+
+    def _undo_hide(self):
+        self._undo_timer = 0
+        self.undo_bar.set_visible(False)
+        return False
+
+    def undo_remove_click(self):
+        t = self.p.undo_remove()
+        if t:
+            self.say(f"„{t.get('title') or '?'}“ zurückgeholt")
+        self._undo_hide()
 
     # ---------- Jam (jam.py) ----------
     def build_jam(self):
@@ -389,7 +418,7 @@ class QueueMixin:
             row = track_row(t, lambda r=None: self.p.jump(self._qi(t)),
                             [("↑", "Nach oben", lambda: self.p.move(self._qi(t), self._qi(t) - 1)),
                              ("↓", "Nach unten", lambda: self.p.move(self._qi(t), self._qi(t) + 1)),
-                             ("✕", "Entfernen", lambda: self.p.remove(self._qi(t)))],
+                             ("✕", "Entfernen", lambda: self.remove_undo(t))],
                             menus=self.songs, extra=lambda: self.queue_extra(t))
             self.queue_drag(row, t)
             return row
@@ -491,7 +520,7 @@ class QueueMixin:
             out.append(("↓", "nach unten", lambda: self.p.move(self._qi(t), self._qi(t) + 1)))
         if i != self.p.index:
             out.append(("󰐊", "hierhin springen", lambda: self.p.jump(self._qi(t))))
-        out.append(("✕", "aus der warteschlange", lambda: self.p.remove(self._qi(t)), True))
+        out.append(("✕", "aus der warteschlange", lambda: self.remove_undo(t), True))
         return out
 
     def queue_to_playlist(self):

@@ -36,6 +36,11 @@ class LibraryMixin:
         self.stat_panel.body.append(coll_row("󰄨", "was ich gehört habe – woche, monat, jahr", "tab 7",
                                              lambda: self.show_tab("stats")))
         home.append(self.stat_panel)
+        self.ll_panel = tui.Panel("󰋑 lieblingssongs")
+        self.ll_box = vbox(spacing=0)
+        self.ll_panel.body.append(self.ll_box)
+        home.insert_child_after(self.ll_panel, self.login_panel)
+        self.update_local_likes()
         self.lib_stack.add_named(home, "home")
 
         detail = vbox(spacing=8)
@@ -61,12 +66,23 @@ class LibraryMixin:
         self.lib_stack.add_named(detail, "detail")
         self.add_page("lib", self.lib_stack)
 
+    def update_local_likes(self):
+        """Ohne Anmeldung: Herzen nur lokal – als eigene Zeile in der Bibliothek."""
+        tui.clear(self.ll_box)
+        n = len(engine.local_likes())
+        show = self.account is None
+        self.ll_panel.set_visible(show)
+        if show:
+            self.ll_box.append(coll_row("󰋑", "lieblingssongs (nur hier)", str(n) if n else "herz drücken zum merken",
+                                        lambda: self.open_detail("locallikes", "")))
+
     def refresh_account(self):
         authed = os.path.exists(engine.BROWSER_JSON)
         self.p.music.reset()
         if not authed:
             self.account = None
             self.fill_login()
+            self.update_local_likes()
             return
         self.acct_lbl.set_label("󰀄 …")
         tui.background(engine.account_name, done=self.account_done)
@@ -88,7 +104,11 @@ class LibraryMixin:
             self.login_expired = False
             self._relogin_tried = False
         self.fill_login()
+        self.update_local_likes()
         if self.account:
+            if engine.local_likes():
+                tui.background(engine.push_local_likes, self.p.music,
+                               done=lambda n: isinstance(n, int) and n and self.say(f"{n} lokale herzen zu youtube music übernommen"))
             self.load_library()
 
     def fill_login(self):
@@ -338,7 +358,8 @@ class LibraryMixin:
         fn = {"playlist": self.p.music.playlist, "album": self.p.music.album, "podcast": self.p.music.podcast,
               "artist": self.p.music.artist, "history": lambda _i: ("verlauf", self.p.music.history()),
               "subs": lambda _i: self.p.music.subscriptions(), "podlib": lambda _i: self.p.music.podcast_library(),
-              "new": lambda _i: self.p.music.new_releases()}[kind]
+              "new": lambda _i: self.p.music.new_releases(),
+              "locallikes": lambda _i: ("lieblingssongs (nur hier)", engine.local_likes())}[kind]
 
         def done(res):
             if self.detail_key != (kind, ident):     # inzwischen woanders hin

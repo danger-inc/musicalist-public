@@ -284,7 +284,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
                   tui.TuiWindow):
     APP_ID = "de.invincible.Music"
     TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"),
-            ("lyrics", "lyrics", "󰗊"), ("visuals", "visuals", "󱑽"), ("search", "suchen", "󰍉"),
+            ("lyrics", "lyrics", "\U000f0370"), ("visuals", "visuals", "󱑽"), ("search", "suchen", "󰍉"),
             ("stats", "analyse", "󰄨"), ("settings", "einstellungen", "󰒓")]   # einstellungen: kein Tab, sondern ⚙ oben rechts
     ESC_CLOSES = False          # Esc soll den Player nicht zumachen (nur Tastenkürzel aus der Config / q / ✕)
 
@@ -374,7 +374,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
 
     # ---------- Kopfleiste ----------
     def build_header(self):
-        """[󰝚 musicalist] ¹󰝚 jetzt ²󰲸 ³󰋑 ⁴󰗊 ⁵󱑽 ⁶󰍉 ……… [󰝚 titel · künstler] v1.2 [󰀄 ●] [󰒓] [◐] ✕"""
+        """[󰝚 musicalist] ¹󰝚 jetzt ²󰲸 ³󰋑 ⁴󰍰 ⁵󱑽 ⁶󰍉 ……… [󰝚 titel · künstler] v1.2 [󰀄 ●] [󰒓] [◐] ✕"""
         top = self.topbar.get_child()
         self.brand_lbl = top.get_first_child()
         # Kopfleiste darf schmaler werden als ihr Inhalt (Achtel-Kachel) – set_tier() räumt dann auf.
@@ -647,6 +647,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         return True
 
     def lib_home(self):
+        self.update_local_likes()
         self.lib_stack.set_visible_child_name("home")
         self.show_tab("lib")
         self.nav_note()
@@ -900,7 +901,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         (self.like_btn.add_css_class if t and t.get("liked") else self.like_btn.remove_css_class)("on")
         for b in (self.like_btn, self.radio_btn, self.web_btn, self.pl_btn):
             b.set_sensitive(t is not None)
-        self.like_btn.set_sensitive(t is not None and self.account is not None)
+        self.like_btn.set_sensitive(t is not None)
         self.update_queue()
         self.update_pos()
         self.load_lyrics()                         # liegt meist schon bereit (vorgeladen beim Titelwechsel)

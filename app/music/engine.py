@@ -1409,6 +1409,35 @@ def output_kind():
     return "lautsprecher"
 
 
+def local_likes():
+    """Herzen ohne Anmeldung: nur auf diesem Gerät (beim Anmelden zu YouTube Music übernommen)."""
+    return list(setting("local_likes") or [])
+
+
+def local_like_set(t, on):
+    l = [x for x in local_likes() if x.get("videoId") != t.get("videoId")]
+    if on:
+        l.insert(0, {k: t.get(k) for k in ("videoId", "title", "artist", "album", "duration", "thumb", "artistId", "albumId")})
+    set_setting("local_likes", l[:2000])
+
+
+def is_local_liked(vid):
+    return any(x.get("videoId") == vid for x in local_likes())
+
+
+def push_local_likes(music):
+    """Nach dem Anmelden: lokal gemerkte Herzen zu YouTube Music übernehmen (bis 200)."""
+    l = local_likes()
+    for x in l[:200]:
+        try:
+            music.rate(x["videoId"], True)
+        except Exception:  # noqa: BLE001
+            pass
+    if l:
+        set_setting("local_likes", [])
+    return len(l)
+
+
 class Journal:
     """Genaues Hörprotokoll (eine JSON-Zeile je angespieltem Titel, auch kurz übersprungene). Felder:
     at/end (Beginn/Ende), id, t (Titel), a (Künstler), aid, al (Album), alid, d (Länge), p (wirklich gehörte
@@ -2317,6 +2346,7 @@ class Player:
             if i != self.index:
                 self._guest_ctl("remove", self.queue[i].get("videoId"))
             return
+        self.last_removed = (self.queue[i], i, time.time(), i == self.index)       # für „rückgängig“
         del self.queue[i]
         if i < self.index:
             self.index -= 1
@@ -2328,6 +2358,21 @@ class Player:
             else:
                 self.stop()
         self.emit("queue")
+
+    last_removed = None
+
+    def undo_remove(self):
+        """Zuletzt entfernten Titel an seinen Platz zurückholen (war es der laufende, wird er nicht neu gestartet)."""
+        lr, self.last_removed = self.last_removed, None
+        if not lr or self._mirror is not None:
+            return None
+        t, i, _at, was_current = lr
+        i = max(0, min(i, len(self.queue)))
+        self.queue.insert(i, t)
+        if i <= self.index and not was_current:
+            self.index += 1
+        self.emit("queue")
+        return t
 
     def move(self, i, j):
         if self._guest_no():
@@ -2614,6 +2659,10 @@ class Player:
         on = (not t.get("liked")) if on is None else on
         t["liked"] = on
         self.emit("track")
+        if not os.path.exists(BROWSER_JSON):               # ohne Anmeldung: nur lokal merken
+            local_like_set(t, on)
+            self.emit("notice:" + ("gemerkt – nur auf diesem gerät, nach dem anmelden wird es übernommen" if on else "herz entfernt"))
+            return
         tui.background(self.music.rate, t["videoId"], on,
                        done=lambda r: isinstance(r, Exception) and self.emit(f"error:like: {r}"))
 
@@ -2623,6 +2672,10 @@ class Player:
             if x.get("videoId") == t.get("videoId"):
                 x["liked"] = on
         self.emit("track")
+        if not os.path.exists(BROWSER_JSON):
+            local_like_set(t, on)
+            self.emit("notice:" + ("gemerkt – nur auf diesem gerät, nach dem anmelden wird es übernommen" if on else "herz entfernt"))
+            return
         tui.background(self.music.rate, t["videoId"], on,
                        done=lambda r: isinstance(r, Exception) and self.emit(f"error:like: {r}"))
 
@@ -2631,6 +2684,8 @@ class Player:
         t = self.current
         if not t:
             return
+        if not t.get("liked") and not os.path.exists(BROWSER_JSON) and is_local_liked(t.get("videoId")):
+            t["liked"] = True
         self._xf_cancel()
         self.gen += 1
         gen = self.gen

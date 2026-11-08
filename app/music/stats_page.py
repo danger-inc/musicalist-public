@@ -615,7 +615,30 @@ class StatsMixin:
         sort = tui.Select(self._set_track_sort, tooltip="Sortierung")
         sort.set_options([("plays", "nach wiedergaben"), ("secs", "nach hörzeit")], "secs" if by_time else "plays")
         sort.set_halign(Gtk.Align.START)
-        return self._panel(f"󰝚 top titel · {len(items)}", sort, self._bars(rows), self._more_btn("tracks", len(items), 10))
+        top50 = items[:50]
+
+        def shuffled():
+            import random
+            l = list(top50)
+            random.shuffle(l)
+            self._play_list(l, 0, r["title"])
+
+        def to_playlist():
+            if self.account is None:
+                return self.say("dafür musst du angemeldet sein (einstellungen)", error=True)
+            name = f"musicalist · top {len(top50)} · {r['title']}"
+            self.say("playlist wird angelegt …")
+
+            def done(res):
+                self.say(f"playlist „{name}“ angelegt" if not isinstance(res, Exception) else f"playlist: {engine.explain(res)}",
+                         error=isinstance(res, Exception))
+            tui.background(self.p.music.create_playlist, name, [t["id"] for t in top50], done=done)
+        acts = hbox(tui.Button(f"󰐊 top {len(top50)} spielen", lambda: self._play_list(top50, 0, r["title"])),
+                    tui.Button("󰒝 mischen", shuffled), tui.Button("󰐒 als playlist", to_playlist,
+                                                                  tooltip="Die meistgehörten Titel als neue Playlist in YouTube Music speichern"),
+                    spacing=8)
+        acts.set_halign(Gtk.Align.START)
+        return self._panel(f"󰝚 top titel · {len(items)}", sort, acts, self._bars(rows), self._more_btn("tracks", len(items), 10))
 
     def _set_track_sort(self, v):
         self.an_track_sort = v

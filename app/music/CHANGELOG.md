@@ -1,5 +1,11 @@
 # musicalist – Änderungen
 
+## 1.26.0 (2026-11-08)
+- **Herz auch ohne Anmeldung:** „gefällt mir“ merkt sich den Titel lokal (Bibliothek → „lieblingssongs (nur hier)“). Beim Anmelden werden die Herzen zu YouTube Music übernommen.
+- **Analyse:** bei „top titel“ gibt es „top 50 spielen“, „mischen“ und „als playlist“ (Playlist in YouTube Music).
+- **Rückgängig:** Nach dem Entfernen aus der Warteschlange erscheint 3 Sekunden lang „rückgängig“.
+- **Liedtext-Symbol:** Mikrofon statt Übersetzungs-Zeichen.
+
 ## 1.25.0 (2026-11-08)
 - **Freunde werden mit dem Handy abgeglichen** (beim Handy-Abgleich): Freunde, die du nur am Handy hast, erscheinen am PC und umgekehrt; Entfernen gilt auf beiden Geräten.
 - **Freundschaft ist beidseitig:** Wer deinen Code hinzufügt, ist automatisch auch dein Freund (er meldet sich in deinem Thema, du siehst „… hat dich hinzugefügt“).
