@@ -923,10 +923,19 @@ def qr_matrix(data):
         import qrcode
     except ImportError:
         return None
-    q = qrcode.QRCode(border=1)
+    q = qrcode.QRCode(border=4)          # 4 Module Rand sind Pflicht – mit weniger erkennen Kameras den Code nicht
     q.add_data(data)
     q.make(fit=True)
     return q.get_matrix()
+
+
+def qr_palette(c1, c2):
+    """(dunkel, hell) aus zwei Farben (Gdk.RGBA, .red/.green/.blue) für den QR-Code: Farben des Designs, aber immer dunkle
+    Module auf heller Fläche – nur so lesen alle Kameras ihn (hell auf dunkel nicht), und nie reines Weiß. None = Standard."""
+    if c1 is None or c2 is None:
+        return None, None
+    lum = lambda c: 0.2126 * c.red + 0.7152 * c.green + 0.0722 * c.blue
+    return (c1, c2) if lum(c1) < lum(c2) else (c2, c1)
 
 
 def qr_text(data):

@@ -149,19 +149,14 @@ class QueueMixin:
                 n = len(qr)
                 cell = max(3, 168 // n)
                 area = Gtk.DrawingArea(content_width=n * cell, content_height=n * cell)
-                fg = tui.colors().get("on_background") or tui.colors().get("foreground")
-                bg = tui.colors().get("background")
+                # Farben des Designs, aber in der Richtung, die jede Kamera liest: dunkle Module auf heller Fläche
+                # (die hellere von Vordergrund/Hintergrund ist die Fläche) – nie reines Weiß, nie hell auf dunkel
+                dark, light = __import__("jam").qr_palette(tui.colors().get("foreground"), tui.colors().get("background"))
 
-                def draw(_a, cr, _w, _h, m=qr, cell=cell, fg=fg, bg=bg):
-                    if bg is not None:
-                        cr.set_source_rgb(bg.red, bg.green, bg.blue)
-                    else:
-                        cr.set_source_rgb(1, 1, 1)
+                def draw(_a, cr, _w, _h, m=qr, cell=cell, dark=dark, light=light):
+                    cr.set_source_rgb(light.red, light.green, light.blue) if light is not None else cr.set_source_rgb(1, 1, 1)
                     cr.paint()
-                    if fg is not None:
-                        cr.set_source_rgb(fg.red, fg.green, fg.blue)
-                    else:
-                        cr.set_source_rgb(0, 0, 0)
+                    cr.set_source_rgb(dark.red, dark.green, dark.blue) if dark is not None else cr.set_source_rgb(0, 0, 0)
                     for y, line in enumerate(m):
                         for x, on in enumerate(line):
                             if on:

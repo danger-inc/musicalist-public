@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 1.34.2 (2026-11-08)
+- **QR-Code der Marmelade überarbeitet:** Er ließ sich nicht scannen (helle Module auf dunklem Grund und nur 1 Modul Rand). Jetzt immer dunkle Module auf heller Fläche mit vollem Rand, aber in den Farben des Designs statt auf reinem Weiß (die hellere von Vordergrund/Hintergrund ist die Fläche). Gilt für Marmelade-Kasten und Fernseher-Modus; mit einem QR-Leser gegengeprüft.
+
 ## 1.34.1 (2026-11-08)
 - **Laufzeiten in „als nächstes“ und in der Warteschlange:** Titel, die ohne Länge hereinkommen (z. B. Empfehlungen von Freund·innen, Links, manche Radio-Treffer), bekommen sie jetzt im Hintergrund nachgetragen – die Zeit erscheint kurz nach dem Einreihen.
 
