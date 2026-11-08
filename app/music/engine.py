@@ -1150,8 +1150,9 @@ class SpecTap:
     in BANDS Frequenzbänder, astats gibt je Band den Pegel, ametadata schreibt ihn auf mpvs stdout; Mpv liest das
     und ruft feed(). Hier wird daraus 0–16 wie bei cava (automatische Empfindlichkeit, schneller Anstieg, weiches
     Abklingen) und auf 64 Balken verteilt. Läuft ein zweiter mpv (Überblendung), gilt je Balken der größere Wert."""
-    BANDS, OUT, FLOOR = 18, 64, 62.0
-    SPAN = (45.0, 10000.0)
+    BANDS, OUT, FLOOR = 12, 64, 62.0
+    SPAN = (45.0, 7000.0)
+    RATE, FRAME = 16000, 800            # 20 Bilder/s – genug fürs Auge, halb so viel Rechenzeit wie 30
 
     def __init__(self, sink):
         self.sink = sink                      # sink(vals) – aus jedem Thread aufrufbar
@@ -1169,13 +1170,13 @@ class SpecTap:
     def graph(cls):
         """mpv-Audiofilter (lavfi): Ton unverändert durchreichen, Kopie messen."""
         n = cls.BANDS
-        g = "asplit=2[m][a];[a]aresample=22050,aformat=channel_layouts=mono,asplit=%d%s;" % (
-            n, "".join(f"[b{i}]" for i in range(n)))
+        g = "asplit=2[m][a];[a]aresample=%d,aformat=channel_layouts=mono,asplit=%d%s;" % (
+            cls.RATE, n, "".join(f"[b{i}]" for i in range(n)))
         for i, f in enumerate(cls.freqs()):
-            g += f"[b{i}]bandpass=f={f:.0f}:width_type=q:w=4,asetnsamples=n=735:p=0[c{i}];"
+            g += f"[b{i}]bandpass=f={f:.0f}:width_type=q:w=3,asetnsamples=n={cls.FRAME}:p=0[c{i}];"
         g += "".join(f"[c{i}]" for i in range(n))
         g += (f"amerge=inputs={n},astats=metadata=1:reset=1:measure_perchannel=RMS_level:measure_overall=none,"
-              "ametadata=mode=print:file=pipe\\\\:1,anullsink;[m]anull")
+              "ametadata=mode=print,anullsink;[m]anull")
         return "lavfi=[" + g + "]"
 
     def feed(self, key, db):
@@ -1191,7 +1192,7 @@ class SpecTap:
             cur = [min(1.0, v / self.ref) for v in lv]
             cur = [c ** 1.5 for c in cur]    # etwas Kontrast: leise Bänder nicht ständig halb voll
             old = self.src.get(key, (0, self.sm))[1]
-            sm = [c if c > o else o * 0.80 + c * 0.2 for c, o in zip(cur, old)]
+            sm = [c if c > o else o * 0.72 + c * 0.28 for c, o in zip(cur, old)]
             self.src[key] = (now, sm)
             live = [v for t, v in self.src.values() if now - t < 0.25]
             band = [max(col) for col in zip(*live)]
@@ -1229,14 +1230,20 @@ class Mpv:
                 pass
         self.sock = None
         self.props = {}
-        self.proc = tui.spawn_watch(["mpv", "--idle=yes", "--no-video", "--no-terminal", "--ytdl=no",
+        # Mit Spektrum-Messung (tap): ametadata schreibt über das mpv-Log (stdout, zeilenweise). Eine Datei/Pipe
+        # per file=… puffert in 32-KB-Blöcken – das Spektrum hing dann sekundenlang hinterher.
+        term = (["--terminal=yes", "--input-terminal=no", "--really-quiet", "--msg-level=all=no,ffmpeg=v"]
+                if self.tap is not None else ["--no-terminal"])
+        self.proc = tui.spawn_watch(["mpv", "--idle=yes", "--no-video"] + term + ["--ytdl=no",
                                      "--audio-display=no", f"--input-ipc-server={self.path}",
                                      "--audio-client-name=musicalist", "--cache=yes", "--demuxer-max-bytes=64MiB",
                                      "--gapless-audio=weak", "--replaygain=track"] +
                                     ([f"--log-file={os.path.join(os.environ.get('TEMP', '.'), 'rice-mpv.log')}",
                                       "--msg-level=all=warn,ffmpeg=v"] if IS_WIN else []),
+                                    stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE if self.tap is not None else subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, text=True)
+                                    stderr=subprocess.STDOUT if self.tap is not None else subprocess.DEVNULL,
+                                    text=True, errors="replace")
         if self.tap is not None:
             threading.Thread(target=self._read_tap, args=(self.proc,), daemon=True).start()
         for _ in range(300):
@@ -1265,18 +1272,20 @@ class Mpv:
         vals = {}
         try:
             for line in proc.stdout:
-                if line.startswith("frame:"):
-                    vals = {}
-                elif line.startswith("lavfi.astats."):
-                    try:
-                        k, v = line.strip().split("=", 1)
-                        vals[int(k.split(".")[2])] = float(v)
-                    except (ValueError, IndexError):
-                        continue
-                    if len(vals) == SpecTap.BANDS:
-                        db = [vals[i + 1] for i in range(SpecTap.BANDS)]
+                i = line.find("lavfi.astats.")
+                if i < 0:
+                    if "frame:" in line:
                         vals = {}
-                        self.tap.feed(id(self), [d if d > -90 else -90.0 for d in db])
+                    continue
+                try:
+                    k, v = line[i:].strip().split("=", 1)
+                    vals[int(k.split(".")[2])] = float(v)
+                except (ValueError, IndexError):
+                    continue
+                if len(vals) == SpecTap.BANDS:
+                    db = [vals[j + 1] for j in range(SpecTap.BANDS)]
+                    vals = {}
+                    self.tap.feed(id(self), [d if d > -90 else -90.0 for d in db])
         except (OSError, ValueError):
             pass
 

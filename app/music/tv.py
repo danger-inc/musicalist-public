@@ -76,8 +76,19 @@ class TvPage(Gtk.Box):
         exit_btn = tui.Button("✕ fernseher beenden", lambda: win.tv_mode(False), tooltip="Zurück zum Fenster (t · Esc)")
         self.msg = label("", "tv-msg", ellipsize=True)
         self._msg_id = None
+        self.vol = tui.Meter(100, self.p.set_volume)
+        self.vol.set_size_request(200, -1)
+        self.vol.set_hexpand(False)
+        self.vol.set_content_height(22)
+        self.vol_lbl = label("", "mono-pct", xalign=1)
+        self.vol_lbl.set_width_chars(4)
+        vol = hbox(label("󰕾", "accent"), self.vol, self.vol_lbl, spacing=8)
+        self.jam_btn = tui.Button("󰀂 marmelade", self.jam_open, tooltip="Marmelade: gemeinsam Musik hören – starten, Code/QR zeigen")
+        self._jam_pop = None
+        if self.p.jam is not None:
+            self.p.jam.listeners.append(lambda *_: self.refresh_jam())
         top = hbox(label("󰝚 musicalist", "tv-brand"), label("󰔂 fernseher", "dim"), label("", hexpand=True),
-                   self.msg, self.clock, exit_btn, spacing=14)
+                   self.msg, self.jam_btn, vol, self.clock, exit_btn, spacing=14)
         self.append(top)
 
         # --- läuft: Cover links, Titel + Knöpfe rechts ---
@@ -121,27 +132,16 @@ class TvPage(Gtk.Box):
             b.add_css_class("ctl")
         self.play_btn.add_css_class("play")
         self.repeat_btn = tui.Button("", self.p.cycle_repeat, tooltip="Wiederholen: aus / alle / eins")
-        ctl = hbox(self.shuffle_btn, label("", hexpand=True), self.prev_btn, self.play_btn, self.next_btn,
-                   label("", hexpand=True), self.repeat_btn, spacing=12)
-
-        self.sleep_btn = tui.Button("󰒲", lambda: win.sleep_menu(self.sleep_btn), tooltip="Sleep-Timer (s)")
-        self.sound_btn = tui.Button("󰓃", lambda: win.sound_menu(self.sound_btn) if True else None,
-                                    tooltip="Klang: Equalizer und Überblendung (e)")
-        self.auto_chk = tui.Check("autoplay", self.p.autoplay, win.set_autoplay,
-                                  tooltip="Am Ende der Warteschlange ähnliche Titel weiterspielen")
-        self.vol = tui.Meter(100, self.p.set_volume)
-        self.vol.set_size_request(260, -1)
-        self.vol.set_hexpand(False)
-        self.vol.set_content_height(24)
-        self.vol_lbl = label("", "mono-pct", xalign=1)
-        opts = hbox(self.sleep_btn, self.sound_btn, self.auto_chk, label("", hexpand=True),
-                    label("󰕾", "accent"), self.vol, self.vol_lbl, spacing=12)
+        for b in (self.prev_btn, self.play_btn, self.next_btn):
+            b.set_hexpand(True)
+        big = hbox(self.prev_btn, self.play_btn, self.next_btn, spacing=12, homogeneous=True, hexpand=True)
+        ctl = hbox(self.shuffle_btn, big, self.repeat_btn, spacing=16)
 
         side = vbox(self.title, self.artist, self.album, self.info, acts, spacing=6, hexpand=True)
         side.set_valign(Gtk.Align.CENTER)
         now_row = hbox(self.cover, side, spacing=26)
         now_row.set_margin_bottom(4)
-        self.now_panel = tui.Panel("󰝚 läuft", vbox(now_row, seek_row, ctl, opts, spacing=12))
+        self.now_panel = tui.Panel("󰝚 läuft", vbox(now_row, seek_row, ctl, spacing=14))
         rc = Gtk.GestureClick(button=3)           # Rechtsklick auf „läuft“ = Menü zum Titel
         rc.connect("pressed", lambda g, n, x, y: self.p.current and win.songs.menu(now_row, x, y, self.p.current))
         now_row.add_controller(rc)
@@ -163,11 +163,12 @@ class TvPage(Gtk.Box):
         self.src_panel.set_visible(bool(win.srcs.items))
         self.src_list.on_change = lambda items: self.src_panel.set_visible(bool(items))
         right = vbox(self.upnext_panel, self.src_panel, spacing=10, hexpand=True)
-        self.upnext_panel.set_vexpand(False)
+        right.set_vexpand(True)
+        self.upnext_panel.set_vexpand(True)
 
         def clip(w):
             # Mindesthöhe klein halten: sonst bestimmt der Inhalt die Fensterhöhe (und das Fenster passt nie auf 720 p)
-            return Gtk.ScrolledWindow(child=w, hscrollbar_policy=Gtk.PolicyType.NEVER, vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+            return Gtk.ScrolledWindow(child=w, hscrollbar_policy=Gtk.PolicyType.NEVER, vscrollbar_policy=Gtk.PolicyType.NEVER,
                                       min_content_height=40, propagate_natural_height=False, vexpand=True, hexpand=True)
         self.lyr_clip, self.right_clip = clip(self.lyr_panel), clip(right)
         # Wie viel hineinpasst, richtet sich nach der Höhe, die der Platz wirklich hat (nicht nach der Fensterhöhe)
@@ -183,6 +184,7 @@ class TvPage(Gtk.Box):
         self.spec.set_margin_top(2)
         self.append(self.spec)
 
+        self.refresh_jam()
         self.resize(1280, 800)
 
     # ---------- Größe ----------
@@ -209,7 +211,7 @@ class TvPage(Gtk.Box):
         first = self.upnext.get_first_child()
         rowh = first.measure(Gtk.Orientation.VERTICAL, -1)[1] if first is not None else 42 * self._scale
         used = Panel_HEAD + 14 + (self.src_panel.get_height() + 10 if self.src_panel.get_visible() else 0)
-        n = int(max(1, min(10, (page - used) // max(rowh, 20))))
+        n = int(max(1, min(10, (page - used - 8) // max(rowh + 1, 20))))
         if n != getattr(self, "upnext_n", 0):
             self.upnext_n = n
             self.refresh_queue()
@@ -222,6 +224,86 @@ class TvPage(Gtk.Box):
         self.refresh_queue()
         self.refresh_sleep()
         self.refresh_clock()
+
+    # ---------- Marmelade (Jam) ----------
+    def refresh_jam(self):
+        j = self.p.jam
+        if j is None:
+            self.jam_btn.set_visible(False)
+            return
+        if j.hosting:
+            txt = f"󰀂 {j.code[:3]} {j.code[3:]}" + (f" · {len(j.guests)}" if j.guests else "")
+        elif j.joined is not None:
+            txt = "󰀂 verbunden"
+        else:
+            txt = "󰀂 marmelade"
+        self.jam_btn.set_label(txt)
+        (self.jam_btn.add_css_class if (j.hosting or j.joined is not None) else self.jam_btn.remove_css_class)("accent")
+        if self._jam_pop is not None and self._jam_pop.get_visible():
+            self._fill_jam(self._jam_pop)
+
+    def jam_open(self):
+        j = self.p.jam
+        if j is None:
+            return
+        if not j.hosting and j.joined is None and not j.start():
+            self.w.say(f"marmelade startet nicht: {j.error}", error=True)
+            return
+        pop = self.w.songs._popover(self.jam_btn)
+        pop.set_position(Gtk.PositionType.BOTTOM)
+        self._jam_pop = pop
+        self._fill_jam(pop)
+        self.refresh_jam()
+        pop.popup()
+
+    def _fill_jam(self, pop):
+        j = self.p.jam
+        jm = __import__("jam")
+        box = vbox(spacing=10)
+        for m in ("set_margin_top", "set_margin_bottom", "set_margin_start", "set_margin_end"):
+            getattr(box, m)(12)
+        pop.set_child(box)
+        if j.hosting:
+            box.append(label("󰀂  " + jm.jam_title(), "kp-head"))
+            big = label("")
+            big.set_markup(f"<span size='300%' weight='bold'>{j.code[:3]} {j.code[3:]}</span>")
+            big.set_xalign(0.5)
+            box.append(label("code – in der app (handy oder pc): marmelade beitreten", "dim", xalign=0.5))
+            box.append(big)
+            url = j.url() if j.lan_ok else None
+            qr = jm.qr_matrix(url) if url else None
+            if qr:
+                n = len(qr)
+                cell = max(4, 240 // n)
+                area = Gtk.DrawingArea(content_width=n * cell, content_height=n * cell, halign=Gtk.Align.CENTER)
+                fg, bg = tui.colors().get("on_background") or tui.colors().get("foreground"), tui.colors().get("background")
+
+                def draw(_a, cr, _w, _h, m=qr, cell=cell):
+                    cr.set_source_rgb(bg.red, bg.green, bg.blue) if bg else cr.set_source_rgb(1, 1, 1)
+                    cr.paint()
+                    cr.set_source_rgb(fg.red, fg.green, fg.blue) if fg else cr.set_source_rgb(0, 0, 0)
+                    for y, line in enumerate(m):
+                        for x, on in enumerate(line):
+                            if on:
+                                cr.rectangle(x * cell, y * cell, cell, cell)
+                    cr.fill()
+                area.set_draw_func(draw)
+                box.append(area)
+                box.append(label("qr-code: browser ohne app, nur im selben wlan", "dim", xalign=0.5))
+            box.append(label("internet: " + (j.net_status or "startet …"), "accent" if j.net_status == "verbunden" else "dim", xalign=0.5))
+            import time as _t
+            for key, k in list(j.knocks.items()):
+                if k["state"] == "wait" and _t.time() - k["at"] <= 120:
+                    box.append(hbox(label("󰌹 " + k["name"] + " möchte beitreten", hexpand=True),
+                                    tui.Button("reinlassen", lambda key=key: (j.answer_knock(key, True), self.refresh_jam())),
+                                    tui.Button("✕", lambda key=key: (j.answer_knock(key, False), self.refresh_jam()), danger=True)))
+            names = [g.get("name") or "gast" for g in j.guests.values()]
+            box.append(label(("gäste: " + ", ".join(names)) if names else "noch keine gäste", "dim", xalign=0.5, wrap=True))
+            box.append(tui.Button("marmelade beenden", lambda: (j.stop(), pop.popdown(), self.refresh_jam(), self.w.say("marmelade beendet")),
+                                  danger=True))
+        else:
+            box.append(label("󰀂  du bist in einer marmelade", "kp-head"))
+            box.append(tui.Button("verlassen", lambda: (j.leave(), pop.popdown(), self.refresh_jam()), danger=True))
 
     def toast(self, text, error=False, seconds=6):
         """Meldungen der Statuszeile (Like, Playlist, Fehler …) – die Statuszeile ist im Fernseher-Modus weg."""
@@ -268,7 +350,6 @@ class TvPage(Gtk.Box):
         self.repeat_btn.set_label({"aus": "󰑗 aus", "alle": "󰑖 alle", "eins": "󰑘 eins"}[p.repeat])
         self.vol.set_value(p.volume)
         self.vol_lbl.set_label(f"{p.volume}%")
-        self.auto_chk.set_active(p.autoplay)
         s = p.stream_info
         bits = []
         if p.loading:
@@ -296,9 +377,7 @@ class TvPage(Gtk.Box):
         self.refresh_lyrics()
 
     def refresh_sleep(self):
-        self.sleep_btn.set_label(self.w.sleep_btn.get_label())
-        on = self.w.sleep_btn.has_css_class("accent")
-        (self.sleep_btn.add_css_class if on else self.sleep_btn.remove_css_class)("accent")
+        pass                                  # Sleep-Timer gibt es hier nicht (Taste s im Fenster)
 
     def refresh_queue(self):
         p = self.p

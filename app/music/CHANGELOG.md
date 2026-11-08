@@ -4,6 +4,10 @@
 - **Fernseher-Modus** (Knopf 󰔂 in der Kopfzeile, Taste `t`, `musicalist tv`): Vollbild mit derselben Oberfläche wie „jetzt“, nur groß – Cover, Titel, alle Knöpfe (gefällt mir / gefällt mir nicht, Playlist, Radio, Browser, Titel-Menü), Zeitleiste, Zurück/Play/Weiter, mischen, wiederholen, Sleep-Timer, Klang, Autoplay, Lautstärke, mitlaufende Lyrics, „als nächstes“, andere Quellen und das Spektrum über die ganze Breite. Passt sich der Auflösung an (720 p bis 4K), Meldungen erscheinen oben, der Bildschirm bleibt wach. Zurück mit `t`, Esc, einer Zifferntaste oder dem Knopf oben rechts.
 - **Spektrum läuft jetzt überall:** fehlt cava (Windows, GNOME ohne PipeWire …) oder liefert es nichts, misst mpv selbst (18 Frequenzbänder per Audiofilter, automatische Empfindlichkeit). Der Wechsel passiert von allein nach 3 s; erzwingen unter einstellungen („spektrum ohne cava berechnen“). Mit Überblenden zeigt es beide Titel.
 - **Gefällt mir nicht** (Knopf 󰔒 auf „jetzt“, Taste `d`, Titelmenü): der Titel wird übersprungen, kommt nicht mehr in Radio/Autoplay und wird bei YouTube Music als Daumen runter gemeldet (wie in der Handy-App; ohne Anmeldung nur lokal gemerkt). Herz und Daumen runter schließen sich aus.
+- Fernseher-Modus: Knopf „marmelade“ oben (startet eine Marmelade und zeigt Code, QR-Code, Gäste, Anklopfen; beenden/verlassen), Lautstärke oben rechts, Sleep-Timer/Klang/Autoplay weggelassen, die Kästen unten gehen bis zum Spektrum.
+- Steuerung auf „jetzt“ wie in der Handy-App: Zeitleiste oben, darunter drei gleich breite Kästen, Play gefüllt.
+- Fix: das eingebaute Spektrum kam in Blöcken von mehreren Sekunden an (gepufferte Pipe) und ruckelte – jetzt zeilenweise über das mpv-Log, 20 Bilder/s, weniger Rechenzeit.
+- Fix: Stift-Menü (Anpassen) schnitt unten Kästen ab (feste Höhe passend zum Fenster); Stift mit mehr Abstand zu ¹ jetzt; Spektrum unten niedriger, damit mehr „als nächstes“ passt.
 - Fix: nach einem mpv-Neustart fehlten Equalizer/Filter.
 
 ## 1.29.0 (2026-11-08)

@@ -169,6 +169,8 @@ class AnpassenMixin:
     # ---------- Anpassen-Popover ----------
     def build_customize(self):
         btn = tui.Button("󰏫", self.customize_menu, tooltip="Anpassen: Leiste unter „steuerung“, Bibliothek, Schnellauswahl")
+        btn.set_margin_start(2)
+        btn.set_margin_end(10)                       # Abstand zu ¹ jetzt
         top = self.tab_btns[0][1].get_parent()
         top.insert_child_after(btn, top.get_first_child())
         self.cust_btn = btn
@@ -178,8 +180,10 @@ class AnpassenMixin:
         pop = self.songs._popover(anchor)
         pop.set_position(Gtk.PositionType.BOTTOM)
         holder = vbox(spacing=0)
-        pop.set_child(Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, propagate_natural_height=True, max_content_height=560,
-                                         child=holder))
+        # feste Höhe (passend zum Fenster) statt „natürlicher“: sonst schnitt das Popover die unteren Kästen ab
+        hh = int(max(220, min(620, self.get_height() - 120)))
+        pop.set_child(Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, min_content_height=hh, max_content_height=hh,
+                                         propagate_natural_width=True, child=holder))
 
         def move(key, default, k, d, ctl):
             cur = (engine.setting(key) or default) if ctl else _order(key, default)

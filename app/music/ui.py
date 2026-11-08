@@ -47,6 +47,12 @@ CSS = """
 .spectrum { font-size: 13px; line-height: 0.9; color: @primary; }
 .spectrum.small { font-size: 10px; }
 .np-title { font-size: 20px; }
+/* Steuerung wie in der Handy-App: drei gleich breite Kästen, Play gefüllt */
+button.ctl { min-height: 40px; border-radius: 6px; padding: 4px 10px; }
+button.ctl.play { background: @primary; border-color: @primary; }
+button.ctl.play label { color: @on_primary; }
+button.ctl.play:hover { background: alpha(@primary, 0.85); }
+button.ctl.play:disabled { background: alpha(@primary, 0.18); }
 .np-artist { font-size: 14px; color: @primary; }
 .np-album { color: @secondary; }
 button.ctl { font-size: 18px; padding: 2px 12px; }
@@ -163,6 +169,7 @@ class Cava:
         self.latest, self.last_t, self.scheduled = [], 0.0, False
         self.player = None             # für das eingebaute Spektrum (attach)
         GLib.timeout_add(250, self.watchdog)
+        GLib.timeout_add(40, self.pump)                  # 25 Bilder/s
         self.cfg = RUNTIME + "/rice-music-cava.conf"
         with open(self.cfg, "w") as f:
             f.write(f"""[general]
@@ -202,12 +209,16 @@ noise_reduction = 70
         return False
 
     def push(self, vals):
+        """Aus jedem Thread: nur den neuesten Wert ablegen. Ausgeliefert wird vom Takt im Hauptthread (pump) –
+        pro Wert ein idle_add aus dem Lese-Thread kam unter GTK 4.14 nur ~3× pro Sekunde durch (Spektrum ruckelte)."""
         with self.lock:
             self.latest, self.last_t = vals, time.monotonic()
-            schedule = not self.scheduled
             self.scheduled = True
-        if schedule:
-            GLib.idle_add(self.deliver, priority=GLib.PRIORITY_DEFAULT)   # vor dem Zeichnen, sonst verhungert es bei hoher Last
+
+    def pump(self):
+        if self.scheduled and self.listeners:
+            self.deliver()
+        return True
 
     def set_playing(self, on):
         if bool(on) != self.playing:
@@ -845,8 +856,10 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         for w in (self.shuffle_btn, self.repeat_btn, self.sleep_btn, self.sound_btn, self.auto_chk, self._vol_box):
             opts.append(w)
         self.seek_box = hbox(self.pos_lbl, self.seek, self.dur_lbl, spacing=8, hexpand=True)
-        self.ctl_row = hbox(self.prev_btn, self.play_btn, self.next_btn, self.seek_box, spacing=8)
-        ctl = vbox(self.ctl_row, opts, spacing=10)
+        for b in (self.prev_btn, self.play_btn, self.next_btn):
+            b.set_hexpand(True)
+        self.ctl_row = hbox(self.prev_btn, self.play_btn, self.next_btn, spacing=10, homogeneous=True)
+        ctl = vbox(self.seek_box, self.ctl_row, opts, spacing=10)
         self.ctl_box = ctl
         self.ctl_panel = tui.Panel("steuerung", ctl)
         page.append(self.ctl_panel)
@@ -870,13 +883,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
 
     def set_ctl_narrow(self, narrow):
         """Sehr schmal: Zeitleiste in eine eigene Zeile unter Zurück/Play/Weiter."""
-        inrow = self.seek_box.get_parent() is self.ctl_row
-        if narrow and inrow:
-            self.ctl_row.remove(self.seek_box)
-            self.ctl_box.insert_child_after(self.seek_box, self.ctl_row)
-        elif not narrow and not inrow:
-            self.ctl_box.remove(self.seek_box)
-            self.ctl_row.append(self.seek_box)
+        return                       # Zeitleiste steht immer über den Knöpfen (wie in der Handy-App)
 
     def update_track_labels(self):
         t = self.p.current
@@ -1086,7 +1093,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.srcs.want("window", False)
 
     # ---------- Platz einteilen: Tab 1 passt immer genau ins Fenster ----------
-    SPEC_MIN, SPEC_MAX = 28, 64   # Spektrum bleibt flach, den Platz bekommt "als nächstes"
+    SPEC_MIN, SPEC_MAX = 28, 44   # Spektrum bleibt flach, den Platz bekommt "als nächstes"
 
     def schedule_relayout(self):
         if self._relayout_id is None:
@@ -1292,9 +1299,9 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
             self.shift_lyrics(-0.25 if kv == Gdk.KEY_bracketleft else 0.25)
         elif kv == Gdk.KEY_comma:
             self.show_tab("settings")
-        elif kv == Gdk.KEY_s:
+        elif kv == Gdk.KEY_s and not self.tv_on:
             self.sleep_menu()
-        elif kv == Gdk.KEY_e:
+        elif kv == Gdk.KEY_e and not self.tv_on:
             self.sound_menu()
         elif kv == Gdk.KEY_f and self.current_tab() == "visuals":
             self.toggle_focus()
