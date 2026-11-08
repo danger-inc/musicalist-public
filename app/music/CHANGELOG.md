@@ -1,5 +1,20 @@
 # musicalist – Änderungen
 
+## 1.32.1 (2026-11-08)
+- **Fernseher-Modus: Leiste bearbeiten** (Stift oben oder Rechtsklick auf die Leiste): Kästen per Haken ein-/ausblenden und mit ← → ordnen. Zusätzlich wählbar: Schlaf-Timer, Klang/Mixer, Autoplay, Künstler, Album, empfehlen. „zurücksetzen“ stellt die Standardleiste her.
+
+## 1.32.0 (2026-11-08)
+- **Fernseher-Modus im Look der Handy-App:** Zurück / Play (gefüllt) / Weiter als drei große gleich breite Kästen, darunter eine Reihe gleich breiter Symbol-Kästen (mischen, wiederholen, gefällt mir, gefällt mir nicht, Playlist, Radio, Browser, Menü, Raster); aktive Kästen sind gefüllt. Die Seite passt sich der Fensterbreite an (kein Überlaufen mehr, auch bei 1366 × 768).
+- **Hören · Freunde:** „freunde“ ist kein eigener Tab mehr, sondern mit dem Hörverhalten (Analyse) in Tab 7 zusammengelegt – oben wählst du zwischen „hörverhalten“ und „freunde“.
+- **Raster einstellen:** Rechtsklick (oder langes Drücken) auf den Raster-Knopf öffnet wie am Handy die Einstellungen: Vorschau, Presets (fein, punktraster, gameboy, 8-bit farbig, zeitung), Form, Auflösung, Punktgröße, Farbe, Kontrast, Helligkeit ausgleichen, umkehren, Rasterung. Gilt für alle Titelbilder.
+
+## 1.31.0 (2026-11-08)
+- **Freunde ist jetzt ein eigener Tab** (⁸ freunde, Alt+8), nicht mehr in der Bibliothek.
+- **Raster / Foto** wie in der Handy-App: Knopf 󱗼 in der Leiste unter „steuerung“ (unter Anpassen an-/abschaltbar) und im Fernseher-Modus schaltet alle Titelbilder gleichzeitig zwischen Punktraster und echtem Foto um.
+- **Schnellauswahl** im Look der App: Punktraster-Kacheln mit Rahmen und Hover (bzw. Fotos bei ausgeschaltetem Raster).
+- Fernseher-Modus: Steuerung im gleichen Stil wie auf „jetzt“ (nur größer), Lautstärke oben rechts im Kasten „läuft“, „als nächstes“ genau so hoch wie „lyrics“.
+- Die Steuerung im normalen Modus ist wieder wie vorher (Änderung aus 1.30 zurückgenommen).
+
 ## 1.30.0 (2026-11-08)
 - **Fernseher-Modus** (Knopf 󰔂 in der Kopfzeile, Taste `t`, `musicalist tv`): Vollbild mit derselben Oberfläche wie „jetzt“, nur groß – Cover, Titel, alle Knöpfe (gefällt mir / gefällt mir nicht, Playlist, Radio, Browser, Titel-Menü), Zeitleiste, Zurück/Play/Weiter, mischen, wiederholen, Sleep-Timer, Klang, Autoplay, Lautstärke, mitlaufende Lyrics, „als nächstes“, andere Quellen und das Spektrum über die ganze Breite. Passt sich der Auflösung an (720 p bis 4K), Meldungen erscheinen oben, der Bildschirm bleibt wach. Zurück mit `t`, Esc, einer Zifferntaste oder dem Knopf oben rechts.
 - **Spektrum läuft jetzt überall:** fehlt cava (Windows, GNOME ohne PipeWire …) oder liefert es nichts, misst mpv selbst (18 Frequenzbänder per Audiofilter, automatische Empfindlichkeit). Der Wechsel passiert von allein nach 3 s; erzwingen unter einstellungen („spektrum ohne cava berechnen“). Mit Überblenden zeigt es beide Titel.

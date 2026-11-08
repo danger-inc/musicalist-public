@@ -47,14 +47,8 @@ CSS = """
 .spectrum { font-size: 13px; line-height: 0.9; color: @primary; }
 .spectrum.small { font-size: 10px; }
 .np-title { font-size: 20px; }
-/* Steuerung wie in der Handy-App: drei gleich breite Kästen, Play gefüllt */
-button.ctl { min-height: 40px; border-radius: 6px; padding: 4px 10px; }
-button.ctl.play { background: @primary; border-color: @primary; }
-button.ctl.play label { color: @on_primary; }
-button.ctl.play:hover { background: alpha(@primary, 0.85); }
-button.ctl.play:disabled { background: alpha(@primary, 0.18); }
-.np-artist { font-size: 14px; color: @primary; }
-.np-album { color: @secondary; }
+button.qtile { padding: 3px; border: 1px solid alpha(@primary, 0.35); border-radius: 6px; background: none; min-width: 0; min-height: 0; }
+button.qtile:hover { border-color: @primary; background: alpha(@primary, 0.12); }
 button.ctl { font-size: 18px; padding: 2px 12px; }
 button.ctl label { font-size: 18px; }
 button.ctl.play label { font-size: 22px; }
@@ -328,7 +322,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
     APP_ID = "de.invincible.Music"
     TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"),
             ("lyrics", "lyrics", "\U000f0370"), ("visuals", "visuals", "󱑽"), ("search", "suchen", "󰍉"),
-            ("stats", "analyse", "󰄨"), ("settings", "einstellungen", "󰒓")]   # einstellungen: kein Tab, sondern ⚙ oben rechts
+            ("stats", "hören · freunde", "󰄨"), ("settings", "einstellungen", "󰒓")]   # einstellungen: kein Tab, sondern ⚙ oben rechts
     ESC_CLOSES = False          # Esc soll den Player nicht zumachen (nur Tastenkürzel aus der Config / q / ✕)
 
     def __init__(self, app, player, cava, srcs):
@@ -380,6 +374,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.tv_on, self._tv_cookie = False, 0
         self.build_tv()
         self.build_stats()
+        self.build_hear()
         self.build_settings()
         self.spec = Spectrum(rows=2, cell=9, height=34)
         self.spec.set_margin_top(6)
@@ -712,10 +707,47 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.add_page("visuals", self.visuals, scroll=False)
         self.visuals.update_track()
 
+    # ---------- Tab 7: hörverhalten (analyse) und freunde als zwei Unterseiten ----------
+    def build_hear(self):
+        stats_w = self.stack.get_child_by_name("stats")
+        self.stack.remove(stats_w)
+        self.hear_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, transition_duration=90, vexpand=True)
+        self.hear_stack.add_named(stats_w, "analyse")
+        self.hear_stack.add_named(self.friends_page, "friends")
+        self.hear_btns = {}
+        bar = hbox(spacing=6)
+        bar.set_margin_top(6)
+        for key, name in (("analyse", "󰄨 hörverhalten"), ("friends", "󰡉 freunde")):
+            b = tui.Button(name, lambda k=key: self.hear_select(k))
+            self.hear_btns[key] = b
+            bar.append(b)
+        self.hear_sub = engine.setting("hear_sub") if engine.setting("hear_sub") in ("analyse", "friends") else "analyse"
+        self.hear_stack.set_visible_child_name(self.hear_sub)
+        for k, b in self.hear_btns.items():
+            (b.add_css_class if k == self.hear_sub else b.remove_css_class)("on")
+        wrap = vbox(bar, self.hear_stack, spacing=4)
+        self.stack.add_named(wrap, "stats")
+
+    def hear_select(self, key, force=False):
+        if key == getattr(self, "hear_sub", None) and not force:
+            return
+        self.hear_sub = key
+        engine.set_setting("hear_sub", key)
+        self.hear_stack.set_visible_child_name(key)
+        for k, b in self.hear_btns.items():
+            (b.add_css_class if k == key else b.remove_css_class)("on")
+        if self.current_tab() == "stats":
+            if key == "friends":
+                self.friends_shown()
+            else:
+                self.an_shown()
+
     # ---------- Fernseher-Modus ----------
     def build_tv(self):
         self.tv = tv.TvPage(self)
-        self.add_page("tv", self.tv, scroll=False)
+        # in ScrolledWindow(EXTERNAL): die Seite darf das Fenster nie breiter/höher zwingen als der Bildschirm
+        self.add_page("tv", Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.EXTERNAL, vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+                                               child=self.tv, vexpand=True, hexpand=True), scroll=False)
         GLib.timeout_add_seconds(20, lambda: (self.tv.refresh_clock() if self.tv_on else None) or True)
 
     def tv_mode(self, on):
@@ -856,10 +888,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         for w in (self.shuffle_btn, self.repeat_btn, self.sleep_btn, self.sound_btn, self.auto_chk, self._vol_box):
             opts.append(w)
         self.seek_box = hbox(self.pos_lbl, self.seek, self.dur_lbl, spacing=8, hexpand=True)
-        for b in (self.prev_btn, self.play_btn, self.next_btn):
-            b.set_hexpand(True)
-        self.ctl_row = hbox(self.prev_btn, self.play_btn, self.next_btn, spacing=10, homogeneous=True)
-        ctl = vbox(self.seek_box, self.ctl_row, opts, spacing=10)
+        self.ctl_row = hbox(self.prev_btn, self.play_btn, self.next_btn, self.seek_box, spacing=8)
+        ctl = vbox(self.ctl_row, opts, spacing=10)
         self.ctl_box = ctl
         self.ctl_panel = tui.Panel("steuerung", ctl)
         page.append(self.ctl_panel)
@@ -883,7 +913,13 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
 
     def set_ctl_narrow(self, narrow):
         """Sehr schmal: Zeitleiste in eine eigene Zeile unter Zurück/Play/Weiter."""
-        return                       # Zeitleiste steht immer über den Knöpfen (wie in der Handy-App)
+        inrow = self.seek_box.get_parent() is self.ctl_row
+        if narrow and inrow:
+            self.ctl_row.remove(self.seek_box)
+            self.ctl_box.insert_child_after(self.seek_box, self.ctl_row)
+        elif not narrow and not inrow:
+            self.ctl_box.remove(self.seek_box)
+            self.ctl_row.append(self.seek_box)
 
     def update_track_labels(self):
         t = self.p.current
@@ -1234,7 +1270,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
             self.load_lyrics()
             GLib.timeout_add(60, lambda: self.sync_lyrics(jump=True) and False)
         if tab == "stats":
-            self.an_shown()
+            self.hear_select(self.hear_sub, force=True)
         if tab == "search":
             GLib.idle_add(lambda: self.query.grab_focus() and False)
 
@@ -1266,7 +1302,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         if isinstance(focus, (Gtk.Text, Gtk.Entry)) or state & (Gdk.ModifierType.CONTROL_MASK |
                                                                  Gdk.ModifierType.ALT_MASK):
             return False
-        if self.current_tab() == "stats" and self.an_key(kv):
+        if self.current_tab() == "stats" and self.hear_sub == "analyse" and self.an_key(kv):
             return True
         if kv == Gdk.KEY_space:
             self.p.toggle()

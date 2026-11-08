@@ -1,6 +1,8 @@
 # musicalist – Bild-Bausteine (Cover als Braille/Punkte, Halbton) und Layer-Shell-Prüfung für ui.py und die Seiten.
 import re, urllib.request
 
+import cairo
+
 import gi
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango, PangoCairo
@@ -13,6 +15,7 @@ except (ImportError, ValueError):
 import tui
 from tui import label, hbox, vbox, esc
 import engine
+import pixelart
 
 
 TICKS = " ▁▂▃▄▅▆▇█"
@@ -114,19 +117,124 @@ def placeholder(cols, rows):
             lines.append("│" + " " * (cols - 2) + "│")
     return "\n".join(lines)
 
-class Cover(Gtk.Label):
+# ---------- Raster an/aus (wie in der Handy-App): gilt überall, wo ein Titelbild gezeigt wird ----------
+PIXEL_LISTENERS = []
+
+def pixel_on():
+    return engine.setting("pixel") is not False          # Standard: Raster
+
+
+def set_pixel(on):
+    engine.set_setting("pixel", bool(on))
+    for fn in list(PIXEL_LISTENERS):
+        fn()
+
+
+def notify_pixel():
+    for fn in list(PIXEL_LISTENERS):
+        fn()
+
+
+def draw_photo(cr, pb, x, y, side):
+    """Foto quadratisch (mittig beschnitten) in ein side×side-Feld zeichnen."""
+    w, h = pb.get_width(), pb.get_height()
+    m = min(w, h)
+    k = side / m
+    cr.save()
+    cr.rectangle(x, y, side, side)
+    cr.clip()
+    cr.translate(x - (w - m) / 2 * k, y - (h - m) / 2 * k)
+    cr.scale(k, k)
+    Gdk.cairo_set_source_pixbuf(cr, pb, 0, 0)
+    cr.paint()
+    cr.restore()
+
+
+class DotThumb(Gtk.DrawingArea):
+    """Kleines quadratisches Titelbild als Raster (oder Foto bei ausgeschaltetem Raster) – für Raster-Listen."""
+    N = 22
+
+    def __init__(self, side=86):
+        super().__init__(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        self.side, self.pb, self._g = side, None, None
+        self.set_content_width(side)
+        self.set_content_height(side)
+        self.set_draw_func(self._draw)
+        PIXEL_LISTENERS.append(self.queue_draw)
+        self.connect("destroy", lambda *_: PIXEL_LISTENERS.remove(self.queue_draw) if self.queue_draw in PIXEL_LISTENERS else None)
+
+    def set_data(self, pb, _unused=None):
+        self.pb, self._g = pb, None
+        self.queue_draw()
+
+    def _draw(self, _a, cr, width, height):
+        side = min(width, height)
+        if self.pb is None:
+            c = tui.colors()
+            p, fg = c.get("primary"), c.get("foreground")
+            n = self.N
+            for y in range(n):
+                for x in range(n):
+                    cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.10)
+                    cr.arc((x + 0.5) * side / n, (y + 0.5) * side / n, side / n * 0.36, 0, 6.2832)
+                    cr.fill()
+            return
+        if not pixel_on():
+            draw_photo(cr, self.pb, 0, 0, side)
+            return
+        c = pixelart.cfg()
+        res = min(c["res"], 44) if pixelart.custom() else self.N
+        k = (pixelart.key(c), res)
+        if self._g is None or self._g[0] != k:
+            self._g = (k, pixelart.grid(self.pb, res, c))
+        pixelart.draw(cr, self._g[1], side, c, flip=ink_darker())
+
+
+class Cover(Gtk.Box):
+    """Titelbild als Braille-Zeichen (Raster an) oder als Foto (Raster aus, siehe set_pixel)."""
     def __init__(self, cols, rows, small=False):
-        super().__init__(xalign=0, yalign=0, valign=Gtk.Align.START)
-        self.add_css_class("cover")
+        super().__init__(valign=Gtk.Align.START)
+        self.lbl = Gtk.Label(xalign=0, yalign=0, valign=Gtk.Align.START)
+        self.lbl.add_css_class("cover")
         if small:
-            self.add_css_class("small")
-        self.cols, self.rows, self.url = cols, rows, None
-        self.set_label(placeholder(cols, rows))
+            self.lbl.add_css_class("small")
+        self.pic = Gtk.Picture(can_shrink=True, content_fit=Gtk.ContentFit.COVER, valign=Gtk.Align.START, halign=Gtk.Align.START,
+                               visible=False)
+        self.append(self.lbl)
+        self.append(self.pic)
+        self.cols, self.rows, self.url, self.pb = cols, rows, None, None
+        self.lbl.set_label(placeholder(cols, rows))
+        self._size_pic()
+        PIXEL_LISTENERS.append(self.apply)
+        self.connect("destroy", lambda *_: PIXEL_LISTENERS.remove(self.apply) if self.apply in PIXEL_LISTENERS else None)
+
+    def _size_pic(self):
+        side = int(self.cols * 5.4)
+        self.pic.set_size_request(side, side)
+
+    def set_label(self, text):                 # alter Name (Label) – Aufrufer setzen nur Text
+        self.lbl.set_label(text)
+
+    def apply(self):
+        photo = self.pb is not None and not pixel_on()
+        drawn = self.pb is not None and pixel_on() and pixelart.custom()      # eigenes Raster: gezeichnet statt Braille
+        if drawn:
+            side = int(self.cols * 5.4)
+            c = pixelart.cfg()
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, side, side)
+            cr = cairo.Context(surf)
+            pixelart.draw(cr, pixelart.grid(self.pb, c["res"], c), side, c, flip=ink_darker())
+            self.pic.set_paintable(Gdk.Texture.new_for_pixbuf(Gdk.pixbuf_get_from_surface(surf, 0, 0, side, side)))
+        elif photo:
+            self.pic.set_paintable(Gdk.Texture.new_for_pixbuf(self.pb))
+        self.pic.set_visible(photo or drawn)
+        self.lbl.set_visible(not (photo or drawn))
 
     def set_size(self, cols, rows):
         if (cols, rows) == (self.cols, self.rows):
             return
         self.cols, self.rows = cols, rows
+        self._size_pic()
         url, self.url = self.url, None
         self.show(url)  # neu rastern (Bild kommt aus dem Zwischenspeicher)
 
@@ -135,16 +243,22 @@ class Cover(Gtk.Label):
             return
         self.url = url
         if not url:
-            self.set_label(placeholder(self.cols, self.rows))
+            self.pb = None
+            self.lbl.set_label(placeholder(self.cols, self.rows))
+            self.apply()
             return
+        flip = ink_darker()
+        cols, rows = self.cols, self.rows
 
         def work():
-            return braille(fetch_pixbuf(big_thumb(url)), self.cols, self.rows, flip)
-        flip = ink_darker()
+            pb = fetch_pixbuf(big_thumb(url))
+            return braille(pb, cols, rows, flip), pb
 
         def done(res):
-            if self.url == url and isinstance(res, str):
-                self.set_label(res)
+            if self.url == url and isinstance(res, tuple):
+                self.lbl.set_label(res[0])
+                self.pb = res[1]
+                self.apply()
         tui.background(work, done=done)
 
 class DotCover(Gtk.DrawingArea):
@@ -155,7 +269,9 @@ class DotCover(Gtk.DrawingArea):
 
     def __init__(self, size=88):
         super().__init__(valign=Gtk.Align.FILL, halign=Gtk.Align.START)
-        self.url, self.on = None, None
+        self.url, self.on, self.pb = None, None, None
+        PIXEL_LISTENERS.append(self.queue_draw)
+        self.connect("destroy", lambda *_: PIXEL_LISTENERS.remove(self.queue_draw) if self.queue_draw in PIXEL_LISTENERS else None)
         self.top = self.bottom = 0.0   # Abstand zur sichtbaren Kante der Nachbarn (Schrift/Balken)
         self.set_content_width(size)
         self.set_draw_func(self._draw)
@@ -176,17 +292,17 @@ class DotCover(Gtk.DrawingArea):
     def show(self, url):
         if url == self.url:
             return
-        self.url, self.on = url, None
+        self.url, self.on, self.pb = url, None, None
         self.queue_draw()
         if not url:
             return
 
         def done(res):
-            if self.url == url and isinstance(res, list):
-                self.on = res
+            if self.url == url and not isinstance(res, Exception):
+                self.pb, self._g = res, None
+                self.on = True
                 self.queue_draw()
-        flip = ink_darker()
-        tui.background(lambda: dither(fetch_pixbuf(big_thumb(url)), self.DOTS, self.DOTS, flip), done=done)
+        tui.background(lambda: fetch_pixbuf(big_thumb(url)), done=done)
 
     def _draw(self, _a, cr, width, height):
         c = tui.colors()
@@ -194,6 +310,17 @@ class DotCover(Gtk.DrawingArea):
         n = self.DOTS
         side = min(width, height - self.top - self.bottom)
         cr.translate(0, self.top)
+        if self.pb is not None and not pixel_on():
+            draw_photo(cr, self.pb, 0, 0, side)
+            return
+        if self.pb is not None:
+            c = pixelart.cfg()
+            res = c["res"] if pixelart.custom() else self.DOTS
+            k = (pixelart.key(c), res)
+            if getattr(self, "_g", None) is None or self._g[0] != k:
+                self._g = (k, pixelart.grid(self.pb, res, c))
+            pixelart.draw(cr, self._g[1], side, c, flip=ink_darker())
+            return
         pitch = side / n
         r = pitch * 0.36
         on = self.on

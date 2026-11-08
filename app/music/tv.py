@@ -38,11 +38,18 @@ def css(s):
 .tv .tv-artist {{ font-size: {f(22)}; color: @primary; }}
 .tv .tv-album {{ font-size: {f(16)}; color: alpha(@foreground, 0.65); }}
 .tv .tv-info {{ font-size: {f(13)}; color: alpha(@foreground, 0.5); }}
+.tv button.bx {{ background: @background; border: 1px solid alpha(@primary, 0.6); border-radius: 6px; padding: 0; box-shadow: none; }}
+.tv button.bx label {{ color: @foreground; }}
+.tv button.bx.big {{ min-height: {f(60)}; }}
+.tv button.bx.big label {{ font-size: {f(32)}; }}
+.tv button.bx.small {{ min-height: {f(46)}; min-width: 0; }}
+.tv button.bx.small label {{ font-size: {f(20)}; }}
+.tv button.bx:hover {{ border-color: @primary; background: alpha(@primary, 0.14); }}
+.tv button.bx.fill, .tv button.bx.on {{ background: @primary; border-color: @primary; }}
+.tv button.bx.fill label, .tv button.bx.on label {{ color: @on_primary; }}
+.tv button.bx:disabled {{ opacity: 0.45; }}
 .tv button.tbtn {{ font-size: {f(15)}; padding: {f(5)} {f(14)}; }}
 .tv button.tbtn label {{ font-size: {f(15)}; }}
-.tv button.ctl {{ padding: {f(4)} {f(22)}; }}
-.tv button.ctl label {{ font-size: {f(30)}; }}
-.tv button.ctl.play label {{ font-size: {f(38)}; }}
 .tv .check label {{ font-size: {f(15)}; }}
 .tv .mono-pct {{ font-size: {f(15)}; }}
 .tv .tvlyric {{ font-size: {f(20)}; color: alpha(@foreground, 0.42); padding: {f(3)} {f(8)}; }}
@@ -83,12 +90,14 @@ class TvPage(Gtk.Box):
         self.vol_lbl = label("", "mono-pct", xalign=1)
         self.vol_lbl.set_width_chars(4)
         vol = hbox(label("󰕾", "accent"), self.vol, self.vol_lbl, spacing=8)
+        self.edit_btn = tui.Button("󰏫", lambda: self.bar_edit(), tooltip="Leiste mit den Symbol-Kästen bearbeiten (auch: Rechtsklick auf die Leiste)")
         self.jam_btn = tui.Button("󰀂 marmelade", self.jam_open, tooltip="Marmelade: gemeinsam Musik hören – starten, Code/QR zeigen")
         self._jam_pop = None
         if self.p.jam is not None:
             self.p.jam.listeners.append(lambda *_: self.refresh_jam())
+        self.vol_box = vol
         top = hbox(label("󰝚 musicalist", "tv-brand"), label("󰔂 fernseher", "dim"), label("", hexpand=True),
-                   self.msg, self.jam_btn, vol, self.clock, exit_btn, spacing=14)
+                   self.msg, self.edit_btn, self.jam_btn, self.clock, exit_btn, spacing=14)
         self.append(top)
 
         # --- läuft: Cover links, Titel + Knöpfe rechts ---
@@ -105,43 +114,73 @@ class TvPage(Gtk.Box):
         self.album = label("", "tv-album", ellipsize=True)
         self.info = label("", "tv-info", ellipsize=True)
 
-        self.like_btn = tui.Button("", lambda: self.p.like(), tooltip="Gefällt mir (l)")
-        self.dislike_btn = tui.Button("󰔒", lambda: self.p.dislike(), tooltip="Gefällt mir nicht (d)")
-        self.pl_btn = tui.Button("󰐒 playlist", lambda: win.songs.picker(self.pl_btn, [self.p.current]) if self.p.current else None,
-                                 tooltip="Zu einer Playlist hinzufügen (a)")
-        self.radio_btn = tui.Button("󰐹 radio", lambda: (self.p.start_radio(), win.say("radio startet …")),
-                                    tooltip="Ähnliche Titel als Warteschlange")
-        self.web_btn = tui.Button("↗ browser", win.open_web, tooltip="In YouTube Music öffnen")
-        self.menu_btn = tui.Button("⋮ menü", lambda: self.p.current and win.songs.menu(self.menu_btn, 0, self.menu_btn.get_height(), self.p.current),
-                                   tooltip="Alles zu diesem Titel")
-        acts = hbox(self.like_btn, self.dislike_btn, self.pl_btn, self.radio_btn, self.web_btn, self.menu_btn, spacing=10)
-        acts.set_halign(Gtk.Align.START)
-        self.acts = acts
+        def bx(glyph, cb, tip, big=False):
+            """Kasten wie in der Handy-App (BoxBtn): umrandet, abgerundet, nur Symbol; aktiv = gefüllt."""
+            btn = Gtk.Button(label=glyph, hexpand=True, focus_on_click=False, tooltip_text=tip)
+            btn.add_css_class("bx")
+            btn.add_css_class("big" if big else "small")
+            btn.connect("clicked", lambda *_: cb())
+            return btn
+        from widgets import pixel_on, set_pixel, PIXEL_LISTENERS
+        self.prev_btn = bx("󰒮", self.p.prev, "Zurück (p)", True)
+        self.play_btn = bx("󰐊", self.p.toggle, "Play/Pause (Leertaste)", True)
+        self.play_btn.add_css_class("fill")
+        self.next_btn = bx("󰒭", lambda: self.p.next(), "Weiter (n)", True)
+        self.shuffle_btn = bx("󰒝", self.p.shuffle_queue, "Warteschlange mischen")
+        self.repeat_btn = bx("󰑗", self.p.cycle_repeat, "Wiederholen: aus / alle / eins")
+        self.like_btn = bx("󰋕", lambda: self.p.like(), "Gefällt mir (l)")
+        self.dislike_btn = bx("󰔒", lambda: self.p.dislike(), "Gefällt mir nicht (d)")
+        self.pl_btn = bx("󰐒", lambda: win.songs.picker(self.pl_btn, [self.p.current]) if self.p.current else None,
+                         "Zu einer Playlist hinzufügen (a)")
+        self.radio_btn = bx("󰐹", lambda: (self.p.start_radio(), win.say("radio startet …")), "Ähnliche Titel als Warteschlange")
+        self.web_btn = bx("↗", win.open_web, "In YouTube Music öffnen")
+        self.menu_btn = bx("⋮", lambda: self.p.current and win.songs.menu(self.menu_btn, 0, self.menu_btn.get_height(), self.p.current),
+                           "Alles zu diesem Titel")
+        self.pixel_btn = bx("󱗼", lambda: set_pixel(not pixel_on()), "Titelbilder: Raster / Foto – Rechtsklick: einstellen")
+        win.attach_pixel_menu(self.pixel_btn)
+        self.sleep_btn = bx("󰒲", lambda: win.sleep_menu(self.sleep_btn), "Sleep-Timer")
+        self.sound_btn = bx("󰓃", lambda: win.sound_menu(self.sound_btn), "Klang: Equalizer und Überblendung")
+        self.auto_btn = bx("󰑐", self._toggle_autoplay, "Autoplay: am Ende ähnliche Titel weiterspielen")
+        self.artist_btn = bx("󰠃", self._open_artist, "Künstlerseite")
+        self.album_btn = bx("󰀥", self._open_album, "Album öffnen")
+        self.rec_btn = bx("󰡉", self._recommend, "An alle Freunde empfehlen")
+        self.bar_all = {
+            "shuffle": (self.shuffle_btn, "󰒝 mischen"), "repeat": (self.repeat_btn, "󰑗 wiederholen"),
+            "like": (self.like_btn, "󰋑 gefällt mir"), "dislike": (self.dislike_btn, "󰔒 gefällt mir nicht"),
+            "playlist": (self.pl_btn, "󰐒 playlist"), "radio": (self.radio_btn, "󰐹 radio"),
+            "browser": (self.web_btn, "↗ browser"), "menu": (self.menu_btn, "⋮ titel-menü"),
+            "pixel": (self.pixel_btn, "󱗼 raster / foto"), "sleep": (self.sleep_btn, "󰒲 schlaf-timer"),
+            "mixer": (self.sound_btn, "󰓃 klang / mixer"), "autoplay": (self.auto_btn, "󰑐 autoplay"),
+            "artist": (self.artist_btn, "󰠃 künstler"), "album": (self.album_btn, "󰀥 album"),
+            "recommend": (self.rec_btn, "󰡉 empfehlen"),
+        }
+
+        def sync_pix():
+            self.pixel_btn.set_label("󱗼" if pixel_on() else "󰋩")
+            (self.pixel_btn.add_css_class if pixel_on() else self.pixel_btn.remove_css_class)("on")
+        PIXEL_LISTENERS.append(sync_pix)
+        sync_pix()
 
         self.pos_lbl = label("0:00", "mono-pct")
         self.dur_lbl = label("0:00", "mono-pct", xalign=1)
         self.seek = tui.Meter(1000, win.on_seek, mark=False, scroll="h")
         self.seek.set_content_height(26)
         seek_row = hbox(self.pos_lbl, self.seek, self.dur_lbl, spacing=12, hexpand=True)
+        big = hbox(self.prev_btn, self.play_btn, self.next_btn, spacing=10, homogeneous=True, hexpand=True)
+        self.small = hbox(spacing=8, homogeneous=True, hexpand=True)
+        small = self.small
+        rc2 = Gtk.GestureClick(button=3)                 # Rechtsklick auf die Leiste = bearbeiten
+        rc2.connect("pressed", lambda *_: self.bar_edit())
+        small.add_controller(rc2)
+        self.apply_bar()
 
-        self.shuffle_btn = tui.Button("󰒝 mischen", self.p.shuffle_queue, tooltip="Warteschlange mischen")
-        self.prev_btn = tui.Button("󰒮", self.p.prev, tooltip="Zurück (p)")
-        self.play_btn = tui.Button("󰐊", self.p.toggle, tooltip="Play/Pause (Leertaste)")
-        self.next_btn = tui.Button("󰒭", lambda: self.p.next(), tooltip="Weiter (n)")
-        for b in (self.prev_btn, self.play_btn, self.next_btn):
-            b.add_css_class("ctl")
-        self.play_btn.add_css_class("play")
-        self.repeat_btn = tui.Button("", self.p.cycle_repeat, tooltip="Wiederholen: aus / alle / eins")
-        for b in (self.prev_btn, self.play_btn, self.next_btn):
-            b.set_hexpand(True)
-        big = hbox(self.prev_btn, self.play_btn, self.next_btn, spacing=12, homogeneous=True, hexpand=True)
-        ctl = hbox(self.shuffle_btn, big, self.repeat_btn, spacing=16)
-
-        side = vbox(self.title, self.artist, self.album, self.info, acts, spacing=6, hexpand=True)
+        side = vbox(self.title, self.artist, self.album, self.info, spacing=6, hexpand=True)
         side.set_valign(Gtk.Align.CENTER)
-        now_row = hbox(self.cover, side, spacing=26)
+        self.vol_box.set_valign(Gtk.Align.START)
+        self.vol_box.set_halign(Gtk.Align.END)
+        now_row = hbox(self.cover, side, self.vol_box, spacing=26)
         now_row.set_margin_bottom(4)
-        self.now_panel = tui.Panel("󰝚 läuft", vbox(now_row, seek_row, ctl, spacing=14))
+        self.now_panel = tui.Panel("󰝚 läuft", vbox(now_row, seek_row, big, small, spacing=12))
         rc = Gtk.GestureClick(button=3)           # Rechtsklick auf „läuft“ = Menü zum Titel
         rc.connect("pressed", lambda g, n, x, y: self.p.current and win.songs.menu(now_row, x, y, self.p.current))
         now_row.add_controller(rc)
@@ -165,6 +204,8 @@ class TvPage(Gtk.Box):
         right = vbox(self.upnext_panel, self.src_panel, spacing=10, hexpand=True)
         right.set_vexpand(True)
         self.upnext_panel.set_vexpand(True)
+        self.upnext_panel.body.set_vexpand(True)       # Kasten bis ganz unten, genau so hoch wie „lyrics“
+        self.lyr_panel.body.set_vexpand(True)
 
         def clip(w):
             # Mindesthöhe klein halten: sonst bestimmt der Inhalt die Fensterhöhe (und das Fenster passt nie auf 720 p)
@@ -224,6 +265,91 @@ class TvPage(Gtk.Box):
         self.refresh_queue()
         self.refresh_sleep()
         self.refresh_clock()
+
+    # ---------- Leiste bearbeiten ----------
+    BAR_DEFAULT = ["shuffle", "repeat", "like", "dislike", "playlist", "radio", "browser", "menu", "pixel"]
+
+    def bar_ids(self):
+        cur = engine.setting("tv_bar")
+        return [x for x in (cur if isinstance(cur, list) else self.BAR_DEFAULT) if x in self.bar_all]
+
+    def apply_bar(self):
+        child = self.small.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self.small.remove(child)
+            child = nxt
+        for k in self.bar_ids():
+            self.small.append(self.bar_all[k][0])
+        if hasattr(self, "spec"):                       # erst nach dem Aufbau der Seite
+            self.refresh_state()
+            self.refresh_track()
+            self.refresh_sleep()
+
+    def bar_edit(self):
+        pop = self.w.songs._popover(self.edit_btn)
+        pop.set_position(Gtk.PositionType.BOTTOM)
+        holder = vbox(spacing=2)
+        for m in ("set_margin_top", "set_margin_bottom", "set_margin_start", "set_margin_end"):
+            getattr(holder, m)(10)
+        hh = int(max(240, min(560, self.w.get_height() - 140)))
+        pop.set_child(Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, min_content_height=hh, max_content_height=hh,
+                                         min_content_width=300, child=holder))
+
+        def save(cur):
+            engine.set_setting("tv_bar", cur)
+            self.apply_bar()
+            fill()
+
+        def toggle(k, on):
+            cur = self.bar_ids()
+            if on and k not in cur:
+                cur.append(k)
+            if not on and k in cur:
+                cur.remove(k)
+            save(cur)
+
+        def move(k, d):
+            cur = self.bar_ids()
+            i = cur.index(k)
+            j = i + d
+            if 0 <= j < len(cur):
+                cur.insert(j, cur.pop(i))
+                save(cur)
+
+        def fill():
+            tui.clear(holder)
+            holder.append(label("󰏫  leiste bearbeiten", "kp-head"))
+            holder.append(label("haken = anzeigen, ← → ordnen", "kp-sub"))
+            bar = self.bar_ids()
+            for k in bar + [x for x in self.bar_all if x not in bar]:
+                on = k in bar
+                row = hbox(tui.Check(self.bar_all[k][1], on, lambda v, k=k: toggle(k, v)), label("", hexpand=True), spacing=6)
+                if on:
+                    row.append(tui.Button("←", lambda k=k: move(k, -1)))
+                    row.append(tui.Button("→", lambda k=k: move(k, 1)))
+                holder.append(row)
+            holder.append(tui.Button("zurücksetzen", lambda: (engine.set_setting("tv_bar", None), self.apply_bar(), fill()), danger=True))
+        fill()
+        pop.popup()
+
+    def _toggle_autoplay(self):
+        self.w.set_autoplay(not self.p.autoplay)
+        self.refresh_state()
+
+    def _open_album(self):
+        t = self.p.current
+        if t and t.get("albumId"):
+            self.w.tv_mode(False)
+            self.w.open_detail("album", t["albumId"])
+        else:
+            self.w.say("zu diesem titel ist kein album bekannt")
+
+    def _recommend(self):
+        t = self.p.current
+        fr = getattr(self.p, "friends", None)
+        if t and fr and fr.recommend(t):
+            self.w.say("freunde sehen: empfohlen")
 
     # ---------- Marmelade (Jam) ----------
     def refresh_jam(self):
@@ -333,10 +459,10 @@ class TvPage(Gtk.Box):
         self.artist.set_label(t["artist"] if t else "")
         self.album.set_label(t["album"] if t and t.get("album") else "")
         liked = bool(t and t.get("liked"))
-        self.like_btn.set_label(("󰋑" if liked else "󰋕") + " gefällt mir")
+        self.like_btn.set_label("󰋑" if liked else "󰋕")
         (self.like_btn.add_css_class if liked else self.like_btn.remove_css_class)("on")
         dis = bool(t and engine.is_disliked(t.get("videoId")))
-        self.dislike_btn.set_label(("󰔑" if dis else "󰔒") + " gefällt mir nicht")
+        self.dislike_btn.set_label("󰔑" if dis else "󰔒")
         (self.dislike_btn.add_css_class if dis else self.dislike_btn.remove_css_class)("on")
         guest = self.p._mirror is not None
         for b in (self.like_btn, self.dislike_btn, self.pl_btn, self.radio_btn, self.web_btn, self.menu_btn):
@@ -347,7 +473,9 @@ class TvPage(Gtk.Box):
     def refresh_state(self):
         p = self.p
         self.play_btn.set_label("󰏤" if not p.paused and p.started else "󰐊")
-        self.repeat_btn.set_label({"aus": "󰑗 aus", "alle": "󰑖 alle", "eins": "󰑘 eins"}[p.repeat])
+        self.repeat_btn.set_label({"aus": "󰑗", "alle": "󰑖", "eins": "󰑘"}[p.repeat])
+        (self.repeat_btn.add_css_class if p.repeat != "aus" else self.repeat_btn.remove_css_class)("on")
+        (self.auto_btn.add_css_class if p.autoplay else self.auto_btn.remove_css_class)("on")
         self.vol.set_value(p.volume)
         self.vol_lbl.set_label(f"{p.volume}%")
         s = p.stream_info
@@ -377,7 +505,10 @@ class TvPage(Gtk.Box):
         self.refresh_lyrics()
 
     def refresh_sleep(self):
-        pass                                  # Sleep-Timer gibt es hier nicht (Taste s im Fenster)
+        on = self.w.sleep_btn.has_css_class("accent")
+        (self.sleep_btn.add_css_class if on else self.sleep_btn.remove_css_class)("on")
+        lbl = self.w.sleep_btn.get_label() or "󰒲"
+        self.sleep_btn.set_label(lbl if on else "󰒲")
 
     def refresh_queue(self):
         p = self.p

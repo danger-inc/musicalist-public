@@ -1,7 +1,7 @@
 """Freunde-Seite (unter Bibliothek): eigener Code, Freund hinzufügen, was sie hören / empfehlen."""
 import time
 
-from gi.repository import GLib
+from gi.repository import GLib, Gtk
 
 import tui
 import engine
@@ -100,22 +100,18 @@ class FriendsMixin:
         self.fr_body = vbox(spacing=8)
         self.fr_head.body.append(self.fr_body)
         page.append(self.fr_head)
-        self.lib_stack.add_named(page, "friends")
-        # Zeile auf der Bibliothek-Startseite
-        self.fr_panel = tui.Panel("󰡉 freunde")
-        self.fr_row_box = vbox(spacing=0)
-        self.fr_panel.body.append(self.fr_row_box)
-        self.lib_home_box.insert_child_after(self.fr_panel, self.coll_panel)
-        self.update_friends_row()
+        self.friends_page = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.EXTERNAL, child=page, vexpand=True)
         self._fr_timer = 0
         f = self.fr
         if f is not None:
             f.say = lambda m: GLib.idle_add(lambda: (self.say(m), False)[1])
             f.listeners.append(lambda: GLib.idle_add(self._fr_changed))
 
+    def friends_visible(self):
+        return self.current_tab() == "stats" and getattr(self, "hear_sub", "analyse") == "friends"
+
     def _fr_changed(self):
-        self.update_friends_row()
-        if self.lib_stack.get_visible_child_name() == "friends":
+        if self.friends_visible():
             self.fill_friends()
         return False
 
@@ -123,25 +119,19 @@ class FriendsMixin:
     def fr(self):
         return getattr(self.p, "friends", None)
 
-    def update_friends_row(self):
-        from rows import coll_row
-        tui.clear(self.fr_row_box)
-        f = self.fr
-        live = sum(1 for x in f.friends if f.live(x)) if f else 0
-        sub = (f"{live} hören gerade" if live else f"{len(f.friends)} freunde") if f and f.friends else "code, hinzufügen, was sie hören"
-        self.fr_row_box.append(coll_row("󰡉", "freunde", sub, self.open_friends))
-
     def open_friends(self):
-        self.lib_stack.set_visible_child_name("friends")
-        self.show_tab("lib")
-        self.nav_note()
+        self.show_tab("stats")
+        self.hear_select("friends")
+
+    def friends_shown(self):
+        """Tab „freunde“ wurde geöffnet: Stand holen, dann alle 25 s auffrischen, solange er offen ist."""
         self.fill_friends()
         self.refresh_friends()
         if not self._fr_timer:
             self._fr_timer = GLib.timeout_add_seconds(25, self._fr_tick)
 
     def _fr_tick(self):
-        if self.lib_stack.get_visible_child_name() == "friends" and self.get_visible():
+        if self.friends_visible() and self.get_visible():
             self.refresh_friends()
             return True
         self._fr_timer = 0
@@ -153,8 +143,7 @@ class FriendsMixin:
             return
 
         def done(_):
-            self.update_friends_row()
-            if self.lib_stack.get_visible_child_name() == "friends":
+            if self.friends_visible():
                 self.fill_friends()
         tui.background(f.refresh, done=done)
 
@@ -165,8 +154,7 @@ class FriendsMixin:
         if f is None:
             box.append(label("freunde nicht verfügbar", "dim"))
             return
-        top = hbox(self._sh(tui.Button("‹ zurück", self.lib_home), "‹ zurück", "‹"), label("", hexpand=True),
-                   tui.Button("󰑐", self.refresh_friends, tooltip="neu abfragen"), spacing=8)
+        top = hbox(label("", hexpand=True), tui.Button("󰑐", self.refresh_friends, tooltip="neu abfragen"), spacing=8)
         box.append(top)
         box.append(self._top_list())
         # --- ich ---
@@ -247,7 +235,7 @@ class FriendsMixin:
                     self.say(str(res), error=True)
                 else:
                     self.say(f"{res} hinzugefügt")
-                    self.update_friends_row()
+                    pass
                     self.fill_friends()
             tui.background(f.add, txt, done=done)
         e.connect("activate", go)
@@ -354,7 +342,7 @@ class FriendsMixin:
                     card.append(label(ln, "dim", wrap=True))
         if x.get("error") and x.get("at"):
             card.append(label(f"offline: {x['error']}", "dim"))
-        card.append(hbox(tui.Button("󰆴 entfernen", lambda s=x["secret"]: (f.remove(s), self.update_friends_row(), self.fill_friends()),
+        card.append(hbox(tui.Button("󰆴 entfernen", lambda s=x["secret"]: (f.remove(s), self.fill_friends()),
                                     danger=True), spacing=8))
 
         return card
