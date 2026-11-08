@@ -134,6 +134,11 @@ class SongMenus:
             liked = bool(t.get("liked"))
             it("󰋑" if liked else "󰋕", "gefällt mir nicht mehr" if liked else "gefällt mir",
                lambda: p.rate(t, not liked), "l" if cur else "")
+        if not loc and getattr(p, "friends", None) is not None:
+            it("󰡉", "an alle freunde empfehlen", lambda: w.say("freunde sehen: empfohlen" + ("" if p.friends.share else " – sobald du teilen einschaltest (bibliothek → freunde)"))
+               if p.friends.recommend(t) else None)
+            for fx in p.friends.friends[:6]:
+                it("󰡉", f"direkt an {fx.get('name') or 'freund'}", lambda fx=fx: (p.friends.send_to(fx, t), w.say(f"an {fx.get('name') or 'freund'} geschickt")))
         if t.get("artist") or t.get("albumId"):
             self._rub(main, "öffnen")
             if t.get("artist"):

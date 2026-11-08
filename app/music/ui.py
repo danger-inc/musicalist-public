@@ -32,6 +32,7 @@ from settings_page import SettingsMixin
 from queue_page import QueueMixin
 from search_page import SearchMixin
 from library_page import LibraryMixin
+from friends_page import FriendsMixin
 from lyrics_page import LyricsMixin
 from sound_page import SoundMixin
 from stats_page import StatsMixin
@@ -279,7 +280,7 @@ class Spectrum(Gtk.DrawingArea):
 
 
 # ---------- Hauptfenster ----------
-class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMixin, SoundMixin, StatsMixin,
+class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsMixin, LyricsMixin, SoundMixin, StatsMixin,
                   tui.TuiWindow):
     APP_ID = "de.invincible.Music"
     TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"),
@@ -319,6 +320,14 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, LyricsMi
         self.build_queue()
         self.build_search()
         self.build_lib()
+        self.build_friends()
+        # erneut auf „suchen“ klicken leert die Suchleiste
+        for _tid, _b in self.tab_btns:
+            if _tid == "search":
+                _gc = Gtk.GestureClick()
+                _gc.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+                _gc.connect("pressed", lambda *a, b=_b: (self.query.set_text(""), self.query.grab_focus()) if b.get_active() else None)
+                _b.add_controller(_gc)
         self.build_lyrics()
         self.build_visuals()
         self.build_stats()

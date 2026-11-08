@@ -7,7 +7,7 @@
 # POST /api/ctl {op: next|prev|toggle|remove|seek, id} (nur Gäste mit Rechten; seek: id = Millisekunden); immer ?c=<code>&n=<name>&d=<geräte-kennung>.
 # Titel als {id, t, a, al, d, th, src, sn}. Der Gastgeber kann Rechte geben, Geräte dafür merken (Einstellung
 # jam_trusted), Gäste entfernen und die Jam umbenennen (jam_title). Im Stand stehen Rechte/Entfernte nur als Kurzform.
-import base64, hashlib, json, secrets, socket, threading, time, urllib.parse, urllib.request
+import base64, hashlib, json, os, secrets, socket, threading, time, urllib.parse, urllib.request
 
 from gi.repository import GLib
 
@@ -137,8 +137,19 @@ def _gkey(name, dev):
     return dev if len(dev) >= 8 else f"n:{name}"
 
 
-def trusted():
-    return dict(engine.setting("jam_trusted") or {})
+def trusted(own=True):
+    """Gemerkte Geräte (Kennung → Name). own: dazu die eigenen, per Handy-Abgleich gekoppelten Geräte – die haben immer Rechte."""
+    t = dict(engine.setting("jam_trusted") or {})
+    if own:
+        try:
+            import json as _j
+            with open(os.path.join(engine.DATA, "handy.json")) as f:
+                for d in _j.load(f).values():
+                    if d.get("jam"):
+                        t.setdefault(d["jam"], (d.get("name") or "handy") + " (gekoppelt)")
+        except (OSError, ValueError, AttributeError):
+            pass
+    return t
 
 
 def local_ips():
@@ -384,8 +395,8 @@ class Jam:
         g = self.guests.get(key)
         if not g:
             return
-        if not on and key in trusted():
-            tr = trusted()
+        if not on and key in trusted(False):
+            tr = trusted(False)
             tr.pop(key, None)
             engine.set_setting("jam_trusted", tr)
         g["admin"] = on
@@ -397,7 +408,7 @@ class Jam:
         dev = g.get("dev") or (None if key.startswith("n:") else key)
         if not dev:
             return
-        tr = trusted()
+        tr = trusted(False)
         if on:
             tr[dev] = g.get("name") or dev[:6]
             if g:

@@ -68,6 +68,8 @@ class App(Gtk.Application):
             self.player.handy.start()
         import jam
         self.player.jam = jam.Jam(self.player)
+        import friends
+        self.player.friends = friends.Friends(self.player)
         self.cava = ui.Cava()
         self.sources = sources.Sources()
         self.win = ui.MusicWindow(self, self.player, self.cava, self.sources)

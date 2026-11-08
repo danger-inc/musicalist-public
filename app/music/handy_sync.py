@@ -274,6 +274,18 @@ class Server:
         added = j.merge(req.get("rows") or [])
         rows, nxt, more = j.lines_from(int(req.get("have") or 0), limit=4000, skip_dev="handy")
         res = {"rows": rows, "next": nxt, "more": more, "added": added}
+        fr = getattr(self.p, "friends", None)
+        if fr is not None and isinstance(req.get("friends"), dict):
+            try:
+                fr.sync_in(req["friends"])
+                res["friends"] = fr.sync_out()
+            except Exception as e:  # noqa: BLE001
+                engine.log(f"handy-abgleich: freunde {e!r}")
+        try:
+            import jam
+            res["jd"] = jam.device_id()           # eigene Marmelade-Kennung: das Handy gibt dem PC dann Rechte
+        except Exception:  # noqa: BLE001
+            pass
         if req.get("login"):
             res["cookie"] = engine.browser_cookie()
         with self.lock:
@@ -281,6 +293,8 @@ class Server:
             if d is not None:
                 d["last"] = time.time()
                 d["got"] = d.get("got", 0) + added
+                if isinstance(req.get("jd"), str) and 8 <= len(req["jd"]) <= 40:
+                    d["jam"] = req["jd"]
                 self._save()
         self._notify()
         return res

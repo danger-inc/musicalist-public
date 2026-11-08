@@ -1,5 +1,21 @@
 # musicalist – Änderungen
 
+## 1.25.0 (2026-11-08)
+- **Freunde werden mit dem Handy abgeglichen** (beim Handy-Abgleich): Freunde, die du nur am Handy hast, erscheinen am PC und umgekehrt; Entfernen gilt auf beiden Geräten.
+- **Freundschaft ist beidseitig:** Wer deinen Code hinzufügt, ist automatisch auch dein Freund (er meldet sich in deinem Thema, du siehst „… hat dich hinzugefügt“).
+
+## 1.24.0 (2026-11-08)
+- **Freunde: „so sehen dich freunde“** zeigt genau, was gesendet wird. Neu im Stand: kurzes **Wochenprofil** (Stunden, Titel, Künstler, Top 5 Künstler, Top 3 Titel, Lieblingsstunde); bei Freunden unter „hörprofil“.
+- **Empfehlung direkt an einen Freund** (Titelmenü → „direkt an …“); er sieht sie unter „für dich empfohlen“. „an alle freunde empfehlen“ wie bisher.
+- „Stand teilen“ ist jetzt **standardmäßig an** und steht auch in den Einstellungen.
+- Erneut auf den Tab „suchen“ klicken leert die Suchleiste.
+
+## 1.23.0 (2026-11-07)
+- **Freunde** (Bibliothek → freunde): Jeder hat einen eigenen Code. Mit dem Code deines Freundes siehst du, was er gerade hört (live), zuletzt gehört und seine Empfehlungen – und umgekehrt. Nur wer den Code kennt, kann lesen (Ende-zu-Ende verschlüsselt, wie die Marmelade; auch zwischen PC und Handy-App 0.9.0).
+- Geteilt wird nur, wenn du „meinen stand teilen“ einschaltest (Default aus). „Neuer code“ sperrt alle bisherigen Freunde aus.
+- Im Titelmenü: **freunden empfehlen**.
+- **Gekoppelte Geräte haben in der Marmelade immer Rechte:** Dein Handy darf am PC (und der PC am Handy) ohne Nachfragen steuern.
+
 ## 1.22.0 (2026-11-07)
 - **Marmelade im WLAN anklicken = beitreten.** Ohne Code klopfst du an: Beim Gastgeber (PC oder Handy) erscheint „… möchte beitreten“ mit „reinlassen“. Gemerkte Geräte kommen sofort rein. Mit eingetipptem Code geht es wie bisher direkt.
 - Als Gastgeber siehst du Anklopfende oben im Marmeladen-Kasten, auch wenn er eingeklappt ist.

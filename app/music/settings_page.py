@@ -45,6 +45,11 @@ class SettingsMixin:
                                         "An: das Fenster verschwindet nur, die Musik läuft weiter.")
         self.bg_chk.set_margin_top(10)
         panel.body.append(self.bg_chk)
+        self.fr_chk = tui.Check("meinen stand mit freunden teilen", getattr(self.p.friends, "share", True) if getattr(self.p, "friends", None) else True,
+                                lambda on: self.p.friends.set_share(on) if getattr(self.p, "friends", None) else None,
+                                tooltip="Was läuft, zuletzt gehört, Empfehlungen, Wochenprofil – nur für Freunde mit deinem Code (Bibliothek → freunde).")
+        self.fr_chk.set_margin_top(10)
+        panel.body.append(self.fr_chk)
         panel.body.append(label("aus: ✕ / q beendet musicalist, die musik stoppt. an: nur das fenster geht zu.",
                                 "dim", wrap=True, xalign=0))
         self.hist_chk = tui.Check("hörverlauf führen", engine.setting("history"), self.set_history,

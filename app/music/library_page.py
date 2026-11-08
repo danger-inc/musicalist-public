@@ -16,6 +16,7 @@ class LibraryMixin:
     def build_lib(self):
         self.lib_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.SLIDE_LEFT_RIGHT, transition_duration=120)
         home = vbox(spacing=8)
+        self.lib_home_box = home
         home.set_margin_top(6)
         self.login_panel = tui.Panel("󰀄 konto")
         self.login_body = vbox(spacing=8)
