@@ -786,7 +786,6 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         sw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.EXTERNAL, vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
                                 child=self.tv, vexpand=True, hexpand=True)
         sw.set_kinetic_scrolling(False)
-        sw.add_controller(self.tv._no_scroll())      # nie scrollbar: Mausrad/Touchpad bewegen die Seite nicht
         self.add_page("tv", sw, scroll=False)
         GLib.timeout_add_seconds(20, lambda: (self.tv.refresh_clock() if self.tv_on else None) or True)
 
@@ -916,7 +915,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.sound_btn = tui.Button("󰓃", self.sound_menu, tooltip="Klang: Equalizer und Überblendung (e)")
         self.auto_chk = tui.Check("autoplay", self.p.autoplay, self.set_autoplay,
                                   tooltip="Am Ende der Warteschlange ähnliche Titel weiterspielen")
-        self.vol = tui.Meter(100, self.p.set_volume)
+        self.vol = tui.Meter(100, self.p.set_volume, focus_line=False)
         self.vol.set_size_request(120, -1)
         self.vol.set_hexpand(False)
         self.vol_lbl = label("", "mono-pct", xalign=1)

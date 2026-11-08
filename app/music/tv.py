@@ -14,6 +14,7 @@ from rows import track_row
 from widgets import DotCover
 
 Panel_HEAD = tui.Panel.H
+UPNEXT_MAX = 25                        # so viele Titel zeigt „als nächstes“ (scrollbar)
 
 
 class TvCover(DotCover):
@@ -85,7 +86,7 @@ class TvPage(Gtk.Box):
         exit_btn = tui.Button("✕ fernseher beenden", lambda: win.tv_mode(False), tooltip="Zurück zum Fenster (t · Esc)")
         self.msg = label("", "tv-msg", ellipsize=True)
         self._msg_id = None
-        self.vol = tui.Meter(100, self.p.set_volume)
+        self.vol = tui.Meter(100, self.p.set_volume, focus_line=False)
         self.vol.set_size_request(200, -1)
         self.vol.set_hexpand(False)
         self.vol.set_content_height(22)
@@ -165,7 +166,7 @@ class TvPage(Gtk.Box):
 
         self.pos_lbl = label("0:00", "mono-pct")
         self.dur_lbl = label("0:00", "mono-pct", xalign=1)
-        self.seek = tui.Meter(1000, win.on_seek, mark=False, scroll="h")
+        self.seek = tui.Meter(1000, win.on_seek, mark=False, scroll="h", focus_line=False)
         self.seek.set_content_height(26)
         seek_row = hbox(self.pos_lbl, self.seek, self.dur_lbl, spacing=12, hexpand=True)
         big = hbox(self.prev_btn, self.play_btn, self.next_btn, spacing=10, homogeneous=True, hexpand=True)
@@ -209,7 +210,11 @@ class TvPage(Gtk.Box):
         self.lyr_panel.set_hexpand(True)
         self.lyr_panel.set_vexpand(True)
         self.upnext = vbox(spacing=0)
-        self.upnext_panel = tui.Panel("als nächstes", self.upnext)
+        # Bis zu 25 Titel, scrollbar; der Kasten hat immer seine volle Höhe samt Rand (Liste scrollt darin, nichts wird abgeschnitten)
+        self.up_scroll = Gtk.ScrolledWindow(child=self.upnext, hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                            vscrollbar_policy=Gtk.PolicyType.AUTOMATIC, min_content_height=40,
+                                            propagate_natural_height=False, vexpand=True, hexpand=True)
+        self.upnext_panel = tui.Panel("als nächstes", self.up_scroll)
         right = vbox(self.upnext_panel, spacing=10, hexpand=True)
         right.set_vexpand(True)
         self.upnext_panel.set_vexpand(True)
@@ -224,8 +229,7 @@ class TvPage(Gtk.Box):
             sw.set_kinetic_scrolling(False)
             sw.add_controller(self._no_scroll())
             return sw
-        self.lyr_clip, self.right_clip = clip(self.lyr_panel), clip(right)
-        self.right_clip.get_vadjustment().connect("notify::page-size", self._fit_upnext)
+        self.lyr_clip, self.right_clip = clip(self.lyr_panel), right
         self.mid = hbox(self.lyr_clip, self.right_clip, spacing=14, homogeneous=True)
         self.mid.set_vexpand(True)
         self.append(self.mid)
@@ -268,9 +272,6 @@ class TvPage(Gtk.Box):
         if need > h and getattr(self, "_k", 0) < 8:
             self._k = getattr(self, "_k", 0) + 1
             self.resize(w, h, keep=True)
-        # Zeilenhöhe hat sich mit der Schrift geändert → „als nächstes“ neu einpassen (zweimal, bis es stabil ist)
-        for ms in (0, 160):
-            GLib.timeout_add(ms + 20, lambda: self._fit_upnext(self.right_clip.get_vadjustment()) or False)
         return False
 
     @staticmethod
@@ -287,16 +288,6 @@ class TvPage(Gtk.Box):
             self.lyr_top.set_size_request(-1, h)
             self.lyr_bot.set_size_request(-1, h)
             GLib.idle_add(lambda: self.center_lyric(jump=True) and False)
-
-    def _fit_upnext(self, adj, _p=None):
-        page = adj.get_page_size()
-        first = self.upnext.get_first_child()
-        rowh = first.measure(Gtk.Orientation.VERTICAL, -1)[1] if first is not None else 42 * self._scale
-        used = Panel_HEAD + 14
-        n = int(max(1, min(10, (page - used - 14) // max(rowh + 1, 20))))
-        if n != getattr(self, "upnext_n", 0):
-            self.upnext_n = n
-            self.refresh_queue()
 
     # ---------- Zustand ----------
     def refresh_all(self):
@@ -553,8 +544,7 @@ class TvPage(Gtk.Box):
 
     def refresh_queue(self):
         p = self.p
-        n = getattr(self, "upnext_n", 4)
-        nxt = p.queue[p.index + 1:p.index + 1 + n] if p.index >= 0 else []
+        nxt = p.queue[p.index + 1:p.index + 1 + UPNEXT_MAX] if p.index >= 0 else []
         self.upnext_panel.set_visible(bool(nxt))
         w = self.w
         tui.sync_rows(self.upnext, nxt, id,

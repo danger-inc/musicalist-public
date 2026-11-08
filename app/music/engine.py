@@ -2366,7 +2366,7 @@ class Player:
     # ----- Marmelade als Gast: die Anzeige spiegelt den Gastgeber, die eigene Wiedergabe ruht -----
     _mirror = None      # gesicherte eigene Wiedergabe, solange gespiegelt wird
 
-    def mirror(self, tracks, playing=False, pos=0.0, dur=0.0, admin=False):
+    def mirror(self, tracks, playing=False, pos=0.0, dur=0.0, admin=False, vol=None):
         """GTK-Thread. tracks = [läuft, als nächstes …] des Gastgebers; None = Marmelade verlassen → eigene zurück."""
         if tracks is None:
             if self._mirror is None:
@@ -2374,12 +2374,16 @@ class Player:
             m, self._mirror = self._mirror, None
             self.queue, self.index, self.pos, self.dur, self.started = m["queue"], m["index"], m["pos"], m["dur"], m["started"]
             self.paused, self.restore_pos = True, m["pos"]
+            if m.get("vol") is not None and m["vol"] != self.volume:
+                self.volume = m["vol"]
+                self.emit("volume")
             for w in ("track", "queue", "state", "pos"):
                 self.emit(w)
             return
         if self._mirror is None:
             self.pause()
-            self._mirror = {"queue": self.queue, "index": self.index, "pos": self.pos, "dur": self.dur, "started": self.started}
+            self._mirror = {"queue": self.queue, "index": self.index, "pos": self.pos, "dur": self.dur, "started": self.started,
+                            "vol": self.volume}
             self.queue, self.index = [], -1
         old = self.current
         changed = [t.get("videoId") for t in tracks] != [t.get("videoId") for t in self.queue]
@@ -2388,6 +2392,9 @@ class Player:
         self.paused, self.started, self.loading = not playing, bool(tracks), False
         self._mirror["admin"] = admin
         self.pos, self.dur = pos, dur
+        if vol is not None and int(vol) != self.volume:          # Lautstärke des Gastgebers anzeigen (nur Anzeige: eigener mpv bleibt)
+            self.volume = int(vol)
+            self.emit("volume")
         if (old or {}).get("videoId") != (self.current or {}).get("videoId"):
             self.emit("track")
         if changed:
@@ -2396,7 +2403,7 @@ class Player:
             self.emit("state")
         self.emit("pos")
 
-    def _guest_ctl(self, op, arg=None):
+    def _guest_ctl(self, op, arg=None, to=None):
         """Als Gast: Steuerbefehl an den Gastgeber (nur mit Rechten). Immer True (= erledigt)."""
         j = self.jam
         if j is None or not j.am_admin(j.remote):
@@ -2407,7 +2414,7 @@ class Player:
             if isinstance(res, Exception):
                 self.emit(f"error:marmelade: {res}")
             j.poke()
-        tui.background(j.ctl_remote, op, arg, done=done)
+        tui.background(j.ctl_remote, op, arg, None, to, done=done)
         return True
 
     def _guest_no(self):
@@ -2527,7 +2534,12 @@ class Player:
         return t
 
     def move(self, i, j):
-        if self._guest_no():
+        if self._mirror is not None:
+            jm = self.jam
+            if jm is not None and jm.am_ultra(jm.remote) and 0 < i < len(self.queue) and 0 < j < len(self.queue) and i != j:
+                self._guest_ctl("move", self.queue[i].get("videoId"), j)
+            elif i != j:
+                self.emit("notice:󰀂 die reihenfolge ändert nur der gastgeber (oder ultra)")
             return
         if 0 <= i < len(self.queue) and 0 <= j < len(self.queue):
             t = self.queue.pop(i)
@@ -2738,6 +2750,14 @@ class Player:
         self.mpris.seeked()
 
     def set_volume(self, v):
+        if self._mirror is not None:
+            j = self.jam
+            if j is not None and j.am_ultra(j.remote):
+                self._guest_ctl("volume", str(int(max(0, min(100, v)))))
+            else:
+                self.emit("notice:󰀂 die lautstärke ändert nur der gastgeber (oder ultra)")
+                self.emit("volume")
+            return
         self.volume = int(max(0, min(100, v)))
         self.mpv.set("volume", self.volume)
         self.emit("volume")

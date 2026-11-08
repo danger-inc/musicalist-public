@@ -663,7 +663,7 @@ class Meter(Gtk.DrawingArea):
     interactive=False: reine Anzeige (z. B. Pegel)."""
 
     def __init__(self, maximum=100, callback=None, interactive=True, glyph="■", empty=None, small=False,
-                 mark=True, flush=False, scroll="v"):
+                 mark=True, flush=False, scroll="v", focus_line=True):
         super().__init__(hexpand=True)
         # scroll="h": nur waagrechtes Wischen/Kippen verstellt (Fortschrittsbalken) – senkrechtes Scrollen geht
         # an die Seite weiter, damit man beim Blättern nicht aus Versehen die Stelle im Lied ändert
@@ -671,6 +671,7 @@ class Meter(Gtk.DrawingArea):
         self.swipe_owns_h = scroll == "h"     # swipe.SwipeBack lässt waagrechte Gesten hier in Ruhe
         self._sg = None
         self.flush = flush  # True: erste/letzte Zelle sitzen genau an den Rändern (bündig mit Nachbarn)
+        self.focus_line = focus_line  # False: kein Strich unter dem Regler, wenn er den Fokus hat (nach dem Anklicken)
         self.mark = mark  # False: keine 100-%-Marke (z. B. Fortschrittsbalken mit maximum=1000)
         self.maximum, self.callback, self.interactive = maximum, callback, interactive
         self.glyph, self.empty_glyph = glyph, empty or glyph
@@ -806,7 +807,7 @@ class Meter(Gtk.DrawingArea):
                 cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.14)
             cr.rectangle(x, y, size, size)
             cr.fill()
-        if self.interactive and self.has_focus():
+        if self.interactive and self.focus_line and self.has_focus():
             p = c.get("primary")
             cr.set_source_rgba(p.red, p.green, p.blue, 0.8)
             cr.rectangle(0, height - 1, width if self.flush else n * cw, 1)

@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.34.0 (2026-11-08)
+- **Marmelade: Ultra-Gäste** dürfen jetzt auch die **Lautstärke** des Gastgebers ändern (Regler überall in der App, im Browser ein Schieberegler) und unter „warteschlange“ die **Reihenfolge** ändern (ziehen, ↑/↓, „vorziehen“; im Browser ↑ ↓). Alle anderen Gäste sehen die Lautstärke, ändern sie aber nicht. Protokoll: `ctl`-Befehle `volume` und `move`, im Stand `vol`.
+- **Fernseher-Modus: „als nächstes“** zeigt bis zu 25 Titel und ist scrollbar; der Kasten samt Rand ist immer vollständig zu sehen (nichts wird mehr unten abgeschnitten).
+- **Lautstärke/Zeitleiste:** Der kleine Strich unter dem Regler nach dem Anklicken ist weg.
+
 ## 1.33.0 (2026-11-08)
 - **Lyrics:** Die Quellenangabe „lrclib“ unter dem Songtext ist weg (Fernseher-Modus und Lyrics-Seite); nur Hinweise wie „ohne zeitstempel“ oder der Versatz bleiben.
 - **Marmelade: Ultra-Modus.** Der Gastgeber kann jedem Gast neben „rechte“ auch „󰓎 ultra“ geben: alle Rechte des Gastgebers fürs Abspielen. Ultra-Gäste spielen einen angeklickten Titel (Suche, Bibliothek, Playlists) **sofort beim Gastgeber** statt ihn nur einzureihen, springen in der Warteschlange mit einem Klick zu einem Titel und dürfen weiter überspringen, pausieren, spulen und entfernen. Gilt nur für die laufende Marmelade. Normale Gäste reihen wie bisher ein.
