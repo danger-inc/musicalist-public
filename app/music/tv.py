@@ -1,13 +1,12 @@
 # musicalist – Fernseher-Modus: dieselbe Oberfläche wie Seite „jetzt“, nur groß genug für die Couch (Vollbild am PC,
 # Knopf 󰔂 oben rechts oder Taste t). Alle Funktionen sind da: gefällt mir / gefällt mir nicht, Playlist, Radio,
-# Spulen, Lautstärke, Sleep-Timer, Klang, Autoplay, mitlaufende Lyrics, „als nächstes“, andere Quellen, Spektrum.
+# Spulen, Lautstärke, Sleep-Timer, Klang, Autoplay, mitlaufende Lyrics, „als nächstes“, Spektrum.
 # Die Seite hat keinen eigenen Zustand – MusicWindow ruft refresh_*() auf, wenn sich etwas ändert.
 import time
 
-from gi.repository import Gdk, GLib, Gtk, Pango
+from gi.repository import Gdk, GLib, Graphene, Gtk, Pango
 
 import engine
-import sources
 import tui
 from tui import label, hbox, vbox
 from engine import fmt
@@ -15,7 +14,6 @@ from rows import track_row
 from widgets import DotCover
 
 Panel_HEAD = tui.Panel.H
-LYR_BEFORE, LYR_AFTER = 1, 3          # Zeilen vor / nach der aktuellen Lyrics-Zeile (höchstens; bei wenig Höhe weniger)
 
 
 class TvCover(DotCover):
@@ -52,8 +50,9 @@ def css(s):
 .tv button.tbtn label {{ font-size: {f(15)}; }}
 .tv .check label {{ font-size: {f(15)}; }}
 .tv .mono-pct {{ font-size: {f(15)}; }}
-.tv .tvlyric {{ font-size: {f(20)}; color: alpha(@foreground, 0.42); padding: {f(3)} {f(8)}; }}
-.tv .tvlyric.now {{ font-size: {f(32)}; font-weight: bold; color: @primary; }}
+.tv .tvlyric {{ font-size: {f(26)}; color: alpha(@foreground, 0.30); padding: {f(4)} {f(10)}; }}
+.tv .tvlyric.near {{ color: alpha(@foreground, 0.6); }}
+.tv .tvlyric.now {{ font-weight: bold; color: @primary; }}
 .tv .tvlyric.msg {{ font-size: {f(16)}; font-style: italic; }}
 .tv .trk-title {{ font-size: {f(18)}; }}
 .tv .trk-mark {{ font-size: {f(18)}; }}
@@ -76,7 +75,10 @@ class TvPage(Gtk.Box):
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), self._css,
                                                   Gtk.STYLE_PROVIDER_PRIORITY_USER + 2)
         self._lyr_key = None
-        self.lyr_after = LYR_AFTER
+        self._lyr_anim = None
+        self._lyr_idx = None
+        self._fit_id = None
+        self._k = 0
 
         # --- Kopfzeile des Modus: Marke, Uhr, Ausstieg ---
         self.clock = label("", "tv-clock")
@@ -186,22 +188,30 @@ class TvPage(Gtk.Box):
         now_row.add_controller(rc)
         self.append(self.now_panel)
 
-        # --- unten: Lyrics | als nächstes (+ andere Quellen) ---
-        self.lyr_lines = [label("", "tvlyric", xalign=0.5, wrap=True) for _ in range(LYR_BEFORE + 1 + LYR_AFTER)]
-        for l in self.lyr_lines:
-            l.set_justify(Gtk.Justification.CENTER)
-            l.set_visible(False)
+        # --- unten: Lyrics | als nächstes ---
+        # Die Lyrics-Fläche hat immer dieselbe Größe: alle Zeilen liegen in einem festen Ausschnitt (Spacer oben und
+        # unten, damit auch die erste/letzte Zeile in die Mitte kommt); die aktuelle Zeile wird weich in die Mitte gescrollt.
+        self.lyr_box = vbox(spacing=2)
+        self.lyr_top, self.lyr_bot = Gtk.Box(), Gtk.Box()
+        self.lyr_view = Gtk.ScrolledWindow(child=self.lyr_box, hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                           vscrollbar_policy=Gtk.PolicyType.EXTERNAL, min_content_height=20,
+                                           propagate_natural_height=False, vexpand=True, hexpand=True)
+        self.lyr_view.set_kinetic_scrolling(False)
+        self.lyr_view.add_controller(self._no_scroll())
+        self.lyr_view.get_vadjustment().connect("notify::page-size", self._lyr_resized)
+        self.lyr_msg = label("", "tvlyric", xalign=0.5, wrap=True)
+        self.lyr_msg.set_justify(Gtk.Justification.CENTER)
+        self.lyr_msg.set_valign(Gtk.Align.CENTER)
+        self.lyr_stack = Gtk.Stack(vexpand=True, hexpand=True)
+        self.lyr_stack.add_named(self.lyr_view, "lines")
+        self.lyr_stack.add_named(self.lyr_msg, "msg")
         self.lyr_src = label("", "dim", xalign=0.5)
-        self.lyr_panel = tui.Panel("󰍰 lyrics", vbox(*self.lyr_lines, self.lyr_src, spacing=2, valign=Gtk.Align.CENTER, vexpand=True))
+        self.lyr_panel = tui.Panel("󰍰 lyrics", vbox(self.lyr_stack, self.lyr_src, spacing=2, vexpand=True))
         self.lyr_panel.set_hexpand(True)
         self.lyr_panel.set_vexpand(True)
         self.upnext = vbox(spacing=0)
         self.upnext_panel = tui.Panel("als nächstes", self.upnext)
-        self.src_list = sources.SourceList(win.srcs, limit=3)
-        self.src_panel = tui.Panel("󰓃 andere quellen", self.src_list)
-        self.src_panel.set_visible(bool(win.srcs.items))
-        self.src_list.on_change = lambda items: self.src_panel.set_visible(bool(items))
-        right = vbox(self.upnext_panel, self.src_panel, spacing=10, hexpand=True)
+        right = vbox(self.upnext_panel, spacing=10, hexpand=True)
         right.set_vexpand(True)
         self.upnext_panel.set_vexpand(True)
         self.upnext_panel.body.set_vexpand(True)       # Kasten bis ganz unten, genau so hoch wie „lyrics“
@@ -209,11 +219,13 @@ class TvPage(Gtk.Box):
 
         def clip(w):
             # Mindesthöhe klein halten: sonst bestimmt der Inhalt die Fensterhöhe (und das Fenster passt nie auf 720 p)
-            return Gtk.ScrolledWindow(child=w, hscrollbar_policy=Gtk.PolicyType.NEVER, vscrollbar_policy=Gtk.PolicyType.NEVER,
-                                      min_content_height=40, propagate_natural_height=False, vexpand=True, hexpand=True)
+            # EXTERNAL statt NEVER: nur dann meldet der Ausschnitt wirklich eine kleine Mindesthöhe
+            sw = Gtk.ScrolledWindow(child=w, hscrollbar_policy=Gtk.PolicyType.NEVER, vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+                                    min_content_height=40, propagate_natural_height=False, vexpand=True, hexpand=True)
+            sw.set_kinetic_scrolling(False)
+            sw.add_controller(self._no_scroll())
+            return sw
         self.lyr_clip, self.right_clip = clip(self.lyr_panel), clip(right)
-        # Wie viel hineinpasst, richtet sich nach der Höhe, die der Platz wirklich hat (nicht nach der Fensterhöhe)
-        self.lyr_clip.get_vadjustment().connect("notify::page-size", self._fit_lyrics)
         self.right_clip.get_vadjustment().connect("notify::page-size", self._fit_upnext)
         self.mid = hbox(self.lyr_clip, self.right_clip, spacing=14, homogeneous=True)
         self.mid.set_vexpand(True)
@@ -229,30 +241,60 @@ class TvPage(Gtk.Box):
         self.resize(1280, 800)
 
     # ---------- Größe ----------
-    def resize(self, width, height):
-        s = max(1.0, round(min(height / 800, width / 1280) * 8) / 8)
+    def resize(self, width, height, keep=False):
+        """Skalierung nach Fenstergröße; passt der Inhalt trotzdem nicht in die Höhe, wird er schrittweise kleiner
+        (_fit) – der Fernseher-Modus ist nie scrollbar, alles steht auf einen Blick da."""
+        if not keep:
+            self._k = 0
+        self._avail = (width, height)
+        k = getattr(self, "_k", 0)
+        s = max(0.5, round(min(height / 800, width / 1280) * 8) / 8)
+        s = max(0.5, s - 0.0625 * k)
         if s != self._scale:
             self._scale = s
             self._css.load_from_string(css(s))
-        side = int(max(120, min(height * 0.27, width * 0.2)))
+        side = int(max(90, min(height * 0.27, width * 0.2)) * (1 - 0.08 * k))
         self.cover.set_side(side)
         self.spec.set_margin_top(2)
-        self.spec.set_height(int(max(48, min(height * 0.09, 140))))
+        self.spec.set_height(int(max(32, min(height * 0.09, 140)) * (1 - 0.08 * k)))
+        if self._fit_id is None:
+            self._fit_id = GLib.timeout_add(80, self._fit)
 
-    def _fit_lyrics(self, adj, _p=None):
-        h = adj.get_page_size() / max(self._scale, 1.0)
-        after = 3 if h >= 270 else 2 if h >= 215 else 1 if h >= 175 else 0
-        self.lyr_src.set_visible(after >= 2)
-        if after != self.lyr_after:
-            self.lyr_after, self._lyr_key = after, None
-            self.refresh_lyrics(force=True)
+    def _fit(self):
+        self._fit_id = None
+        w, h = getattr(self, "_avail", (0, 0))
+        if w <= 0 or h <= 0 or not self.get_mapped():
+            return False
+        need = self.measure(Gtk.Orientation.VERTICAL, w)[0] + self.get_margin_top() + self.get_margin_bottom()
+        if need > h and getattr(self, "_k", 0) < 8:
+            self._k = getattr(self, "_k", 0) + 1
+            self.resize(w, h, keep=True)
+        # Zeilenhöhe hat sich mit der Schrift geändert → „als nächstes“ neu einpassen (zweimal, bis es stabil ist)
+        for ms in (0, 160):
+            GLib.timeout_add(ms + 20, lambda: self._fit_upnext(self.right_clip.get_vadjustment()) or False)
+        return False
+
+    @staticmethod
+    def _no_scroll():
+        """Mausrad/Touchpad dürfen die Lyrics nicht verschieben – sie laufen von allein mit."""
+        c = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.BOTH_AXES)
+        c.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        c.connect("scroll", lambda *_: True)
+        return c
+
+    def _lyr_resized(self, adj, _p=None):
+        h = int(adj.get_page_size() / 2)
+        if self.lyr_top.get_size_request()[1] != h:
+            self.lyr_top.set_size_request(-1, h)
+            self.lyr_bot.set_size_request(-1, h)
+            GLib.idle_add(lambda: self.center_lyric(jump=True) and False)
 
     def _fit_upnext(self, adj, _p=None):
         page = adj.get_page_size()
         first = self.upnext.get_first_child()
         rowh = first.measure(Gtk.Orientation.VERTICAL, -1)[1] if first is not None else 42 * self._scale
-        used = Panel_HEAD + 14 + (self.src_panel.get_height() + 10 if self.src_panel.get_visible() else 0)
-        n = int(max(1, min(10, (page - used - 8) // max(rowh + 1, 20))))
+        used = Panel_HEAD + 14
+        n = int(max(1, min(10, (page - used - 14) // max(rowh + 1, 20))))
         if n != getattr(self, "upnext_n", 0):
             self.upnext_n = n
             self.refresh_queue()
@@ -520,7 +562,24 @@ class TvPage(Gtk.Box):
                       lambda t: track_row(t, lambda: p.jump(w._qi(t)), [], menus=w.songs, extra=lambda: w.queue_extra(t)),
                       lambda r, t: r.mark.set_label("›"))
 
-    # ---------- Lyrics: aktuelle Zeile groß, ein paar davor/danach ----------
+    # ---------- Lyrics: alle Zeilen in festem Ausschnitt, aktuelle Zeile weich in der Mitte ----------
+    def _show_msg(self, text):
+        self.lyr_msg.set_label(text)
+        self.lyr_stack.set_visible_child_name("msg")
+        self.lyr_src.set_label("")
+
+    def _build_lines(self, lines):
+        tui.clear(self.lyr_box)
+        self.lyr_box.append(self.lyr_top)
+        self.lyr_labels = []
+        for _t, lbl in lines:
+            l = label(lbl.get_label(), "tvlyric", xalign=0.5, wrap=True)
+            l.set_justify(Gtk.Justification.CENTER)
+            self.lyr_box.append(l)
+            self.lyr_labels.append(l)
+        self.lyr_box.append(self.lyr_bot)
+        self._lyr_idx = None
+
     def refresh_lyrics(self, force=False):
         w = self.w
         lines = w.lyric_lines
@@ -533,45 +592,77 @@ class TvPage(Gtk.Box):
             key = ("msg", msg)
             if key != self._lyr_key or force:
                 self._lyr_key = key
-                for l in self.lyr_lines:
-                    l.set_visible(False)
-                mid = self.lyr_lines[LYR_BEFORE]
-                mid.set_label(msg or "")
-                mid.set_visible(bool(msg))
-                mid.remove_css_class("now")
-                mid.add_css_class("msg")
-                self.lyr_src.set_label("")
+                self.lyr_msg.add_css_class("msg")
+                self._show_msg(msg or "")
             return
         if not w.lyr_synced:
             key = ("plain", w.lyrics_vid)
             if key != self._lyr_key or force:
                 self._lyr_key = key
-                for l in self.lyr_lines:
-                    l.set_visible(False)
-                mid = self.lyr_lines[LYR_BEFORE]
-                mid.set_label("songtext ohne zeitstempel – zum mitlesen im tab ⁴ lyrics")
-                mid.add_css_class("msg")
-                mid.remove_css_class("now")
-                mid.set_visible(True)
+                self.lyr_msg.add_css_class("msg")
+                self._show_msg("songtext ohne zeitstempel – zum mitlesen im tab ⁴ lyrics")
                 self.lyr_src.set_label(getattr(w, "lyr_source", ""))
             return
         cur = w.current_lyric()
         if cur is None:
             return
-        key = ("sync", w.lyrics_vid, cur, w.lyr_offset)
-        if key == self._lyr_key and not force:
+        key = ("sync", w.lyrics_vid, len(lines), w.lyr_offset)
+        if key != self._lyr_key or force:
+            if (self._lyr_key or ("",))[0] != "sync" or self._lyr_key[1:3] != key[1:3] or force:
+                self._build_lines(lines)
+            self._lyr_key = key
+            self.lyr_msg.remove_css_class("msg")
+            self.lyr_stack.set_visible_child_name("lines")
+            self.lyr_src.set_label(getattr(w, "lyr_source", ""))
+            self._mark(cur)
+            GLib.idle_add(lambda: self.center_lyric(jump=True) and False)
             return
-        self._lyr_key = key
-        for i, l in enumerate(self.lyr_lines):
-            idx = cur - LYR_BEFORE + i
-            l.remove_css_class("msg")
-            if 0 <= idx < len(lines) and i <= LYR_BEFORE + self.lyr_after:
-                l.set_label(lines[idx][1].get_label())
-                l.set_visible(True)
-                (l.add_css_class if idx == cur else l.remove_css_class)("now")
-            else:
-                l.set_visible(False)
-        self.lyr_src.set_label(getattr(w, "lyr_source", ""))
+        if cur != self._lyr_idx:
+            self._mark(cur)
+            self.center_lyric()
+
+    def _mark(self, cur):
+        self._lyr_idx = cur
+        for i, l in enumerate(self.lyr_labels):
+            d = abs(i - cur)
+            (l.add_css_class if d == 0 else l.remove_css_class)("now")
+            (l.add_css_class if d == 1 else l.remove_css_class)("near")
+
+    def center_lyric(self, jump=False):
+        """Aktuelle Zeile in die Mitte des festen Ausschnitts: weich (300 ms, easeOutCubic), beim Laden/Größenwechsel sofort."""
+        cur = self._lyr_idx
+        if cur is None or cur >= len(getattr(self, "lyr_labels", ())):
+            return False
+        adj = self.lyr_view.get_vadjustment()
+        lbl = self.lyr_labels[cur]
+        if self.lyr_box.get_height() == 0 or lbl.get_height() == 0:
+            GLib.timeout_add(40, lambda: self.center_lyric(jump) and False)
+            return False
+        ok, pt = lbl.compute_point(self.lyr_box, Graphene.Point().init(0, 0))
+        if not ok:
+            return False
+        target = pt.y + lbl.get_height() / 2 - adj.get_page_size() / 2
+        target = max(adj.get_lower(), min(target, adj.get_upper() - adj.get_page_size()))
+        if self._lyr_anim is not None:
+            self.lyr_view.remove_tick_callback(self._lyr_anim)
+            self._lyr_anim = None
+        if jump or not self.lyr_view.get_mapped():
+            adj.set_value(target)
+            return False
+        start, t0 = adj.get_value(), None
+
+        def step(_w, clock):
+            nonlocal t0
+            now = clock.get_frame_time()
+            t0 = t0 or now
+            k = min(1.0, (now - t0) / 300_000)
+            adj.set_value(start + (target - start) * (1 - (1 - k) ** 3))
+            if k >= 1.0:
+                self._lyr_anim = None
+                return GLib.SOURCE_REMOVE
+            return GLib.SOURCE_CONTINUE
+        self._lyr_anim = self.lyr_view.add_tick_callback(step)
+        return False
 
     def on_spectrum(self, vals):
         self.spec.set_vals(vals)

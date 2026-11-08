@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.32.3 (2026-11-08)
+- **Fernseher-Modus: Lyrics** liegen in einem festen Ausschnitt, der nie seine Größe ändert. Beim Wechsel zur nächsten Zeile scrollt die aktuelle Zeile weich in die Mitte, statt zu springen; alle Zeilen haben dieselbe Schriftgröße.
+- **Nie scrollbar:** Der Modus passt sich der Fensterhöhe an (bei Platzmangel wird alles etwas kleiner) und lässt sich auch mit Mausrad/Touchpad nicht verschieben – alles steht auf einen Blick da.
+- **„andere quellen“** gibt es im Fernseher-Modus nicht mehr.
+
 ## 1.32.2 (2026-11-08)
 - **Live-Spektrum auf Ubuntu repariert:** Ubuntu 24.04 liefert cava 0.7.4, das die Eingabe „pipewire“ nicht kennt und sofort abbricht – musicalist wechselt jetzt selbst auf „pulse“ (läuft auch unter PipeWire) und merkt sich, was funktioniert. Das Spektrum sieht damit überall gleich aus statt der Ersatzrechnung über mpv.
 - **Fernseher-Modus:** Beim Wechsel in/aus dem Vollbild konnte eine zweite Spektrum-Leiste erscheinen – behoben.

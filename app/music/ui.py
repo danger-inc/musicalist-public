@@ -783,8 +783,11 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
     def build_tv(self):
         self.tv = tv.TvPage(self)
         # in ScrolledWindow(EXTERNAL): die Seite darf das Fenster nie breiter/höher zwingen als der Bildschirm
-        self.add_page("tv", Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.EXTERNAL, vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
-                                               child=self.tv, vexpand=True, hexpand=True), scroll=False)
+        sw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.EXTERNAL, vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+                                child=self.tv, vexpand=True, hexpand=True)
+        sw.set_kinetic_scrolling(False)
+        sw.add_controller(self.tv._no_scroll())      # nie scrollbar: Mausrad/Touchpad bewegen die Seite nicht
+        self.add_page("tv", sw, scroll=False)
         GLib.timeout_add_seconds(20, lambda: (self.tv.refresh_clock() if self.tv_on else None) or True)
 
     def tv_mode(self, on):
