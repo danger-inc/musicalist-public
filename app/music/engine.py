@@ -687,6 +687,14 @@ class Music:
         d = self.yt.get_watch_playlist(playlistId=pid, limit=50)
         return "radio", [t for t in map(track, d.get("tracks", [])) if t]
 
+    def quick_picks(self):
+        """Schnellauswahl der Startseite (geht auch ohne Anmeldung): Liste von Titeln."""
+        shelves = self.yt.get_home(limit=4)
+        pick = next((sh for sh in shelves if "quick" in (sh.get("title") or "").lower() or "schnell" in (sh.get("title") or "").lower()), None)
+        if pick is None:
+            pick = next((sh for sh in shelves if any(isinstance(c, dict) and c.get("videoId") for c in sh.get("contents", []))), None)
+        return [t for t in map(track, (pick or {}).get("contents", [])) if t]
+
     def artist_id(self, name):
         """Künstler-ID per Suche (für Titel, die ohne ID gespeichert wurden)."""
         name = (name or "").split(",")[0].strip()

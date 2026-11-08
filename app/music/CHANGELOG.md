@@ -1,5 +1,9 @@
 # musicalist – Änderungen
 
+## 1.27.0 (2026-11-08)
+- **Anpassen** (Stift oben links neben dem Logo): Leiste unter „steuerung“ (Knöpfe an/aus, ↑ ↓ ordnen; neu: lyrics, künstler, album, empfehlen, titel-menü), Reihenfolge der Bibliothek-Kästen und Anzahl der Schnellauswahl; Link zum Klang-Mixer.
+- **Schnellauswahl** in der Bibliothek: nur Titelbilder (Anzahl 5 bis 50, die Spalten folgen der Fensterbreite), Klick = spielen, Rechtsklick = Titelmenü, „neu“ mischt neu. Geht auch ohne Anmeldung.
+
 ## 1.26.0 (2026-11-08)
 - **Herz auch ohne Anmeldung:** „gefällt mir“ merkt sich den Titel lokal (Bibliothek → „lieblingssongs (nur hier)“). Beim Anmelden werden die Herzen zu YouTube Music übernommen.
 - **Analyse:** bei „top titel“ gibt es „top 50 spielen“, „mischen“ und „als playlist“ (Playlist in YouTube Music).

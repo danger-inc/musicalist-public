@@ -33,6 +33,7 @@ from queue_page import QueueMixin
 from search_page import SearchMixin
 from library_page import LibraryMixin
 from friends_page import FriendsMixin
+from anpassen import AnpassenMixin
 from lyrics_page import LyricsMixin
 from sound_page import SoundMixin
 from stats_page import StatsMixin
@@ -280,7 +281,7 @@ class Spectrum(Gtk.DrawingArea):
 
 
 # ---------- Hauptfenster ----------
-class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsMixin, LyricsMixin, SoundMixin, StatsMixin,
+class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsMixin, AnpassenMixin, LyricsMixin, SoundMixin, StatsMixin,
                   tui.TuiWindow):
     APP_ID = "de.invincible.Music"
     TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"),
@@ -321,6 +322,10 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.build_search()
         self.build_lib()
         self.build_friends()
+        self.build_quick()
+        self.build_ctl_extra()
+        self.apply_lib_order()
+        self.build_customize()
         # erneut auf „suchen“ klicken leert die Suchleiste
         for _tid, _b in self.tab_btns:
             if _tid == "search":
@@ -741,8 +746,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
                            max_children_per_line=12, homogeneous=False, halign=Gtk.Align.START)
         opts.add_css_class("opts")
         self.ctl_opts = opts
-        for w in (self.shuffle_btn, self.repeat_btn, self.sleep_btn, self.sound_btn, self.auto_chk,
-                  hbox(label("󰕾", "accent"), self.vol, self.vol_lbl, spacing=8)):
+        self._vol_box = hbox(label("󰕾", "accent"), self.vol, self.vol_lbl, spacing=8)
+        for w in (self.shuffle_btn, self.repeat_btn, self.sleep_btn, self.sound_btn, self.auto_chk, self._vol_box):
             opts.append(w)
         self.seek_box = hbox(self.pos_lbl, self.seek, self.dur_lbl, spacing=8, hexpand=True)
         self.ctl_row = hbox(self.prev_btn, self.play_btn, self.next_btn, self.seek_box, spacing=8)
