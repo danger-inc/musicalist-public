@@ -205,8 +205,7 @@ class TvPage(Gtk.Box):
         self.lyr_stack = Gtk.Stack(vexpand=True, hexpand=True)
         self.lyr_stack.add_named(self.lyr_view, "lines")
         self.lyr_stack.add_named(self.lyr_msg, "msg")
-        self.lyr_src = label("", "dim", xalign=0.5)
-        self.lyr_panel = tui.Panel("󰍰 lyrics", vbox(self.lyr_stack, self.lyr_src, spacing=2, vexpand=True))
+        self.lyr_panel = tui.Panel("󰍰 lyrics", vbox(self.lyr_stack, spacing=2, vexpand=True))
         self.lyr_panel.set_hexpand(True)
         self.lyr_panel.set_vexpand(True)
         self.upnext = vbox(spacing=0)
@@ -566,7 +565,6 @@ class TvPage(Gtk.Box):
     def _show_msg(self, text):
         self.lyr_msg.set_label(text)
         self.lyr_stack.set_visible_child_name("msg")
-        self.lyr_src.set_label("")
 
     def _build_lines(self, lines):
         tui.clear(self.lyr_box)
@@ -601,7 +599,6 @@ class TvPage(Gtk.Box):
                 self._lyr_key = key
                 self.lyr_msg.add_css_class("msg")
                 self._show_msg("songtext ohne zeitstempel – zum mitlesen im tab ⁴ lyrics")
-                self.lyr_src.set_label(getattr(w, "lyr_source", ""))
             return
         cur = w.current_lyric()
         if cur is None:
@@ -613,7 +610,6 @@ class TvPage(Gtk.Box):
             self._lyr_key = key
             self.lyr_msg.remove_css_class("msg")
             self.lyr_stack.set_visible_child_name("lines")
-            self.lyr_src.set_label(getattr(w, "lyr_source", ""))
             self._mark(cur)
             GLib.idle_add(lambda: self.center_lyric(jump=True) and False)
             return

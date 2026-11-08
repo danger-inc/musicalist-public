@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.33.0 (2026-11-08)
+- **Lyrics:** Die Quellenangabe „lrclib“ unter dem Songtext ist weg (Fernseher-Modus und Lyrics-Seite); nur Hinweise wie „ohne zeitstempel“ oder der Versatz bleiben.
+- **Marmelade: Ultra-Modus.** Der Gastgeber kann jedem Gast neben „rechte“ auch „󰓎 ultra“ geben: alle Rechte des Gastgebers fürs Abspielen. Ultra-Gäste spielen einen angeklickten Titel (Suche, Bibliothek, Playlists) **sofort beim Gastgeber** statt ihn nur einzureihen, springen in der Warteschlange mit einem Klick zu einem Titel und dürfen weiter überspringen, pausieren, spulen und entfernen. Gilt nur für die laufende Marmelade. Normale Gäste reihen wie bisher ein.
+- Browser-Gäste mit Ultra sehen „▶ jetzt“ bei Suchergebnissen und „▶“ in der Warteschlange. Protokoll: `ctl`-Befehle `play` und `jump`, im Stand `you.ultra` bzw. `ultras` (ältere Handy-Apps ignorieren das, bleiben aber kompatibel).
+
 ## 1.32.3 (2026-11-08)
 - **Fernseher-Modus: Lyrics** liegen in einem festen Ausschnitt, der nie seine Größe ändert. Beim Wechsel zur nächsten Zeile scrollt die aktuelle Zeile weich in die Mitte, statt zu springen; alle Zeilen haben dieselbe Schriftgröße.
 - **Nie scrollbar:** Der Modus passt sich der Fensterhöhe an (bei Platzmangel wird alles etwas kleiner) und lässt sich auch mit Mausrad/Touchpad nicht verschieben – alles steht auf einen Blick da.

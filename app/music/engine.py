@@ -2336,12 +2336,26 @@ class Player:
     # ----- Jam (jam.py): als Gast gehen Titel an den Gastgeber, als Gastgeber kommen Gäste-Titel herein -----
     jam = None
 
-    def jam_route(self, t, next_=False):
-        """Beigetreten? Dann den Titel zur Jam schicken statt selbst zu spielen. True = erledigt."""
+    def jam_route(self, t, next_=False, now=False):
+        """Beigetreten? Dann den Titel zur Jam schicken statt selbst zu spielen. True = erledigt.
+        now: Klick „abspielen“ – Ultra-Gäste spielen den Titel beim Gastgeber sofort, alle anderen reihen ihn ein."""
         j = self.jam
         if j is None or j.joined is None or not t:
             return False
         t = dict(t)
+        if now and j.am_ultra(j.remote):
+            import jam as _jam
+
+            def done_now(res):
+                if isinstance(res, Exception):
+                    self.emit(f"error:marmelade: {res}")
+                else:
+                    j.poke()
+            o = _jam.to_proto(t)
+            o.pop("src", None)
+            o.pop("sn", None)
+            tui.background(j.ctl_remote, "play", None, o, done=done_now)
+            return True
 
         def done(res):
             if j.say:
@@ -2429,7 +2443,7 @@ class Player:
         tracks = [t for t in tracks if t]
         if not tracks:
             return
-        if self.jam_route(tracks[min(start, len(tracks) - 1)]):
+        if self.jam_route(tracks[min(start, len(tracks) - 1)], now=True):
             return
         src = src or self._src()
         if src:
@@ -2447,7 +2461,7 @@ class Player:
 
     def play_now(self, t):
         """Titel sofort spielen, Rest der Warteschlange bleibt dahinter."""
-        if self.jam_route(t):
+        if self.jam_route(t, now=True):
             return
         src = self._src()
         if src:
@@ -2545,7 +2559,11 @@ class Player:
 
     def jump(self, i):
         if self._mirror is not None:
-            self.emit("notice:󰀂 in der marmelade bestimmt der gastgeber die reihenfolge")
+            j = self.jam
+            if j is not None and j.am_ultra(j.remote) and 0 < i < len(self.queue):
+                self._guest_ctl("jump", self.queue[i].get("videoId"))
+            elif i != 0:
+                self.emit("notice:󰀂 in der marmelade bestimmt der gastgeber die reihenfolge (außer als ultra)")
             return
         if 0 <= i < len(self.queue):
             self._why = "wechsel"

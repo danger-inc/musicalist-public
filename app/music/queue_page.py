@@ -177,12 +177,16 @@ class QueueMixin:
             for key, g in sorted(j.guests.items(), key=lambda kv: (kv[1].get("name") or "").lower()):
                 admin = j.is_admin(key)
                 tr = bool(g.get("dev")) and g["dev"] in jm.trusted()
-                row = hbox(label("󰌆" if admin else "󰀄", "accent" if admin else "dim"),
+                row = hbox(label("󰓎" if j.is_ultra(key) else "󰌆" if admin else "󰀄", "accent" if admin else "dim"),
                            __import__("rows").who_chip(g.get("name") or "gast"), label("", hexpand=True),
                            label(f"{g.get('added', 0)} titel" if g.get("added") else "", "dim"),
                            label("gemerkt" if tr else "", "accent"))
                 row.append(tui.Button("rechte weg" if admin else "󰌆 rechte", lambda k=key, a=admin: (j.set_admin(k, not a), self.update_jam()),
                                       tooltip="gastgeber-rechte: überspringen, pause, titel entfernen"))
+                ultra = j.is_ultra(key)
+                row.append(tui.Button("ultra weg" if ultra else "󰓎 ultra", lambda k=key, u=ultra: (j.set_ultra(k, not u), self.update_jam()),
+                                      tooltip="ultra: alle rechte wie du – zusätzlich zu überspringen/pause/entfernen auch titel sofort\n"
+                                              "abspielen (ein klick) und in der warteschlange anspringen. gilt nur für diese marmelade."))
                 if g.get("dev"):
                     row.append(tui.Button("vergessen" if tr else "merken", lambda k=key, t=tr: (j.trust(k, not t), self.update_jam()),
                                           tooltip="gerät merken: hat in jeder deiner marmeladen sofort rechte"))
@@ -199,6 +203,7 @@ class QueueMixin:
             via = " · übers internet" if j.joined.get("net") else ""
             title = (st or {}).get("title") or f"marmelade von {j.joined['host_name']}"
             admin = j.am_admin(st)
+            ultra = j.am_ultra(st)
             now = (st or {}).get("now")
             box.append(hbox(label(f"● {title}{via}", "accent", ellipsize=True, hexpand=True),
                             label(f"läuft: {now.get('t')}" if collapsed and now else "", "dim", ellipsize=True), fold_btn))
@@ -212,7 +217,8 @@ class QueueMixin:
                 tui.background(j.ctl_remote, op, vid, done=done)
             if admin:
                 playing = bool((st or {}).get("playing"))
-                box.append(hbox(label("󰌆 du hast gastgeber-rechte", "accent", hexpand=True),
+                box.append(hbox(label("󰓎 du bist ultra: alle rechte des gastgebers – ein klick spielt sofort" if ultra
+                                      else "󰌆 du hast gastgeber-rechte", "accent", hexpand=True),
                                 tui.Button("󰒮", lambda: ctl("prev"), tooltip="zurück"),
                                 tui.Button("󰏤" if playing else "󰐊", lambda: ctl("toggle"), tooltip="pause/weiter"),
                                 tui.Button("󰒭", lambda: ctl("next"), tooltip="überspringen")))
@@ -228,10 +234,11 @@ class QueueMixin:
                     from rows import who_chip
                     pr = hbox(label("gäste:", "dim"), spacing=6)
                     for p_ in ppl[:12]:
-                        pr.append(who_chip(p_["n"], " 󰌆" if p_.get("a") else ""))
+                        pr.append(who_chip(p_["n"], " 󰓎" if p_.get("u") else " 󰌆" if p_.get("a") else ""))
                     box.append(pr)
                 box.append(label("„läuft“ und die warteschlange unten zeigen, was beim gastgeber spielt.", "dim", wrap=True))
-            box.append(hbox(label("abspielen, „als nächstes“ und „+“ schicken titel jetzt in die marmelade.", "dim", wrap=True,
+            box.append(hbox(label("abspielen spielt sofort beim gastgeber (du bist ultra); „als nächstes“ und „+“ reihen ein." if ultra else
+                                  "abspielen, „als nächstes“ und „+“ schicken titel jetzt in die marmelade.", "dim", wrap=True,
                                   hexpand=True),
                             tui.Button("verlassen", lambda: (j.leave(), setattr(self, "jam_remote", None)), danger=True)))
         else:

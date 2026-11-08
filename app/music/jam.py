@@ -4,7 +4,8 @@
 # Radio/Autoplay. Gast: Jam per mDNS finden oder Adresse eintippen; solange beigetreten, schicken „abspielen“,
 # „als nächstes“ und „anhängen“ den Titel an den Gastgeber statt ihn selbst zu spielen (Player.jam_route).
 # Protokoll (identisch mit der Handy-App): GET /api/state, GET /api/search?q=, POST /api/add {t, next},
-# POST /api/ctl {op: next|prev|toggle|remove|seek, id} (nur Gäste mit Rechten; seek: id = Millisekunden); immer ?c=<code>&n=<name>&d=<geräte-kennung>.
+# POST /api/ctl {op: next|prev|toggle|remove|seek, id} (nur Gäste mit Rechten; seek: id = Millisekunden; Ultra-Gäste zusätzlich
+# play {t: Titel} = sofort spielen und jump {id} = in der Warteschlange anspringen; Stand: you.ultra bzw. ultras); immer ?c=<code>&n=<name>&d=<geräte-kennung>.
 # Titel als {id, t, a, al, d, th, src, sn}. Der Gastgeber kann Rechte geben, Geräte dafür merken (Einstellung
 # jam_trusted), Gäste entfernen und die Jam umbenennen (jam_title). Im Stand stehen Rechte/Entfernte nur als Kurzform.
 import base64, hashlib, json, os, secrets, socket, threading, time, urllib.parse, urllib.request
@@ -388,7 +389,22 @@ class Jam:
         g["name"], g["seen"] = name, time.time()
 
     def is_admin(self, key):
-        return bool((self.guests.get(key) or {}).get("admin")) or key in trusted()
+        return bool((self.guests.get(key) or {}).get("admin")) or key in trusted() or self.is_ultra(key)
+
+    def is_ultra(self, key):
+        """Ultra: alle Rechte des Gastgebers fürs Abspielen – zusätzlich zu den Rechten auch Titel sofort spielen und in der
+        Warteschlange anspringen. Gilt nur für diese Marmelade (wird nicht gemerkt)."""
+        return bool((self.guests.get(key) or {}).get("ultra"))
+
+    def set_ultra(self, key, on):
+        g = self.guests.get(key)
+        if not g:
+            return
+        g["ultra"] = bool(on)
+        if on:
+            g["admin"] = True
+        self._event(f"{g['name']} ist jetzt ultra (alle gastgeber-rechte)" if on else f"{g['name']} ist nicht mehr ultra")
+        self._kick = True
 
     # ----- Gastgeber verwaltet Gäste -----
     def set_admin(self, key, on):
@@ -435,16 +451,32 @@ class Jam:
         gs = sorted(self.guests.items(), key=lambda kv: (kv[1].get("name") or "").lower())
         st["title"] = jam_title()
         st["guests"] = [g.get("name") for _, g in gs]
-        st["people"] = [{"n": (g.get("name") or "")[:24], "a": self.is_admin(k)} for k, g in gs[:16]]
+        st["people"] = [{"n": (g.get("name") or "")[:24], "a": self.is_admin(k), "u": self.is_ultra(k)} for k, g in gs[:16]]
         st["admins"] = [hid(g["dev"]) for k, g in gs if g.get("dev") and self.is_admin(k)]
+        st["ultras"] = [hid(g["dev"]) for k, g in gs if g.get("dev") and self.is_ultra(k)]
         st["kicked"] = [hid(k) for k in self.kicked if not k.startswith("n:")]
         return st
 
-    def ctl(self, op, vid, name):
-        """Steuerbefehl eines Gasts mit Rechten (GTK-Thread)."""
+    def ctl(self, op, vid, name, t=None, ultra=False):
+        """Steuerbefehl eines Gasts mit Rechten (GTK-Thread). „play“ (Titel t sofort spielen) und „jump“ (Titel mit der
+        Kennung vid in der Warteschlange anspringen) nur für Ultra-Gäste."""
         def run():
             p = self.p
-            if op == "next":
+            if op in ("play", "jump") and not ultra:
+                return False
+            if op == "play":
+                try:
+                    tr = from_proto(t)
+                except (KeyError, TypeError):
+                    return False
+                tr["_src"] = ("jam", name)
+                p.play_now(tr)
+            elif op == "jump":
+                i = next((k for k in range(p.index + 1, len(p.queue)) if p.queue[k].get("videoId") == vid), None)
+                if i is None:
+                    return False
+                p.jump(i)
+            elif op == "next":
                 p.next()
             elif op == "prev":
                 if p.index > 0:
@@ -470,7 +502,8 @@ class Jam:
             return True
         if _on_main(run) and op != "seek":
             self._event(f"{name}: " + {"next": "übersprungen", "prev": "zurück", "toggle": "pause/weiter",
-                                         "remove": "titel entfernt"}.get(op, op))
+                                         "remove": "titel entfernt", "play": "titel sofort gespielt",
+                                         "jump": "titel angesprungen"}.get(op, op))
             self._kick = True
 
     def state(self):
@@ -551,13 +584,13 @@ class Jam:
                 jam._seen(name, key)
                 try:
                     if u.path == "/api/state":
-                        return self._send(200, {**jam.state(), "you": {"admin": jam.is_admin(key)}})
+                        return self._send(200, {**jam.state(), "you": {"admin": jam.is_admin(key), "ultra": jam.is_ultra(key)}})
                     if u.path == "/api/ctl" and method == "POST":
                         if not jam.is_admin(key):
                             return self._send(403, {"error": "keine rechte"})
                         n = int(self.headers.get("Content-Length") or 0)
                         o = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
-                        jam.ctl(o.get("op"), o.get("id"), name)
+                        jam.ctl(o.get("op"), o.get("id"), name, o.get("t"), jam.is_ultra(key))
                         return self._send(200, {"ok": True})
                     if u.path == "/api/search":
                         return self._send(200, {"results": jam.search(q.get("q", ""))})
@@ -690,15 +723,23 @@ class Jam:
             return bool(st["you"].get("admin"))
         return hid(device_id()) in (st.get("admins") or [])
 
-    def ctl_remote(self, op, vid=None):
-        """Blockierend. Gast mit Rechten steuert die Wiedergabe des Gastgebers."""
+    @staticmethod
+    def am_ultra(st):
+        if not st:
+            return False
+        if isinstance(st.get("you"), dict):
+            return bool(st["you"].get("ultra"))
+        return hid(device_id()) in (st.get("ultras") or [])
+
+    def ctl_remote(self, op, vid=None, t=None):
+        """Blockierend. Gast mit Rechten steuert die Wiedergabe des Gastgebers (t: Titel für „play“, nur Ultra)."""
         j = self.joined
         if not j:
             raise RuntimeError("keine marmelade")
         if j.get("net"):
-            _publish(j["code"], {"k": "ctl", "op": op, "id": vid, "name": j["name"], "dev": device_id()})
+            _publish(j["code"], {"k": "ctl", "op": op, "id": vid, "t": t, "name": j["name"], "dev": device_id()})
             return
-        req = urllib.request.Request(self._url(j, "/api/ctl"), data=json.dumps({"op": op, "id": vid}).encode(), method="POST",
+        req = urllib.request.Request(self._url(j, "/api/ctl"), data=json.dumps({"op": op, "id": vid, "t": t}).encode(), method="POST",
                                      headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=8) as r:
@@ -795,7 +836,7 @@ def _net_host(self):
             self._kick = True
         elif m.get("k") == "ctl" and self.is_admin(key):
             try:
-                self.ctl(m.get("op"), m.get("id"), name)
+                self.ctl(m.get("op"), m.get("id"), name, m.get("t"), self.is_ultra(key))
             except Exception as e:  # noqa: BLE001
                 engine.log(f"jam netz ctl: {e!r}")
     gen = _listen(self, code, on_msg)
@@ -930,16 +971,17 @@ async function go(){N=document.getElementById('name').value.trim()||'gast';C=doc
  localStorage.jamName=N;localStorage.jamCode=C;document.getElementById('login').hidden=true;document.getElementById('app').hidden=false;show(await r.json());T=setInterval(load,3000)}
 function out(){clearInterval(T);document.getElementById('app').hidden=true;document.getElementById('login').hidden=true;msg('du wurdest aus der marmelade entfernt');document.getElementById('msg').textContent='du wurdest aus der marmelade entfernt'}
 async function load(){const r=await fetch(api('/api/state'));if(r.status==403){out();return}if(r.ok)show(await r.json())}
-let Q=[];function show(s){A=!!(s.you&&s.you.admin);Q=s.queue||[];if(s.title)document.getElementById('ttl').textContent='♫ '+s.title;
+let Q=[],U=false;function show(s){A=!!(s.you&&s.you.admin);U=!!(s.you&&s.you.ultra);Q=s.queue||[];if(s.title)document.getElementById('ttl').textContent='♫ '+s.title;
  document.getElementById('ctl').hidden=!A;document.getElementById('ctl').style.display=A?'flex':'none';
- const ppl=(s.people||[]).map(p=>who(p.n,p.a?' ★':'')).join(' ')||esc((s.guests||[]).join(', '));
- document.getElementById('now').innerHTML=s.now?row(s.now)+'<div class="dim">'+(s.playing?'spielt':'pausiert')+' · gäste: '+ppl+(A?' · du hast gastgeber-rechte':'')+'</div>':'nichts läuft';
- document.getElementById('queue').innerHTML=Q.map((t,i)=>row(t,(t.src=='jam'&&t.sn?who(t.sn):(t.src=='radio'||t.src=='autoplay'?'<span class="dim">radio</span>':''))+(A?'<button onclick="ctl(\'remove\','+i+')">✕</button>':''))).join('')||'<div class="dim">leer</div>'}
+ const ppl=(s.people||[]).map(p=>who(p.n,p.u?' ★★':p.a?' ★':'')).join(' ')||esc((s.guests||[]).join(', '));
+ document.getElementById('now').innerHTML=s.now?row(s.now)+'<div class="dim">'+(s.playing?'spielt':'pausiert')+' · gäste: '+ppl+(U?' · du bist ultra: alle rechte des gastgebers':A?' · du hast gastgeber-rechte':'')+'</div>':'nichts läuft';
+ document.getElementById('queue').innerHTML=Q.map((t,i)=>row(t,(U?'<button onclick="ctl(\'jump\','+i+')">▶</button>':'')+(t.src=='jam'&&t.sn?who(t.sn):(t.src=='radio'||t.src=='autoplay'?'<span class="dim">radio</span>':''))+(A?'<button onclick="ctl(\'remove\','+i+')">✕</button>':''))).join('')||'<div class="dim">leer</div>'}
 async function ctl(op,i){const id=i==null?null:Q[i].id;const r=await fetch(api('/api/ctl'),{method:'POST',body:JSON.stringify({op,id})});if(!r.ok)msg('geht nicht (keine rechte?)');setTimeout(load,400)}
 let tm;function typed(){clearTimeout(tm);tm=setTimeout(search,400)}
 let R=[];async function search(){const q=document.getElementById('q').value.trim();if(!q){document.getElementById('res').innerHTML='';return}
  const r=await fetch(api('/api/search','&q='+encodeURIComponent(q)));R=(await r.json()).results||[];
- document.getElementById('res').innerHTML=R.map((t,i)=>row(t,'<button onclick="add('+i+',true)">nächstes</button><button class="p" onclick="add('+i+',false)">+</button>')).join('')}
+ document.getElementById('res').innerHTML=R.map((t,i)=>row(t,(U?'<button class="p" onclick="play('+i+')">▶ jetzt</button>':'')+'<button onclick="add('+i+',true)">nächstes</button><button class="p" onclick="add('+i+',false)">+</button>')).join('')}
+async function play(i){const r=await fetch(api('/api/ctl'),{method:'POST',body:JSON.stringify({op:'play',t:R[i]})});msg(r.ok?'„'+R[i].t+'“ läuft jetzt':'ging nicht');setTimeout(load,400)}
 async function add(i,next){const r=await fetch(api('/api/add'),{method:'POST',body:JSON.stringify({t:R[i],next})});msg(r.ok?'„'+R[i].t+'“ hinzugefügt':'ging nicht');load()}
 if(C&&N)go();
 </script></body></html>"""

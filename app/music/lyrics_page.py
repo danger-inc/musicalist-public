@@ -96,12 +96,14 @@ class LyricsMixin:
             GLib.idle_add(lambda: self.lyr_scroll.get_vadjustment().set_value(0) and False)
 
     def update_lyr_src(self):
-        src = getattr(self, "lyr_source", "")
+        # Quelle (lrclib …) wird bewusst nicht mehr angezeigt – nur Hinweise, die etwas zu tun geben
+        src = ""
         if not self.lyr_synced:
-            src += "  ·  ohne zeitstempel – zum mitlesen scrollen"
+            src = "ohne zeitstempel – zum mitlesen scrollen"
         elif self.lyr_offset:
-            src += f"  ·  versatz {self.lyr_offset:+.2f} s  ( [ ] )"
+            src = f"versatz {self.lyr_offset:+.2f} s  ( [ ] )"
         self.lyr_src.set_label(src)
+        self.lyr_src.set_visible(bool(src))
 
     def shift_lyrics(self, d):
         if not self.lyr_synced or not self.lyric_lines:
