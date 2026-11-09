@@ -149,6 +149,10 @@ class FriendsMixin:
                 dlg.destroy()
                 self.say(f"nutzername: {f.name}")
                 self.fill_friends()
+                if getattr(self, "fr_name_lbl", None) is not None:
+                    self.fr_name_lbl.set_label(f.name)
+                for fn in ("update_peers", "update_handy"):           # Geräteliste zeigt „name (gerät)“
+                    getattr(self, fn, lambda: None)()
             tui.background(f.set_username, txt, done=done)
         e.connect("activate", go)
         ok.connect("clicked", go)
@@ -771,18 +775,13 @@ class FriendsMixin:
             box.append(sec)
 
     def _top_list(self):
-        """Wochen-Topliste aus den geteilten Hörprofilen (ich + Freunde), nach Rubrik wählbar."""
+        """Wochen-Topliste aus den geteilten Hörprofilen (ich + Freunde). Rubrik per Dropdown wählen: in der Auswahl steht je
+        Rubrik rechts die Person auf Platz 1; gewählt wird die ganze Rangliste gezeigt."""
         f = self.fr
-        cat = getattr(self, "_fr_cat", "h")
+        cat = getattr(self, "_fr_cat", "") or "h"
+        menu = getattr(self, "_fr_menu", False)
         panel = vbox(spacing=3)
         panel.append(label("󰔷 top-liste · diese woche", "accent"))
-        chips = hbox(spacing=6)
-        for key, name, _fn, _d in RUBRIKEN:
-            b = tui.Button(name, lambda k=key: (setattr(self, "_fr_cat", k), self.fill_friends()))
-            if key == cat:
-                b.add_css_class("on")
-            chips.append(b)
-        panel.append(chips)
         entries = []
         mine = f._payload().get("pf") if f.share else None
         entries.append((f.name + " (ich)", mine, True))
@@ -792,14 +791,31 @@ class FriendsMixin:
             # Profil-Stand ist ein Schnappschuss vom letzten Senden: älter als diese Woche = noch nichts gehört → nicht die Stunden der Vorwoche zeigen
             fresh = (x.get("at") or 0) >= week
             entries.append((x["name"], (x.get("prof") or {}).get("pf") if fresh else None, False))
+        names = {k: n for k, n, _f, _d in RUBRIKEN}
+        head = Gtk.Button(hexpand=True)
+        head.add_css_class("rowhead")
+        head.add_css_class("on")
+        head.set_child(hbox(label(names[cat], "accent", hexpand=True, xalign=0), label("󰅃" if menu else "󰅀", "dim"), spacing=10))
+        head.connect("clicked", lambda *_: (setattr(self, "_fr_menu", not menu), self.fill_friends()))
+        panel.append(head)
+        if menu:
+            for key, name, _fn, _d in RUBRIKEN:
+                r = top_rows(entries, key)
+                right = label(f"{r[0][0]} · {r[0][1]}", *(("accent",) if r[0][3] else ())) if r else label("–", "dim")
+                b = Gtk.Button(hexpand=True)
+                b.add_css_class("rowhead")
+                if key == cat:
+                    b.add_css_class("on")
+                b.set_child(hbox(label(name, hexpand=True, xalign=0), right, spacing=10))
+                b.connect("clicked", lambda *_, k=key: (setattr(self, "_fr_cat", k), setattr(self, "_fr_menu", False), self.fill_friends()))
+                panel.append(b)
         rows = top_rows(entries, cat)
         if not rows:
             panel.append(label("noch keine Angaben – Freunde müssen teilen (umfang normal/mehr für alles außer hörzeit; vielfalt, entdecker, serie nur bei „mehr“).", "dim", wrap=True))
         for i, (n, t, z, me) in enumerate(rows, 1):
             cls = ("accent",) if me else ()
-            line = hbox(label(f"{i}.", "accent" if me else "dim"), label(n, *cls, hexpand=True, ellipsize=True),
-                        label(t, *cls), spacing=8)
-            panel.append(line)
+            panel.append(hbox(label(f"{i}.", "accent" if me else "dim"), label(n, *cls, hexpand=True, ellipsize=True),
+                              label(t, *cls), spacing=8))
             if z:
                 panel.append(label("    " + z, "dim", wrap=True))
         absent = [n for n, pf, _m in entries if not pf]

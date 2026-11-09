@@ -62,6 +62,10 @@ class SettingsMixin:
         panel.body.append(self.fr_chk)
         fr_ = getattr(self.p, "friends", None)
         if fr_ is not None:
+            nm_row = hbox(label("nutzername:", "dim"), label("", "accent"), tui.Button("✎ ändern", lambda: self.ask_username()), spacing=8)
+            self.fr_name_lbl = nm_row.get_first_child().get_next_sibling()
+            self.fr_name_lbl.set_label(fr_.name if fr_.named else "noch keiner")
+            panel.body.append(nm_row)
             panel.body.append(label("umfang – was freunde sehen", "dim", xalign=0))
             self.fr_lv_row = hbox(spacing=6)
             self.fr_lv_btns = {}
@@ -395,6 +399,11 @@ class SettingsMixin:
                 self.say(f"mit {res} verbunden – hörprotokoll wird abgeglichen")
         tui.background(pe.pair, addr, code, done=done)
 
+    def _dev_label(self, device):
+        """Gekoppelte Geräte teilen den Nutzernamen: „anna (gerätename)“, damit klar ist, was Name und was Gerät ist."""
+        fr_ = getattr(self.p, "friends", None)
+        return f"{fr_.name} ({device})" if fr_ is not None and fr_.named else device
+
     def update_peers(self):
         pe = getattr(self.p, "peers", None)
         if pe is None or getattr(self, "peer_list", None) is None:
@@ -405,7 +414,7 @@ class SettingsMixin:
             when = time.strftime("%d.%m. %H:%M", time.localtime(last)) if last else "noch nie"
             info = f"⚠ {d['error']}" if d.get("error") else f"abgleich {when} · {d.get('got', 0)} einträge"
             self.peer_list.append(hbox(
-                label(f"󰟀 {d.get('name') or 'gerät'}", hexpand=True, xalign=0, ellipsize=True),
+                label(f"󰟀 {self._dev_label(d.get('name') or 'gerät')}", hexpand=True, xalign=0, ellipsize=True),
                 label(info, "dim", ellipsize=True),
                 tui.Button("jetzt", lambda i=pid: tui.background(pe.sync_peer, i)),
                 tui.Button("entfernen", lambda i=pid: pe.remove(i), danger=True), spacing=10))
@@ -453,7 +462,7 @@ class SettingsMixin:
         for dev_id, d in sorted(h.devices.items(), key=lambda kv: kv[1].get("paired") or 0):
             last = d.get("last")
             when = time.strftime("%d.%m. %H:%M", time.localtime(last)) if last else "noch nie"
-            self.handy_list.append(hbox(label(f"󰄜 {d.get('name') or 'handy'}", hexpand=True, xalign=0, ellipsize=True),
+            self.handy_list.append(hbox(label(f"󰄜 {self._dev_label(d.get('name') or 'handy')}", hexpand=True, xalign=0, ellipsize=True),
                                         label(f"abgleich {when} · {d.get('got', 0)} einträge", "dim"),
                                         tui.Button("entfernen", lambda i=dev_id: h.remove(i), danger=True),
                                         spacing=10))

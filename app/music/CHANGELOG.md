@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.43.0 (2026-11-09)
+- **Nutzername in den Einstellungen ändern** (Einstellungen → Freunde → „✎ ändern“). Gekoppelte Geräte übernehmen den neuen Namen beim nächsten Abgleich.
+- **Top-Liste als Auswahl:** Die Rubrik wählst du per Dropdown; in der Auswahl steht je Rubrik rechts die Person auf Platz 1, gewählt wird die ganze Rangliste gezeigt.
+- **Geräteliste eindeutig:** Gekoppelte Geräte stehen als „nutzername (gerätename)“, z. B. „anna (laptop)“, damit klar ist, was Name und was Gerät ist.
+
 ## 1.42.1 (2026-11-09)
 - **Beim Namen-Zwang koppeln:** Im Fenster „wähle deinen nutzernamen“ gibt es jetzt „ich habe musicalist schon auf einem anderen gerät“ → Adresse und Code des anderen Geräts eintragen, koppeln übernimmt dessen Nutzernamen (gekoppelte Geräte teilen denselben Namen). Dafür gleichen sich Freunde und Name jetzt auch ab, wenn der PC das andere Gerät abfragt bzw. das Handy vom PC abgefragt wird (bisher nur Handy → PC).
 
