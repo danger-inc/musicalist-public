@@ -321,14 +321,14 @@ class SettingsMixin:
         self.handy_list = vbox(spacing=4)
         b.append(self.handy_list)
         # weitere rechner: dieser rechner verbindet sich mit einem, auf dem „handy koppeln“ gedrückt wurde
-        sep = label("weiterer rechner", "accent", xalign=0)
+        sep = label("weiteres gerät (pc oder musicalist-handy)", "accent", xalign=0)
         sep.set_margin_top(8)
         b.append(sep)
-        self.peer_addr = tui.Entry("adresse des anderen rechners", width=22)
+        self.peer_addr = tui.Entry("adresse des anderen geräts", width=22)
         self.peer_code = tui.Entry("code (8 zeichen)", width=12)
         self.peer_btn = tui.Button("󰌷 verbinden", self.peer_pair,
-                                   tooltip="Am anderen Rechner: einstellungen → „handy koppeln“ drücken,\n"
-                                           "dort erscheinen Adresse und Code. Hier eintragen.")
+                                   tooltip="Am anderen Gerät: pc → einstellungen → „handy koppeln“, handy →\n"
+                                           "einstellungen → „koppeln lassen“. Adresse und Code hier eintragen.")
         b.append(hbox(self.peer_addr, self.peer_code, self.peer_btn, spacing=8))
         self.peer_list = vbox(spacing=4)
         b.append(self.peer_list)
@@ -371,7 +371,7 @@ class SettingsMixin:
             when = time.strftime("%d.%m. %H:%M", time.localtime(last)) if last else "noch nie"
             info = f"⚠ {d['error']}" if d.get("error") else f"abgleich {when} · {d.get('got', 0)} einträge"
             self.peer_list.append(hbox(
-                label(f"󰟀 {d.get('name') or 'rechner'}", hexpand=True, xalign=0, ellipsize=True),
+                label(f"󰟀 {d.get('name') or 'gerät'}", hexpand=True, xalign=0, ellipsize=True),
                 label(info, "dim", ellipsize=True),
                 tui.Button("jetzt", lambda i=pid: tui.background(pe.sync_peer, i)),
                 tui.Button("entfernen", lambda i=pid: pe.remove(i), danger=True), spacing=10))

@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 1.38.0 (2026-11-09)
+- **Abgleich mit weiteren Geräten, nicht nur Rechnern:** Unter „handy-app“ → „weiteres gerät“ verbindest du dich jetzt auch mit **musicalist auf einem anderen Handy** (dort „koppeln lassen“ drücken, Adresse und Code hier eintragen) – oder mit weiteren Rechnern wie bisher. Beliebig viele Geräte, Ketten funktionieren (Handy – PC – Handy). Neue Hörprotokoll-Einträge tragen den Gerätenamen (`dn`) für die Analyse.
+
 ## 1.37.0 (2026-11-09)
 - **Mehrere Rechner verknüpfen:** Einstellungen → „handy-app“ → **weiterer rechner**. Am einen Rechner „handy koppeln“ drücken (Adresse + Code erscheinen), am anderen Adresse und Code eintragen → „verbinden“. Danach gleichen sich die Hörprotokolle im WLAN alle 5 Minuten (und per „jetzt“) in beide Richtungen ab, sodass Hörzeit, Analyse und Rückblick auf jedem Gerät alles zusammenrechnen. Es läuft auch über Ketten (Handy – PC 1 – PC 2): jedes Gerät gibt auch Einträge anderer weiter; doppelte werden übersprungen. Gleiches verschlüsseltes Protokoll wie beim Handy, Port 37526/tcp muss am Rechner mit dem Code offen sein. Neue Einträge tragen eine Gerätemarke (`dev`).
 

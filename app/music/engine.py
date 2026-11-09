@@ -1695,7 +1695,7 @@ class Journal:
     def begin(self, t, player, src=None):
         """Neuer Titel beginnt (vorigen vorher mit finish() abschließen)."""
         loc = localmusic.is_local(t)
-        e = {"at": round(time.time(), 1), "dev": device_id()[:8], "id": t["videoId"], "t": t.get("title") or "?", "a": t.get("artist") or "",
+        e = {"at": round(time.time(), 1), "dev": device_id()[:8], "dn": socket.gethostname().split(".")[0][:30], "id": t["videoId"], "t": t.get("title") or "?", "a": t.get("artist") or "",
              "d": round(t.get("duration") or 0), "p": 0.0, "mx": 0.0, "sk": 0, "pa": 0, "ps": 0.0,
              "v": player.volume, "sh": bool(player.shuffle), "rp": player.repeat,
              "k": "lokal" if loc else ("offline" if player.offline.path(t["videoId"]) else "stream")}
