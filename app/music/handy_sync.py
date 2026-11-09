@@ -432,10 +432,16 @@ class Peers:
             if self.busy:
                 return None
             self.busy = True
+        fr = getattr(self.p, "friends", None)
         try:
-            for _ in range(20):
+            for rnd in range(20):
                 mine, nxt_sent, _more = j.lines_from(int(d.get("sent") or 0), limit=2000, skip_dev=d.get("dev"))
                 req = {"rows": mine, "have": int(d.get("have") or 0), "skip": me}
+                if rnd == 0 and fr is not None:          # Freunde + Nutzername abgleichen (gekoppelte Geräte = eine Person)
+                    try:
+                        req["friends"] = fr.sync_out()
+                    except Exception as e:  # noqa: BLE001
+                        engine.log(f"pc-abgleich: freunde {e!r}")
                 try:
                     out = self._post(d["host"], d["port"], "/sync", box(key, json.dumps(req, ensure_ascii=False).encode()),
                                      {"X-Dev": pid, "Content-Type": "application/octet-stream"}, timeout=40)
@@ -445,6 +451,11 @@ class Peers:
                     engine.log(f"pc-abgleich {d.get('name')}: {e!r}")
                     self._notify()
                     return None
+                if fr is not None and isinstance(res.get("friends"), dict):
+                    try:
+                        fr.sync_in(res["friends"], d.get("dev") or pid)
+                    except Exception as e:  # noqa: BLE001
+                        engine.log(f"pc-abgleich: freunde {e!r}")
                 added = j.merge(res.get("rows") or [])
                 total += added
                 d.update(sent=nxt_sent, have=int(res.get("next") or 0), last=time.time(), error=None,

@@ -158,6 +158,43 @@ class FriendsMixin:
         box.append(e)
         box.append(status)
         box.append(row)
+        pe = getattr(self.p, "peers", None)
+        if first and pe is not None:
+            # schon ein Gerät mit musicalist (Handy/PC) mit Namen? Dann koppeln – gekoppelte Geräte teilen denselben Namen
+            box.append(label("— oder —", "dim"))
+            box.append(label("du hast musicalist schon auf einem anderen gerät? koppeln übernimmt dessen namen.\n"
+                             "dort: einstellungen → „handy koppeln“ (pc) bzw. „koppeln lassen“ (handy) – das zeigt adresse und code.", "dim", wrap=True))
+            addr = tui.Entry("adresse, z. b. 192.168.1.20")
+            code = tui.Entry("code, z. b. K7P2-QX9M")
+            pst = label("", "dim", wrap=True)
+            pb = tui.Button("󰌷 koppeln")
+
+            def pair(*_):
+                pb.set_sensitive(False)
+                pst.set_label("koppelt …")
+
+                def work():
+                    pe.pair(addr.get_text().strip(), code.get_text())
+                    return self.fr.named
+
+                def done(res):
+                    pb.set_sensitive(True)
+                    if isinstance(res, Exception):
+                        pst.set_label(str(res))
+                    elif res:
+                        self._name_dlg = None
+                        dlg.destroy()
+                        self.say(f"gekoppelt – nutzername: {f.name}")
+                        self.fill_friends()
+                    else:
+                        pst.set_label("gekoppelt – aber das andere gerät hat noch keinen nutzernamen. leg dort zuerst einen fest.")
+                tui.background(work, done=done)
+            pb.connect("clicked", pair)
+            code.connect("activate", pair)
+            box.append(addr)
+            box.append(code)
+            box.append(pb)
+            box.append(pst)
         dlg.set_child(box)
         dlg.connect("close-request", lambda *_: (first and not f.named))      # beim ersten Mal nicht schließbar
         dlg.connect("destroy", lambda *_: setattr(self, "_name_dlg", None))

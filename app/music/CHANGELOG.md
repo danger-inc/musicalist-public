@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 1.42.1 (2026-11-09)
+- **Beim Namen-Zwang koppeln:** Im Fenster „wähle deinen nutzernamen“ gibt es jetzt „ich habe musicalist schon auf einem anderen gerät“ → Adresse und Code des anderen Geräts eintragen, koppeln übernimmt dessen Nutzernamen (gekoppelte Geräte teilen denselben Namen). Dafür gleichen sich Freunde und Name jetzt auch ab, wenn der PC das andere Gerät abfragt bzw. das Handy vom PC abgefragt wird (bisher nur Handy → PC).
+
 ## 1.42.0 (2026-11-09)
 - **Nutzername statt Code:** Beim nächsten Start musst du einmal einen Nutzernamen festlegen (3–20 Zeichen, gespeichert lokal). Freunde findest du nur noch über den Namen: Namen eingeben → Anfrage → die Person bestätigt (annehmen/ablehnen); erst dann tauschen die Geräte verschlüsselt ihre Schlüssel aus. Der Code ist aus der Oberfläche verschwunden, bestehende Freunde bleiben. Namen sind „wer zuerst kommt“ (ohne Server nur bestmöglich). Gekoppelte Geräte (PC + Handy) teilen denselben Namen; bei Streit gilt der zuletzt geänderte.
 - **Gekoppelte Geräte gelten als eine Person:** Läuft am PC Musik und das Handy ist ruhig, sehen Freunde jetzt die laufende Musik (je Gerät zählt die letzte Meldung, spielendes Gerät gewinnt; Incognito eines Geräts gilt für alle). Beide Geräte und die Freunde brauchen dafür die neue Version.
