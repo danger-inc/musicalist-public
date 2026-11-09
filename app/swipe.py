@@ -100,7 +100,7 @@ DIST = 150            # so weit (px) wischen, bis es auslöst
 GHOST = 0.34          # Anteil der Breite, den die vorige Seite beim vollen Wischen zeigt
 SHIFT = 30            # so weit rückt die aktuelle Seite beiseite
 KEEP = 16             # so viele Seitenbilder merken
-DUR_COMMIT = 300_000  # µs
+DUR_COMMIT = 360_000  # µs
 DUR_CANCEL = 180_000
 
 
@@ -561,7 +561,10 @@ class SwipeBack:
             shift = SHIFT * p0 + (SHIFT * 2 - SHIFT * p0) * e
             front_alpha = (1 - 0.3 * p0) * (1 - 0.75 * e)
             ready = True
-            frame_alpha = 1 - e
+            # Rahmen + Ziel-Chip (in Akzentfarbe) bleiben beim Aufklappen voll sichtbar und blenden erst im letzten Drittel aus
+            # (vorher: 1 - e mit Ease-out → nach ~100 ms fast unsichtbar, der gefüllte Chip war kaum zu sehen)
+            ft = max(0.0, (st["t"] - 0.62) / 0.38)
+            frame_alpha = 1 - ft * ft * (3 - 2 * ft)
         else:
             p = st["p"]
             gw = GHOST * p * W

@@ -1,5 +1,11 @@
 # musicalist – Änderungen
 
+## 1.44.2 (2026-11-10)
+- **Freunde sahen sich nicht mehr:** Der Relay ntfy.sh erlaubt je Internetanschluss nur 60 Anfragen / 5 min und 250 Nachrichten / Tag; musicalist fragte je Freund einzeln ab und sendete bei jedem Titelwechsel doppelt – das Limit war schnell voll (Fehler 429), Stände kamen nicht mehr an. Jetzt: eine einzige Anfrage für alle Freunde, Abfrage alle 60 s (Chat-Eingang 12 s), nach 429 90 s Pause ohne den alten Stand zu verlieren, ein neuer Titel wird erst nach 5 s gemeldet (eine statt zwei Nachrichten), unveränderter Stand wird nicht erneut gesendet, Herzschlag alle 4 min.
+
+## 1.44.1 (2026-11-09)
+- **Nutzername festlegen:** „keine verbindung – bitte später nochmal“ kam oft schon bei kurzer Überlast des Relays (ntfy.sh, 429). Anfragen werden jetzt mehrfach wiederholt, und bei echtem Scheitern steht der Grund da (überlastet / Serverfehler / kein Internet).
+
 ## 1.44.0 (2026-11-09)
 - **Rückblick-Bilder (PNG 1080 × 1350):** Jeden Sonntagabend (ab 20 Uhr) entsteht ein Wochenbild im Terminal-Stil, am Monatsletzten ein Monatsplakat, am 31. Dezember ein Jahresbild (Mischung aus beidem). Die Farbe ist die Akzentfarbe der Person mit der meisten Hörzeit, das Cover gehört zu ihrem meistgespielten Lied, dazu die Ranglisten hörzeit / titel / künstler·innen aus deiner Freundesliste (nur was geteilt wird, Incognito fehlt). Hinweis ganz oben im Freunde-Tab, Desktop-Benachrichtigung, Seite „󰄨 rückblicke“ mit allen bisherigen Bildern (ansehen, herunterladen nach ~/Pictures/musicalist, Ordner öffnen).
 - **Einstellungen → Freunde:** „bilder automatisch herunterladen“ (Standard aus) und „wochenbild jetzt testweise“.

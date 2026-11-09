@@ -235,13 +235,13 @@ class FriendsMixin:
         self.refresh_friends()
         if not self._fr_timer:
             self._fr_n = 0
-            self._fr_timer = GLib.timeout_add_seconds(8, self._fr_tick)
+            self._fr_timer = GLib.timeout_add_seconds(12, self._fr_tick)
 
     def _fr_tick(self):
-        """Alle 8 s den Eingang (Chat), alle 24 s zusätzlich den Stand aller Freunde."""
+        """Alle 12 s den Eingang (Chat), alle 60 s zusätzlich den Stand aller Freunde."""
         if self.friends_visible() and self.get_visible():
             self._fr_n += 1
-            if self._fr_n % 3 == 0:
+            if self._fr_n % 5 == 0:
                 self.refresh_friends()
             elif self.fr:
                 f = self.fr

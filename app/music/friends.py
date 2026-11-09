@@ -48,17 +48,55 @@ def _ntopic(un):
     return "mfn-" + hashlib.sha256(f"musicalist-friend-name|{un}".encode()).hexdigest()[:24]
 
 
+def _retry(make, tries=4):
+    """HTTP-Aufruf mit Wiederholung: ntfy.sh antwortet bei Überlast/Rate-Limit mit 429/5xx (oft nur kurz) – dann
+    warten (Retry-After, höchstens 6 s) und neu versuchen. Wirft zuletzt den echten Fehler."""
+    import urllib.error
+    last = None
+    for i in range(tries):
+        try:
+            return make()
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code not in (429, 500, 502, 503, 504):
+                break
+            try:
+                w = float(e.headers.get("Retry-After") or 0)
+            except (TypeError, ValueError):
+                w = 0
+            time.sleep(min(max(w, 1.0 + i * 1.5), 6.0))
+        except (urllib.error.URLError, OSError) as e:
+            last = e
+            time.sleep(1.0 + i)
+    raise last
+
+
+def why(e):
+    """Verständlicher Grund für das Scheitern einer Relay-Anfrage."""
+    import urllib.error
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code == 429:
+            return "der Server ist gerade überlastet (zu viele Anfragen) – bitte in einer Minute nochmal"
+        return f"der Server antwortet mit Fehler {e.code} – bitte später nochmal"
+    return "keine verbindung zum internet/Server – bitte später nochmal"
+
+
 def _post_plain(topic, obj):
-    req = urllib.request.Request(f"{RELAY}/{topic}", data=json.dumps(obj, ensure_ascii=False).encode(), method="POST",
-                                 headers={"Content-Type": "text/plain"})
-    urllib.request.urlopen(req, timeout=12).read()
+    def go():
+        req = urllib.request.Request(f"{RELAY}/{topic}", data=json.dumps(obj, ensure_ascii=False).encode(), method="POST",
+                                     headers={"Content-Type": "text/plain"})
+        return urllib.request.urlopen(req, timeout=12).read()
+    _retry(go)
 
 
 def _read_plain(topic):
     """Alle lesbaren JSON-Nachrichten eines Namens-Themas → [(ntfy-Ereignis, Nachricht)]."""
     out = []
-    with urllib.request.urlopen(f"{RELAY}/{topic}/json?poll=1&since=all", timeout=12) as r:
-        for line in r.read().decode("utf-8", "replace").splitlines():
+    def go():
+        with urllib.request.urlopen(f"{RELAY}/{topic}/json?poll=1&since=all", timeout=12) as r:
+            return r.read().decode("utf-8", "replace")
+    if True:
+        for line in _retry(go).splitlines():
             try:
                 e = json.loads(line)
                 m = json.loads(e.get("message", "")) if e.get("event") == "message" else None
@@ -263,7 +301,7 @@ class Friends:
         try:
             st, un = self.name_state(display, uid)
         except Exception as e:  # noqa: BLE001
-            raise ValueError("keine verbindung – bitte später nochmal") from e
+            raise ValueError(why(e)) from e
         if st == "bad":
             raise ValueError("3–20 zeichen: kleine/große buchstaben, ziffern, . _ -")
         if st == "taken":
@@ -296,7 +334,7 @@ class Friends:
         try:
             claims = [(e, m) for e, m in _read_plain(_ntopic(un)) if m.get("k") == "claim" and m.get("pk") and m.get("uid")]
         except Exception as e:  # noqa: BLE001
-            raise ValueError("keine verbindung – bitte später nochmal") from e
+            raise ValueError(why(e)) from e
         if not claims:
             raise ValueError("niemand mit diesem namen gefunden (oder die Person war länger nicht online)")
         first = min(claims, key=lambda x: int(x[0].get("time") or 0))[1]["uid"]       # wer zuerst kam, gilt
@@ -409,18 +447,22 @@ class Friends:
         pid = t["videoId"] if t else None
         playing = bool(t) and p.started and not p.paused
         changed = False
+        newtrack = False
         if pid != self._cur_id:
-            self._cur_id, self._cur, changed = pid, t, True
+            self._cur_id, self._cur, changed, newtrack = pid, t, True, True
             if t and not str(pid).startswith("local:"):
                 threading.Timer(5.0, self._played, args=(pid, t)).start()
         if playing != self._playing:
             self._playing, changed = playing, True
-        if changed:
+        if changed and not (newtrack and playing and t):      # neuer Titel läuft: erst nach 5 s melden (_played) – eine Nachricht statt zwei
             self._touch()
 
     def _played(self, pid, t):
         """Nach 5 s echter Wiedergabe in „zuletzt gehört“."""
-        if self._cur_id != pid or not self._playing or self.incognito:
+        if self._cur_id != pid or not self._playing:
+            return
+        if self.incognito:
+            self._touch()
             return
         self.recent = [{**entry(t), "at": int(time.time() * 1000)}] + [r for r in self.recent if r.get("id") != pid]
         self.recent = self.recent[:8]
@@ -431,7 +473,7 @@ class Friends:
         while True:
             time.sleep(30)
             try:
-                if self.share and self._playing and time.time() - self._last_pub > 180:
+                if self.share and self._playing and time.time() - self._last_pub > 240:
                     self._touch(0)
                 if self.named and time.time() - getattr(self, "_claim_at", 0) > 6 * 3600:
                     self._claim()
@@ -549,6 +591,10 @@ class Friends:
             except Exception as e:  # noqa: BLE001
                 engine.log(f"freunde: payload {e!r}")
                 return
+            sig = json.dumps({k: v for k, v in o.items() if k != "ts"}, sort_keys=True, default=str)
+            if delay != 0 and sig == getattr(self, "_sig", None) and time.time() - getattr(self, "_sent", 0) < 240:
+                return                                      # unverändert, Herzschlag noch frisch → keine Nachricht (Tageslimit 250)
+            self._sig, self._sent = sig, time.time()
             for sec in [self.secret] + self.aliases:       # gekoppelte Geräte (Handy/Laptop) = eine Person: Stand in alle Themen
                 try:
                     _publish(sec, o)
@@ -835,26 +881,42 @@ class Friends:
         pr = f.get("prof") or {}
         return bool(not inc_active(pr.get("inc")) and pr.get("now") and pr.get("pl") and f.get("at") and time.time() * 1000 - f["at"] < 6 * 60_000)
 
-    def fetch(self, sec):
+    def fetch_many(self, secs):
+        """EINE Anfrage für alle Themen (kommagetrennt) → {sec: [ntfy-Ereignisse]}. ntfy.sh begrenzt je IP auf 60 Anfragen / 5 min
+        und 250 Nachrichten / Tag – eine Anfrage je Freund führte zu 429, und Freunde „verschwanden“."""
+        import urllib.error
+        by = {_topic(s): s for s in secs}
+        out = {}
+        try:
+            with urllib.request.urlopen(f"{RELAY}/{','.join(by)}/json?poll=1&since=all", timeout=15) as r:
+                for line in r.read().decode("utf-8", "replace").splitlines():
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    if e.get("event") == "message" and e.get("topic") in by:
+                        out.setdefault(by[e["topic"]], []).append(e)
+        except urllib.error.HTTPError as ex:
+            if ex.code == 429:
+                self._cool = time.time() + 90
+            raise
+        return out
+
+    def fetch(self, sec, events=None):
         """Letzten Stand holen → (prof|None, at_ms). Wirft bei Netzfehlern.
         Gekoppelte Geräte (PC + Handy) senden in dasselbe Thema und gelten als eine Person: je Gerät (dev) zählt die letzte
         Nachricht; läuft irgendwo gerade Musik, gewinnt dieses Gerät (sonst überschrieb ein ruhendes Gerät den Stand des spielenden)."""
         per = {}
-        with urllib.request.urlopen(f"{RELAY}/{_topic(sec)}/json?poll=1&since=all", timeout=12) as r:
-            for line in r.read().decode("utf-8", "replace").splitlines():
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                if e.get("event") != "message":
-                    continue
-                m = _open(sec, e.get("message", ""))
-                if not m or m.get("k") != "prof":
-                    continue
-                tm = int(e.get("time") or 0) * 1000
-                dv = str(m.get("dev") or "")
-                if dv not in per or tm >= per[dv][1]:
-                    per[dv] = (m, tm)
+        if events is None:
+            events = self.fetch_many([sec]).get(sec, [])
+        for e in events:
+            m = _open(sec, e.get("message", ""))
+            if not m or m.get("k") != "prof":
+                continue
+            tm = int(e.get("time") or 0) * 1000
+            dv = str(m.get("dev") or "")
+            if dv not in per or tm >= per[dv][1]:
+                per[dv] = (m, tm)
         return pick_state(per)
 
     # ----- Abgleich mit dem Handy (über handy_sync) -----
@@ -976,7 +1038,7 @@ class Friends:
 
     def refresh(self):
         """Blockierend: alle Freunde parallel abfragen."""
-        if self.busy:
+        if self.busy or time.time() < getattr(self, "_cool", 0):       # nach 429 still warten, alte Stände bleiben
             return
         self.busy = True
         try:
@@ -991,10 +1053,16 @@ class Friends:
                 return
             snap = list(self.friends)
             out = {}
+            try:
+                allev = self.fetch_many([f["secret"] for f in snap])
+            except Exception:  # noqa: BLE001
+                return
+            if time.time() < getattr(self, "_cool", 0):
+                return
 
             def one(f):
                 try:
-                    prof, at = self.fetch(f["secret"])
+                    prof, at = self.fetch(f["secret"], allev.get(f["secret"], []))
                     if prof is not None:
                         out[f["secret"]] = {"secret": f["secret"], "name": prof.get("name") or f["name"], "prof": prof, "at": at,
                                             "error": None}
