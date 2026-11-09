@@ -78,6 +78,8 @@ class SettingsMixin:
             panel.body.append(label("minimal: läuft gerade, letzte 5 titel, hörzeit der woche · normal: dazu empfehlungen, top künstler/titel, "
                                     "lieblingsstunde, skip-rate · mehr: dazu typ, vielfalt, wiederholer, neue künstler, durchhör-quote, serie.",
                                     "dim", wrap=True, xalign=0))
+            panel.body.append(tui.Check("lesebestätigungen senden („gelesen“ bei den anderen)", fr_.read_receipts,
+                                        lambda on: fr_.set_read_receipts(on)))
             panel.body.append(label("󰗹 incognito – andere sehen nicht, was du hörst (nur dass du incognito bist)", "dim", xalign=0))
             self.fr_inc_state = label("", "dim", wrap=True, xalign=0)
 

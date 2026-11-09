@@ -62,6 +62,15 @@ flowbox.opts > flowboxchild { padding: 0; min-width: 0; min-height: 0; }
 .frlive, button.frlive { background-color: @primary; border-radius: 4px; }
 .frlive label, .frlive label.accent, .frlive label.dim, .frlive label.glyph { color: @on_primary; }
 .row.trk.frlive:hover { background-color: alpha(@primary, 0.85); }
+.frcover { background-color: @background; border-radius: 4px; padding: 2px; }
+.day-chip { background-color: alpha(@primary, 0.14); border-radius: 10px; padding: 1px 10px; font-size: 11px; }
+.bub-time, .bub-time-out { font-size: 10px; }
+.bub-me .bub-time { color: alpha(@on_primary, 0.75); }
+.bub-o .bub-time { color: alpha(@foreground, 0.5); }
+.bub-me.joined { border-top-right-radius: 12px; }
+.bub-o.joined { border-top-left-radius: 12px; }
+.chat-input-box { border: 1px solid alpha(@primary, 0.6); border-radius: 4px; }
+textview.chat-input, textview.chat-input text { background: none; color: @foreground; }
 .bub-me { background-color: @primary; border-radius: 12px 4px 12px 12px; padding: 6px 12px; }
 .bub-me label { color: @on_primary; }
 .bub-o { border: 1px solid alpha(@primary, 0.55); border-radius: 4px 12px 12px 12px; padding: 6px 12px; }

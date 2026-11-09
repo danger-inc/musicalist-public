@@ -357,8 +357,11 @@ class FriendsMixin:
         cover = DotCover(56)
         cover.set_content_height(56)
         cover.set_valign(Gtk.Align.START)
-        t = fr.to_track(now, x["name"]) if now else None
+        t = fr.to_track(now, x["name"]) if now and not fr.inc_active((x.get("prof") or {}).get("inc")) else None
         cover.show(t["thumb"] if t and t.get("thumb") else None)
+        tile = Gtk.Box(valign=Gtk.Align.START)          # Kachel in der Hintergrundfarbe: das akzentfarbene Raster bliebe auf dem gefüllten Kopf unsichtbar
+        tile.add_css_class("frcover")
+        tile.append(cover)
         head = Gtk.Button(hexpand=True)
         head.add_css_class("rowhead")
         head.add_css_class("frhead")
@@ -367,32 +370,61 @@ class FriendsMixin:
         col = vbox(label(("● " if live else "") + x["name"], "accent"), label(txt, "dim", ellipsize=True, xalign=0),
                    label("profil ›", "dim"), spacing=2)
         col.set_hexpand(True)
-        head.set_child(hbox(cover, col, spacing=12))
+        head.set_child(hbox(tile, col, spacing=12))
         head.connect("clicked", lambda *_: self._fr_goto(("profile", sec)))
         box.append(head)
-        # Verlauf
-        msgs = vbox(spacing=6)
+        # Verlauf (Telegram-Stil: Uhrzeit in der Blase, gleiche Person eng beieinander, Tagestrenner)
+        msgs = vbox(spacing=0)
         ms = f.messages(sec)[-80:]
         if not ms:
-            msgs.append(label("noch keine nachrichten – schreib etwas oder empfiehl ein lied (rechtsklick auf einen titel → direkt an …).",
-                              "dim", wrap=True))
+            msgs.append(label("noch keine nachrichten – schreib etwas oder schick ein lied (󰝚 musik).", "dim", wrap=True))
+        prev = None
         for m in ms:
-            msgs.append(self._chat_msg(m, x))
+            day = time.strftime("%Y%m%d", time.localtime((m.get("at") or 0) / 1000))
+            new_day = prev is None or day != time.strftime("%Y%m%d", time.localtime((prev.get("at") or 0) / 1000))
+            if new_day:
+                chip = label(self._day_label(m.get("at") or 0), "dim")
+                chip.add_css_class("day-chip")
+                chip.set_halign(Gtk.Align.CENTER)
+                chip.set_margin_top(6)
+                chip.set_margin_bottom(6)
+                msgs.append(chip)
+            joined = (not new_day and prev is not None and bool(prev.get("me")) == bool(m.get("me"))
+                      and (m.get("at") or 0) - (prev.get("at") or 0) < 5 * 60_000)
+            w = self._chat_msg(m, x, joined)
+            w.set_margin_top(0 if (prev is None or new_day) else (2 if joined else 8))
+            msgs.append(w)
+            prev = m
         box.append(msgs)
-        # Eingabe
+        # Eingabe: mehrzeilig, wächst mit dem Text (bis ca. 6 Zeilen). Enter sendet, Umschalt+Enter = neue Zeile
         if getattr(self, "_chat_entry", None) is None:
-            self._chat_entry = tui.Entry("nachricht …")
+            tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, top_margin=8, bottom_margin=8, left_margin=10, right_margin=10)
+            tv.add_css_class("chat-input")
+            sw = Gtk.ScrolledWindow(hexpand=True, propagate_natural_height=True, min_content_height=50, max_content_height=150,
+                                    hscrollbar_policy=Gtk.PolicyType.NEVER, child=tv)
+            sw.add_css_class("chat-input-box")
+            self._chat_tv, self._chat_entry = tv, sw
 
             def send(*_):
                 cur = getattr(self, "_fr_view", None)
-                txt2 = self._chat_entry.get_text().strip()
+                buf = self._chat_tv.get_buffer()
+                txt2 = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
                 fx = next((y for y in self.fr.friends if cur and y["secret"] == cur[1]), None)
                 if fx and txt2 and self.fr.send_msg(fx, txt2):
-                    self._chat_entry.set_text("")
+                    buf.set_text("")
                     self._fr_goto(cur)
-                    self._chat_entry.grab_focus()
+                    self._chat_tv.grab_focus()
             self._chat_send = send
-            self._chat_entry.connect("activate", send)
+            keys = Gtk.EventControllerKey()
+
+            def key(_c, kv, _kc, state):
+                from gi.repository import Gdk
+                if kv in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and not (state & Gdk.ModifierType.SHIFT_MASK):
+                    send()
+                    return True
+                return False
+            keys.connect("key-pressed", key)
+            tv.add_controller(keys)
 
         def send_track(tr):
             if tr and f.send_msg(x, "", tr):
@@ -403,10 +435,12 @@ class FriendsMixin:
         music = tui.Button("󰝚 musik")
         music.connect("clicked", lambda *_: self._music_menu(music, x, send_track))
         send = tui.Button("senden", lambda: self._chat_send())
-        self._chat_entry.set_valign(Gtk.Align.FILL)
-        for b in (music, send):                   # Feld und Knöpfe gleich hoch
-            b.set_valign(Gtk.Align.FILL)
-        box.append(hbox(self._chat_entry, music, send, spacing=8))
+        for b in (music, send):                   # Knöpfe unten, so hoch wie das leere Feld
+            b.set_valign(Gtk.Align.END)
+            b.set_size_request(-1, 50)
+        row = hbox(self._chat_entry, music, send, spacing=8)
+        row.set_valign(Gtk.Align.END)
+        box.append(row)
 
     def _music_menu(self, anchor, x, send_track):
         """Menü am „musik“-Knopf: aktueller Titel oder ein anderer (Suche)."""
@@ -462,30 +496,43 @@ class FriendsMixin:
         pop.popup()
         stack.connect("notify::visible-child-name", lambda *_: e.grab_focus() if stack.get_visible_child_name() == "search" else None)
 
-    def _chat_msg(self, m, x):
-        """Eigene Nachrichten rechts, gefüllt (Akzentfarbe); fremde links mit Rahmen."""
+    @staticmethod
+    def _day_label(ms):
+        d = time.strftime("%Y%m%d", time.localtime(ms / 1000))
+        if d == time.strftime("%Y%m%d"):
+            return "heute"
+        if d == time.strftime("%Y%m%d", time.localtime(time.time() - 86400)):
+            return "gestern"
+        return time.strftime("%d.%m.%Y", time.localtime(ms / 1000))
+
+    def _chat_msg(self, m, x, joined=False):
+        """Eigene Nachrichten rechts gefüllt (Akzentfarbe), fremde links mit Rahmen; Uhrzeit und ○/● (gelesen) klein in der Blase.
+        Rechtsklick oder lange drücken = genauer ansehen."""
         me = bool(m.get("me"))
+        stamp = time.strftime("%H:%M", time.localtime((m.get("at") or 0) / 1000))
+        state = (" ✕" if m.get("failed") else (" ●" if m.get("rd") else " ○")) if me else ""
         col = vbox(spacing=2)
         col.set_halign(Gtk.Align.END if me else Gtk.Align.START)
-        who = "du" if me else x["name"]
-        stamp = self._clock(m.get("at") or 0) + (" · nicht gesendet" if m.get("failed") else "")
-        head = hbox(label(f"{who} · {stamp}", "dim"), spacing=8)
-        if self.fr.can_unsend(m):
-            head.append(tui.Button("󰕌 zurücknehmen", lambda mid=m["mid"]: (self.fr.unsend(x, mid), self._fr_goto(("chat", x["secret"]))),
-                                   tooltip="Noch 5 Minuten nach dem Senden möglich"))
-        col.append(head)
+        targets = []
         if m.get("x"):
-            bub = Gtk.Box()
+            bub = Gtk.Box(spacing=8)
             bub.add_css_class("bub-me" if me else "bub-o")
+            if joined:
+                bub.add_css_class("joined")
             l = label(m["x"], wrap=True, xalign=0.0)
-            l.set_selectable(True)
             l.set_max_width_chars(48)
+            tm = label(stamp + state, "dim")
+            tm.add_css_class("bub-time")
+            tm.set_valign(Gtk.Align.END)
             bub.append(l)
+            bub.append(tm)
             bub.set_halign(Gtk.Align.END if me else Gtk.Align.START)
             col.append(bub)
+            targets.append(bub)
         if m.get("t"):
             t = fr.to_track(m["t"], None if me else x["name"])
-            col.append(label("du empfiehlst:" if me else "empfiehlt:", "dim", xalign=1.0 if me else 0.0))
+            if not m.get("x"):
+                col.append(label("du empfiehlst" if me else "empfiehlt", "dim", xalign=1.0 if me else 0.0))
             row = track_row(t, lambda t=t: self.p.play_tracks([t]),
                             [("+", "An Warteschlange anhängen", lambda t=t: self.p.add(t)),
                              ("»", "Als nächstes spielen", lambda t=t: self.p.add(t, next_=True))], menus=self.songs)
@@ -494,7 +541,59 @@ class FriendsMixin:
             wrap.append(row)
             row.set_hexpand(True)
             col.append(wrap)
+            if not m.get("x"):
+                tm = label(stamp + state, "dim", xalign=1.0)
+                tm.add_css_class("bub-time-out")
+                col.append(tm)
+            targets.append(wrap)
+        for w in targets:                         # Rechtsklick / langes Drücken → genauer ansehen
+            g = Gtk.GestureClick(button=3)
+            g.connect("pressed", lambda g_, n, px, py, w=w: self._msg_inspect(w, m, x))
+            w.add_controller(g)
+            lp = Gtk.GestureLongPress()
+            lp.connect("pressed", lambda g_, px, py, w=w: self._msg_inspect(w, m, x))
+            w.add_controller(lp)
         return col
+
+    def _msg_inspect(self, widget, m, x):
+        """Nachricht genauer ansehen: Zeiten, Lesestatus, Aktionen (wie Apple Nachrichten)."""
+        f = self.fr
+        pop = Gtk.Popover(has_arrow=False)
+        pop.add_css_class("tpop")
+        pop.add_css_class("kpop")
+        pop.set_parent(widget)
+        pop.connect("closed", lambda p: GLib.idle_add(lambda: (p.unparent(), False)[1]))
+        box = vbox(spacing=2)
+        me = bool(m.get("me"))
+        fmt = lambda ms: time.strftime("%d.%m.%Y, %H:%M:%S", time.localtime(ms / 1000))
+        box.append(label("deine nachricht" if me else f"nachricht von {x['name']}", "accent"))
+        box.append(label(("gesendet: " if me else "empfangen: ") + fmt(m.get("at") or 0) + (" · nicht zugestellt" if m.get("failed") else ""), "dim"))
+        if me:
+            box.append(label(f"gelesen: {fmt(m['rd'])}" if m.get("rd") else "noch nicht gelesen", "dim"))
+
+        def item(text, fn, danger=False):
+            b = Gtk.Button(focus_on_click=False)
+            b.add_css_class("opt")
+            if danger:
+                b.add_css_class("danger")
+            b.set_child(label(text, xalign=0))
+            b.connect("clicked", lambda *_: (pop.popdown(), GLib.idle_add(lambda: (fn(), False)[1])))
+            box.append(b)
+        if m.get("x"):
+            item("󰆏 text kopieren", lambda: self.copy_text(m["x"], "kopiert"))
+        if m.get("t"):
+            t = fr.to_track(m["t"], None if me else x["name"])
+            item("󰐊 jetzt abspielen", lambda: self.p.play_tracks([t]))
+            item("» als nächstes", lambda: self.p.add(t, next_=True))
+            item("+ an warteschlange anhängen", lambda: self.p.add(t))
+        if me:
+            if f.can_unsend(m):
+                until = time.strftime("%H:%M", time.localtime(((m.get("at") or 0) + f.UNSEND_MS) / 1000))
+                item(f"󰕌 zurücknehmen (noch bis {until} uhr)", lambda: (f.unsend(x, m["mid"]), self._fr_goto(("chat", x["secret"]))), danger=True)
+            else:
+                box.append(label("zurücknehmen ging nur 5 minuten lang", "dim"))
+        pop.set_child(box)
+        pop.popup()
 
     @staticmethod
     def _bar(frac):
@@ -547,6 +646,22 @@ class FriendsMixin:
         box = self.fr_body
         box.append(hbox(tui.Button("‹ chat", lambda: self._fr_goto(("chat", x["secret"]))), label("", hexpand=True), spacing=8))
         box.append(self._friend_card(x))
+        # alle Musikempfehlungen zwischen uns beiden, aus dem Chat
+        msgs = self.fr.messages(x["secret"])
+        for title, mine in (("󰋑 von dir empfohlen", True), ("󰋑 hat dir empfohlen", False)):
+            items = [m for m in reversed(msgs) if bool(m.get("me")) == mine and m.get("t")]
+            if not items:
+                continue
+            sec = vbox(spacing=2)
+            sec.append(label(f"{title} · {len(items)}", "accent"))
+            tracks = [fr.to_track(m["t"], x["name"]) for m in items]
+            for i, (m, t) in enumerate(zip(items, tracks)):
+                sec.append(label(time.strftime("%d.%m.%Y, %H:%M", time.localtime((m.get("at") or 0) / 1000)) +
+                                 (" · gelesen" if mine and m.get("rd") else ""), "dim"))
+                sec.append(track_row(t, lambda i=i, tr=tracks: self.p.play_tracks(tr, start=i),
+                                     [("+", "An Warteschlange anhängen", lambda t=t: self.p.add(t)),
+                                      ("»", "Als nächstes spielen", lambda t=t: self.p.add(t, next_=True))], menus=self.songs))
+            box.append(sec)
 
     def _top_list(self):
         """Wochen-Topliste aus den geteilten Hörprofilen (ich + Freunde), nach Rubrik wählbar."""

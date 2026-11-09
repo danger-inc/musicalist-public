@@ -1,5 +1,12 @@
 # musicalist – Änderungen
 
+## 1.41.0 (2026-11-09)
+- **Chat im Telegram-Stil:** Uhrzeit klein in der Blase statt in einer eigenen Zeile, gleiche Person kurz hintereinander rückt zusammen, Tagestrenner („heute“, „gestern“). Das Bild im Chat-Kopf liegt auf einer Kachel in der Hintergrundfarbe und ist damit auch bei „hört gerade“ (Akzentfüllung) sichtbar.
+- **Nachricht genauer ansehen:** Rechtsklick oder lange drücken auf eine Nachricht zeigt gesendet/gelesen-Zeiten und Aktionen (kopieren, abspielen, einreihen, zurücknehmen).
+- **Größeres Eingabefeld:** mehrzeilig, wächst mit dem Text bis ca. 6 Zeilen; Enter sendet, Umschalt+Enter = neue Zeile.
+- **Gelesen-Markierungen:** ○ gesendet, ● gelesen (am Handy und PC; abschaltbar unter Einstellungen → Freunde → „lesebestätigungen senden“).
+- **Profil:** listet alle Musikempfehlungen zwischen euch („von dir empfohlen“, „hat dir empfohlen“).
+
 ## 1.40.0 (2026-11-09)
 - **Chat überarbeitet:** Chat und Profil einer Person sind jetzt eigene Seiten im Zurück-Stapel – 2-Finger-Zurück zeigt beim Verlassen die gewohnte Animation. Eigene Nachrichten stehen rechts gefüllt (Akzentfarbe), fremde links mit Rahmen; Lieder sind entsprechend umrahmt.
 - **„󰝚 musik“-Knopf** (statt „󰝚“) öffnet ein Menü: aktueller Song oder anderer Song (Suche direkt im Menü). Feld, „musik“ und „senden“ sind gleich hoch.

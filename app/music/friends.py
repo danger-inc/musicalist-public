@@ -356,6 +356,54 @@ class Friends:
         d = dict(engine.setting("friends_read") or {})
         d[sec] = int(time.time() * 1000) + 1
         engine.set_setting("friends_read", d)
+        self._send_receipt(sec)
+
+    @property
+    def read_receipts(self):
+        v = engine.setting("friends_receipts")
+        return True if v is None else bool(v)
+
+    def set_read_receipts(self, on):
+        engine.set_setting("friends_receipts", bool(on))
+
+    def _send_receipt(self, sec):
+        """Der anderen Person melden, bis zu welcher ihrer Nachrichten ich gelesen habe (nur bei Neuem)."""
+        if not self.read_receipts:
+            return
+        f = next((x for x in self.friends if x["secret"] == sec), None)
+        last = next((m for m in reversed(self.messages(sec)) if not m.get("me") and str(m.get("mid", "")).startswith("m")), None)
+        if f is None or last is None:
+            return
+        rc = dict(engine.setting("friends_rcpt") or {})
+        if (last.get("at") or 0) <= rc.get(sec, 0):
+            return
+        rc[sec] = last["at"]
+        engine.set_setting("friends_rcpt", rc)
+        msg = {"k": "read", "from": self.name, "fid": fid(self.secret), "mid": str(last["mid"])[1:], "ts": int(time.time() * 1000)}
+
+        def run():
+            try:
+                _publish(sec, msg)
+            except Exception as e:  # noqa: BLE001
+                engine.log(f"freunde: lesebestätigung {e!r}")
+        threading.Thread(target=run, daemon=True).start()
+
+    def _got_receipt(self, sec, mid, ts):
+        with self._chat_lock:
+            d = dict(self._chats())
+            l = list(d.get(sec) or [])
+            ref = next((m for m in l if m.get("me") and m.get("mid") == mid), None)
+            if ref is None:
+                return False
+            ch = False
+            for i, m in enumerate(l):
+                if m.get("me") and (m.get("at") or 0) <= ref["at"] and not m.get("rd"):
+                    l[i] = {**m, "rd": ts}
+                    ch = True
+            if ch:
+                d[sec] = l
+                engine.set_setting("friends_chat", d)
+            return ch
 
     def friend_by(self, fx_id, name):
         for f in self.friends:
@@ -470,6 +518,12 @@ class Friends:
                             self.friends.append({"secret": fs, "name": str(m.get("name") or "freund")[:24] or "freund", "prof": None, "at": 0, "t": ts})
                             self._save()
                             added.append(str(m.get("name") or "jemand"))
+                        continue
+                    if m and m.get("k") == "read" and m.get("mid"):
+                        seen.append(e.get("id"))
+                        who = self.friend_by(str(m.get("fid") or ""), str(m.get("from") or ""))
+                        if who is not None and self._got_receipt(who["secret"], str(m["mid"]), int(m.get("ts") or e.get("time", 0) * 1000)):
+                            chat_new += 1
                         continue
                     if m and m.get("k") == "del" and m.get("mid"):
                         seen.append(e.get("id"))
