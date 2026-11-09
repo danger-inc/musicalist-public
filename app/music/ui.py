@@ -403,6 +403,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self._shorten = []             # (knopf, lang, kurz) – schmale Fenster bekommen die kurze Beschriftung
         self.build_header()
         self.add_changelog("musicalist", os.path.dirname(os.path.realpath(__file__)))
+        GLib.timeout_add_seconds(25, self._update_tick, True)           # „ab und an“ nach Updates sehen → Popup
         self.header_extra.reorder_child_after(self.changelog_btn, self.np_chip)
         if getattr(self, "update_btn", None):
             self.header_extra.reorder_child_after(self.update_btn, self.changelog_btn)
@@ -619,6 +620,47 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         item("↗", "youtube music im browser", lambda: engine.open_url("https://music.youtube.com"))
         if on:
             item("󰍃", "abmelden", self.do_logout, danger=True)
+
+    def _update_tick(self, first=False):
+        """Alle 30 min (die Abfrage selbst höchstens alle 6 h): neue Version → Popup, höchstens einmal je 24 h und Version."""
+        try:
+            import changelog
+            ver = open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "VERSION")).read().strip()
+            changelog.check_update("musicalist", ver, self._update_popup)
+        except Exception as e:  # noqa: BLE001
+            engine.log(f"update-suche: {e!r}")
+        if first:
+            GLib.timeout_add_seconds(1800, self._update_tick)
+            return False
+        return True
+
+    def _update_popup(self, latest):
+        ask = str(engine.setting("update_asked") or "").split("|")
+        if len(ask) == 2 and ask[0] == latest and time.time() - float(ask[1] or 0) < 24 * 3600:
+            return
+        if not self.get_visible() or getattr(self, "_upd_dlg", None) is not None:
+            return
+        dlg = Gtk.Window(title="update", modal=True, transient_for=self, resizable=False)
+        box = vbox(spacing=8)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{m}")(16)
+        box.append(label(f"󰚰 neue version v{latest}", "accent"))
+        box.append(label("musicalist kann sich jetzt aktualisieren.", "dim", wrap=True))
+
+        def close(*_):
+            engine.set_setting("update_asked", f"{latest}|{time.time()}")
+            self._upd_dlg = None
+            dlg.destroy()
+
+        def go(*_):
+            close()
+            if getattr(self, "update_btn", None):
+                self.update_btn.emit("clicked")
+        box.append(hbox(tui.Button("später", close), tui.Button("󰇚 jetzt aktualisieren", go), spacing=8))
+        dlg.set_child(box)
+        dlg.connect("close-request", lambda *_: (close(), True)[1])
+        self._upd_dlg = dlg
+        dlg.present()
 
     def update_tab_labels(self):
         """Aktiver Tab mit Namen (wie notist), die anderen nur Symbol; sehr schmal: alle nur Symbol."""

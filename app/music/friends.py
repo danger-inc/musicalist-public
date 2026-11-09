@@ -5,6 +5,7 @@ Geteilt wird nur, wenn "friends_share" an ist (Default aus)."""
 import base64
 import hashlib
 import json
+import re
 import secrets
 import socket
 import threading
@@ -34,6 +35,45 @@ def _key(sec):
     return hashlib.sha256(f"musicalist-friend-key|{sec}".encode()).digest()
 
 
+# ---------- Nutzername: Namens-Thema (öffentlich, nur Anspruch + Anfragen) ----------
+NAME_OK = re.compile(r"^[a-z0-9._-]{3,20}$")
+
+
+def uname_of(n):
+    """Name → Kleinschreibung ohne Sonderzeichen (so wird verglichen und gefunden)."""
+    return re.sub(r"[^a-z0-9._-]", "", str(n or "").strip().lower())[:20]
+
+
+def _ntopic(un):
+    return "mfn-" + hashlib.sha256(f"musicalist-friend-name|{un}".encode()).hexdigest()[:24]
+
+
+def _post_plain(topic, obj):
+    req = urllib.request.Request(f"{RELAY}/{topic}", data=json.dumps(obj, ensure_ascii=False).encode(), method="POST",
+                                 headers={"Content-Type": "text/plain"})
+    urllib.request.urlopen(req, timeout=12).read()
+
+
+def _read_plain(topic):
+    """Alle lesbaren JSON-Nachrichten eines Namens-Themas → [(ntfy-Ereignis, Nachricht)]."""
+    out = []
+    with urllib.request.urlopen(f"{RELAY}/{topic}/json?poll=1&since=all", timeout=12) as r:
+        for line in r.read().decode("utf-8", "replace").splitlines():
+            try:
+                e = json.loads(line)
+                m = json.loads(e.get("message", "")) if e.get("event") == "message" else None
+            except ValueError:
+                continue
+            if isinstance(m, dict):
+                out.append((e, m))
+    return out
+
+
+def _dh():
+    from handy_sync import P, G, _int_bytes
+    return P, G, _int_bytes
+
+
 def inc_active(v):
     """Incognito-Angabe eines Profils: 1 = bis zum Ausschalten, sonst Ende (Unix-Sekunden)."""
     try:
@@ -41,6 +81,22 @@ def inc_active(v):
     except (TypeError, ValueError):
         return False
     return v == 1 or v > time.time()
+
+
+def pick_state(per):
+    """per: {gerät: (nachricht, zeit_ms)} → (nachricht|None, zeit_ms). Incognito irgendeines Geräts gilt für alle;
+    sonst gewinnt das Gerät, auf dem gerade (vor < 6 min) Musik läuft; sonst die neueste Nachricht."""
+    if not per:
+        return None, 0
+    now = time.time() * 1000
+    items = list(per.values())
+    inc = [x for x in items if inc_active(x[0].get("inc"))]
+    if inc:
+        return max(inc, key=lambda x: x[1])
+    live = [x for x in items if x[0].get("now") and x[0].get("pl") and now - x[1] < 6 * 60_000]
+    if live:
+        return max(live, key=lambda x: x[1])
+    return max(items, key=lambda x: x[1])
 
 
 def fid(sec):
@@ -168,6 +224,163 @@ class Friends:
         engine.set_setting("friends_name", (n or "").strip()[:24])
         self._touch(0)
 
+    # ----- Nutzername (Pflicht) und Freundschaftsanfragen per Name -----
+    @property
+    def uname(self):
+        return engine.setting("friends_uname") or ""
+
+    @property
+    def named(self):
+        return bool(self.uname)
+
+    @property
+    def uid(self):
+        return engine.setting("friends_uid") or ""
+
+    def _pk(self):
+        P, G, _ib = _dh()
+        return pow(G, int(engine.setting("friends_nk"), 16), P)
+
+    def name_state(self, display, uid=None):
+        """('ok' | 'taken' | 'bad', normierter Name). Blockierend (Netz)."""
+        un = uname_of(display)
+        if not NAME_OK.match(un):
+            return "bad", un
+        uid = uid or self.uid
+        taken = any(m.get("k") == "claim" and m.get("uid") and m.get("uid") != uid for _e, m in _read_plain(_ntopic(un)))
+        return ("taken" if taken else "ok"), un
+
+    def set_username(self, display):
+        """Nutzernamen festlegen/ändern (blockierend). Wirft ValueError mit verständlichem Text."""
+        display = (display or "").strip()[:20]
+        uid = self.uid or secrets.token_hex(6)
+        try:
+            st, un = self.name_state(display, uid)
+        except Exception as e:  # noqa: BLE001
+            raise ValueError("keine verbindung – bitte später nochmal") from e
+        if st == "bad":
+            raise ValueError("3–20 zeichen: kleine/große buchstaben, ziffern, . _ -")
+        if st == "taken":
+            raise ValueError("dieser name ist schon vergeben")
+        engine.set_setting("friends_uid", uid)
+        if not engine.setting("friends_nk"):
+            engine.set_setting("friends_nk", secrets.token_hex(32))
+        engine.set_setting("friends_uname", un)
+        engine.set_setting("friends_name", display)
+        engine.set_setting("friends_name_t", int(time.time() * 1000))
+        try:
+            self._claim()
+        except Exception as e:  # noqa: BLE001
+            engine.log(f"freunde: anspruch {e!r}")
+        self._touch(0)
+
+    def _claim(self):
+        """Namen im Namens-Thema anmelden (wird alle paar Stunden erneuert, das Relay vergisst nach ~12 h)."""
+        _post_plain(_ntopic(self.uname), {"k": "claim", "uname": self.uname, "name": self.name, "uid": self.uid,
+                                          "pk": format(self._pk(), "x"), "ts": int(time.time())})
+        self._claim_at = time.time()
+
+    def find(self, display):
+        """Person per Nutzername suchen → {"uname","name","pk"} (blockierend)."""
+        un = uname_of(display)
+        if not NAME_OK.match(un):
+            raise ValueError("so ein name ist nicht möglich (3–20 zeichen: buchstaben, ziffern, . _ -)")
+        if un == self.uname:
+            raise ValueError("das bist du")
+        try:
+            claims = [(e, m) for e, m in _read_plain(_ntopic(un)) if m.get("k") == "claim" and m.get("pk") and m.get("uid")]
+        except Exception as e:  # noqa: BLE001
+            raise ValueError("keine verbindung – bitte später nochmal") from e
+        if not claims:
+            raise ValueError("niemand mit diesem namen gefunden (oder die Person war länger nicht online)")
+        first = min(claims, key=lambda x: int(x[0].get("time") or 0))[1]["uid"]       # wer zuerst kam, gilt
+        e, m = max((x for x in claims if x[1]["uid"] == first), key=lambda x: int(x[0].get("time") or 0))
+        return {"uname": un, "name": str(m.get("name") or un)[:24], "pk": m["pk"]}
+
+    def request(self, display):
+        """Freundschaftsanfrage an einen Namen (blockierend). Der eigene Code reist verschlüsselt mit (Schlüssel aus dem
+        Anspruch der Person) und wird erst nach Annahme benutzt."""
+        P, G, ib = _dh()
+        info = self.find(display)
+        if any(x.get("uname") == info["uname"] for x in self.friends_sent):
+            raise ValueError("anfrage ist schon unterwegs")
+        pk = int(info["pk"], 16)
+        if not (1 < pk < P - 1):
+            raise ValueError("ungültiger schlüssel")
+        a = int.from_bytes(secrets.token_bytes(32), "big")
+        key = hashlib.sha256(ib(pow(pk, a, P))).digest()
+        from handy_sync import box
+        body = base64.b64encode(box(key, json.dumps({"secret": self.secret, "uid": self.uid}).encode())).decode()
+        _post_plain(_ntopic(info["uname"]), {"k": "req", "uname": self.uname, "name": self.name, "uid": self.uid,
+                                             "pa": format(pow(G, a, P), "x"), "box": body, "ts": int(time.time())})
+        sent = self.friends_sent + [{"uname": info["uname"], "name": info["name"], "at": int(time.time() * 1000)}]
+        engine.set_setting("friends_sent", sent[-30:])
+        return info["name"]
+
+    @property
+    def friends_sent(self):
+        return list(engine.setting("friends_sent") or [])
+
+    def cancel_sent(self, uname):
+        engine.set_setting("friends_sent", [x for x in self.friends_sent if x.get("uname") != uname])
+
+    def _drop_sent(self, name):
+        un = uname_of(name)
+        left = [x for x in self.friends_sent if x.get("uname") != un]
+        if len(left) != len(self.friends_sent):
+            engine.set_setting("friends_sent", left)
+
+    @property
+    def requests(self):
+        return list(engine.setting("friends_reqs") or [])
+
+    def poll_requests(self):
+        """Eigenes Namens-Thema nach Anfragen absuchen (blockierend) → Zahl neuer."""
+        if not self.named or not engine.setting("friends_nk"):
+            return 0
+        from handy_sync import unbox
+        P, G, ib = _dh()
+        nk = int(engine.setting("friends_nk"), 16)
+        seen = list(engine.setting("friends_req_seen") or [])
+        reqs = self.requests
+        new = 0
+        try:
+            items = _read_plain(_ntopic(self.uname))
+        except Exception:  # noqa: BLE001
+            return 0
+        for e, m in items:
+            if m.get("k") != "req" or e.get("id") in seen:
+                continue
+            seen.append(e.get("id"))
+            try:
+                A = int(m["pa"], 16)
+                if not (1 < A < P - 1):
+                    continue
+                key = hashlib.sha256(ib(pow(A, nk, P))).digest()
+                pl = json.loads(unbox(key, base64.b64decode(m["box"])))
+            except Exception:  # noqa: BLE001
+                continue
+            sec = norm(pl.get("secret"))
+            if len(sec) != 16 or sec == self.secret or pl.get("uid") == self.uid or sec in self.aliases \
+                    or any(f["secret"] == sec for f in self.friends) or any(r["secret"] == sec for r in reqs):
+                continue
+            reqs.insert(0, {"id": e.get("id"), "uname": str(m.get("uname") or "")[:20],
+                            "name": str(m.get("name") or m.get("uname") or "?")[:24], "secret": sec,
+                            "at": int(e.get("time") or 0) * 1000})
+            new += 1
+        engine.set_setting("friends_req_seen", seen[-300:])
+        engine.set_setting("friends_reqs", reqs[:30])
+        return new
+
+    def accept(self, req):
+        """Anfrage annehmen (blockierend): die Person wird Freund, ihr Gerät trägt uns automatisch ein."""
+        name = self.add(req["secret"])
+        engine.set_setting("friends_reqs", [r for r in self.requests if r.get("secret") != req["secret"]])
+        return name
+
+    def decline(self, req):
+        engine.set_setting("friends_reqs", [r for r in self.requests if r.get("secret") != req["secret"]])
+
     @property
     def secret(self):
         s = engine.setting("friends_secret")
@@ -214,6 +427,8 @@ class Friends:
             try:
                 if self.share and self._playing and time.time() - self._last_pub > 180:
                     self._touch(0)
+                if self.named and time.time() - getattr(self, "_claim_at", 0) > 6 * 3600:
+                    self._claim()
             except Exception:  # noqa: BLE001
                 pass
 
@@ -256,7 +471,7 @@ class Friends:
         inc = self.inc_until
         now = entry(t) if t and not str(t["videoId"]).startswith("local:") and not inc else None
         lv = self.level
-        o = {"k": "prof", "v": 1, "name": self.name, "ts": int(time.time()), "now": now, "pl": bool(now and self._playing),
+        o = {"k": "prof", "v": 1, "dev": engine.device_id()[:8], "name": self.name, "ts": int(time.time()), "now": now, "pl": bool(now and self._playing),
              "recent": [] if inc else [{k: r[k] for k in ("id", "t", "a")} for r in self.recent[:5]],
              "recs": [] if lv == "minimal" else [{k: r[k] for k in ("id", "t", "a")} for r in self.recs[:6]]}
         pf = None if inc else self.profile()
@@ -518,6 +733,7 @@ class Friends:
                             self.friends.append({"secret": fs, "name": str(m.get("name") or "freund")[:24] or "freund", "prof": None, "at": 0, "t": ts})
                             self._save()
                             added.append(str(m.get("name") or "jemand"))
+                        self._drop_sent(str(m.get("name") or ""))        # meine Anfrage wurde angenommen
                         continue
                     if m and m.get("k") == "read" and m.get("mid"):
                         seen.append(e.get("id"))
@@ -580,8 +796,10 @@ class Friends:
         return bool(not inc_active(pr.get("inc")) and pr.get("now") and pr.get("pl") and f.get("at") and time.time() * 1000 - f["at"] < 6 * 60_000)
 
     def fetch(self, sec):
-        """Letzten Stand holen → (prof|None, at_ms). Wirft bei Netzfehlern."""
-        last, at = None, 0
+        """Letzten Stand holen → (prof|None, at_ms). Wirft bei Netzfehlern.
+        Gekoppelte Geräte (PC + Handy) senden in dasselbe Thema und gelten als eine Person: je Gerät (dev) zählt die letzte
+        Nachricht; läuft irgendwo gerade Musik, gewinnt dieses Gerät (sonst überschrieb ein ruhendes Gerät den Stand des spielenden)."""
+        per = {}
         with urllib.request.urlopen(f"{RELAY}/{_topic(sec)}/json?poll=1&since=all", timeout=12) as r:
             for line in r.read().decode("utf-8", "replace").splitlines():
                 try:
@@ -594,23 +812,42 @@ class Friends:
                 if not m or m.get("k") != "prof":
                     continue
                 tm = int(e.get("time") or 0) * 1000
-                if tm >= at:
-                    last, at = m, tm
-        return last, at
+                dv = str(m.get("dev") or "")
+                if dv not in per or tm >= per[dv][1]:
+                    per[dv] = (m, tm)
+        return pick_state(per)
 
     # ----- Abgleich mit dem Handy (über handy_sync) -----
     @property
     def gone(self):
         return dict(engine.setting("friends_gone") or {})
 
+    def _ident(self):
+        return ({"uid": self.uid, "uname": self.uname, "name": self.name, "nk": engine.setting("friends_nk") or "",
+                 "t": int(engine.setting("friends_name_t") or 0)} if self.named else None)
+
+    def _adopt_ident(self, d):
+        """Gekoppelte Geräte teilen Namen + Schlüssel; bei Streit gewinnt der zuletzt geänderte Name."""
+        if not isinstance(d, dict) or not d.get("uname") or not d.get("nk") or not d.get("uid"):
+            return False
+        if self.named and int(d.get("t") or 0) <= int(engine.setting("friends_name_t") or 0):
+            return False
+        engine.set_setting("friends_uid", str(d["uid"])[:24])
+        engine.set_setting("friends_nk", str(d["nk"])[:80])
+        engine.set_setting("friends_uname", uname_of(d["uname"]))
+        engine.set_setting("friends_name", str(d.get("name") or d["uname"])[:24])
+        engine.set_setting("friends_name_t", int(d.get("t") or 0))
+        self._touch(0)
+        return True
+
     def sync_out(self):
-        return {"me": self.secret, "rc": [{**{k: r[k] for k in ("id", "t", "a")}, "at": r.get("at", 0)} for r in self.recent[:8]], "f": [{"s": f["secret"], "n": f.get("name") or "freund", "t": int(f.get("t") or 1)} for f in self.friends], "g": self.gone}
+        return {"id": self._ident(), "me": self.secret, "rc": [{**{k: r[k] for k in ("id", "t", "a")}, "at": r.get("at", 0)} for r in self.recent[:8]], "f": [{"s": f["secret"], "n": f.get("name") or "freund", "t": int(f.get("t") or 1)} for f in self.friends], "g": self.gone}
 
     def sync_in(self, o, dev="handy"):
         """Freunde vom Handy übernehmen (Vereinigung; bei Streit gewinnt der spätere Zeitpunkt). Dazu: eigener Code
         und „zuletzt gehört“ des gekoppelten Geräts → beide Geräte zeigen Freunden dieselbe Person."""
         gone = self.gone
-        changed = False
+        changed = self._adopt_ident(o.get("id"))
         me = norm(o.get("me"))
         if len(me) == 16 and me != self.secret:
             al = dict(engine.setting("friends_alias") or {})
@@ -704,6 +941,10 @@ class Friends:
         self.busy = True
         try:
             n = self.poll_inbox()
+            try:
+                n += self.poll_requests()
+            except Exception:  # noqa: BLE001
+                pass
             if n and getattr(self, "notify", None):
                 self.notify(n)
             if not self.friends:

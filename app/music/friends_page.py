@@ -114,6 +114,62 @@ class FriendsMixin:
         if f is not None:
             f.say = lambda m: GLib.idle_add(lambda: (self.say(m), False)[1])
             f.listeners.append(lambda: GLib.idle_add(self._fr_changed))
+            self.connect("map", lambda *_: GLib.timeout_add(1500, self.ensure_username))   # Pflicht: Nutzername beim (ersten) Start
+
+    def ask_username(self, first=False):
+        """Fenster zum Festlegen/Ändern des Nutzernamens. Beim ersten Start Pflicht (nicht schließbar)."""
+        f = self.fr
+        if f is None or getattr(self, "_name_dlg", None) is not None:
+            return
+        dlg = Gtk.Window(title="nutzername", modal=True, transient_for=self if isinstance(self, Gtk.Window) else None, resizable=False)
+        if first:
+            dlg.set_deletable(False)
+        dlg.set_default_size(380, 10)
+        box = vbox(spacing=8)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{m}")(16)
+        box.append(label("wähle deinen nutzernamen" if first else "nutzernamen ändern", "accent"))
+        box.append(label("so finden dich deine freunde. 3–20 zeichen: buchstaben, ziffern, . _ -  \n"
+                         "gekoppelte geräte (handy/pc) teilen sich denselben namen.", "dim", wrap=True))
+        e = tui.Entry("nutzername", text=f.name if (f.named and not first) else "")
+        status = label("", "dim", wrap=True)
+        ok = tui.Button("festlegen")
+
+        def go(*_):
+            txt = e.get_text()
+            ok.set_sensitive(False)
+            status.set_label("prüfe …")
+
+            def done(res):
+                ok.set_sensitive(True)
+                if isinstance(res, Exception):
+                    status.set_label(str(res))
+                    return
+                self._name_dlg = None
+                dlg.destroy()
+                self.say(f"nutzername: {f.name}")
+                self.fill_friends()
+            tui.background(f.set_username, txt, done=done)
+        e.connect("activate", go)
+        ok.connect("clicked", go)
+        row = hbox(ok, spacing=8)
+        if not first:
+            row.append(tui.Button("abbrechen", lambda: (setattr(self, "_name_dlg", None), dlg.destroy())))
+        box.append(e)
+        box.append(status)
+        box.append(row)
+        dlg.set_child(box)
+        dlg.connect("close-request", lambda *_: (first and not f.named))      # beim ersten Mal nicht schließbar
+        dlg.connect("destroy", lambda *_: setattr(self, "_name_dlg", None))
+        self._name_dlg = dlg
+        dlg.present()
+        e.grab_focus()
+
+    def ensure_username(self):
+        f = self.fr
+        if f is not None and not f.named and self.get_visible():
+            self.ask_username(first=True)
+        return False
 
     def friends_visible(self):
         return self.current_tab() == "stats" and getattr(self, "hear_sub", "analyse") == "friends"
@@ -218,18 +274,13 @@ class FriendsMixin:
         me.append(label("freunde mit deinem code sehen, was du hörst." if f.share
                         else "aus – niemand sieht etwas. mit einschalten wird dein code aktiv.", "dim", wrap=True))
         me.append(label("umfang und incognito stellst du in den einstellungen ein.", "dim", wrap=True))
-        name = tui.Entry("dein name", text=f.name)
-        name.connect("activate", lambda *_: (f.set_name(name.get_text()), self.say("name gespeichert")))
-        me.append(name)
-        code = label("", "accent")
-        code.set_markup(f"<span size='x-large' weight='bold'>{fr.pretty(f.secret)}</span>")
-        me.append(label("dein code", "dim"))
-        me.append(code)
-        me.append(hbox(tui.Button("󰆏 kopieren", lambda: self.copy_text(fr.pretty(f.secret), "code kopiert")),
-                       tui.Button("󰑐 neuer code", lambda: (f.renew(), self.say("neuer code – alte freunde sehen dich nicht mehr"),
-                                                          self.fill_friends()), danger=True), spacing=8))
-        me.append(label("gib den code nur freunden. wer ihn kennt, kann deinen stand lesen – sonst niemand "
-                        "(verschlüsselt, nur mit dem code lesbar).", "dim", wrap=True))
+        # Nutzername statt Code: so finden dich Freunde (gekoppelte Geräte teilen denselben Namen)
+        me.append(label("dein nutzername", "dim"))
+        nm = label("", "accent")
+        nm.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(f.name)}</span>")
+        me.append(nm)
+        me.append(hbox(tui.Button("✎ ändern", self.ask_username), spacing=8))
+        me.append(label("freunde suchen dich mit diesem namen und schicken dir eine anfrage, die du bestätigst.", "dim", wrap=True))
         seen = vbox(spacing=2)
 
         def toggle_seen():
@@ -261,10 +312,27 @@ class FriendsMixin:
                 inbox.append(track_row(t, lambda t=t: self.p.play_tracks([t]),
                                        [("✕", "Ausblenden", lambda i=i: (f.dismiss(i), self.fill_friends()))], menus=self.songs))
             box.append(inbox)
-        # --- hinzufügen ---
+        # --- Anfragen an mich ---
+        reqs = f.requests
+        if reqs:
+            rb = vbox(spacing=4)
+            rb.append(label(f"󰀓 freundschaftsanfragen · {len(reqs)}", "accent"))
+            for r in reqs:
+                line = hbox(label(f"{r['name']}  ({r['uname']})", hexpand=True, ellipsize=True), spacing=8)
+
+                def acc(r=r):
+                    def done(res):
+                        self.say(f"{res} ist jetzt dein freund" if not isinstance(res, Exception) else str(res), error=isinstance(res, Exception))
+                        self.fill_friends()
+                    tui.background(f.accept, r, done=done)
+                line.append(tui.Button("annehmen", acc))
+                line.append(tui.Button("ablehnen", lambda r=r: (f.decline(r), self.fill_friends()), danger=True))
+                rb.append(line)
+            box.append(rb)
+        # --- hinzufügen: per Nutzername ---
         add = vbox(spacing=6)
         add.append(label("freund hinzufügen", "accent"))
-        e = tui.Entry("code deines freundes")
+        e = tui.Entry("nutzername deines freundes")
 
         def go(*_):
             txt = e.get_text()
@@ -273,13 +341,15 @@ class FriendsMixin:
                 if isinstance(res, Exception):
                     self.say(str(res), error=True)
                 else:
-                    self.say(f"{res} hinzugefügt")
-                    pass
-                    self.fill_friends()
-            tui.background(f.add, txt, done=done)
+                    self.say(f"anfrage an {res} geschickt – sobald die person annimmt, seid ihr befreundet")
+                    e.set_text("")
+                self.fill_friends()
+            tui.background(f.request, txt, done=done)
         e.connect("activate", go)
-        add.append(hbox(e, tui.Button("+ hinzufügen", go), spacing=8))
-        add.append(label("damit er dich auch sieht, schick ihm deinen code.", "dim"))
+        add.append(hbox(e, tui.Button("anfrage senden", go), spacing=8))
+        for x in f.friends_sent:
+            add.append(hbox(label(f"󰔛 an {x['name']} geschickt – wartet auf bestätigung", "dim", hexpand=True, ellipsize=True),
+                            tui.Button("✕", lambda u=x["uname"]: (f.cancel_sent(u), self.fill_friends()), tooltip="Anfrage zurückziehen"), spacing=8))
         box.append(add)
         # --- Freunde ---
         if not f.friends:

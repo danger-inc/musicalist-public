@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.42.0 (2026-11-09)
+- **Nutzername statt Code:** Beim nächsten Start musst du einmal einen Nutzernamen festlegen (3–20 Zeichen, gespeichert lokal). Freunde findest du nur noch über den Namen: Namen eingeben → Anfrage → die Person bestätigt (annehmen/ablehnen); erst dann tauschen die Geräte verschlüsselt ihre Schlüssel aus. Der Code ist aus der Oberfläche verschwunden, bestehende Freunde bleiben. Namen sind „wer zuerst kommt“ (ohne Server nur bestmöglich). Gekoppelte Geräte (PC + Handy) teilen denselben Namen; bei Streit gilt der zuletzt geänderte.
+- **Gekoppelte Geräte gelten als eine Person:** Läuft am PC Musik und das Handy ist ruhig, sehen Freunde jetzt die laufende Musik (je Gerät zählt die letzte Meldung, spielendes Gerät gewinnt; Incognito eines Geräts gilt für alle). Beide Geräte und die Freunde brauchen dafür die neue Version.
+- **Update-Popup:** musicalist sieht ab und an (alle 30 min, Abfrage höchstens alle 6 h) nach Updates und zeigt bei einer neuen Version ein Popup („später“ / „jetzt aktualisieren“), höchstens einmal je 24 h und Version.
+
 ## 1.41.0 (2026-11-09)
 - **Chat im Telegram-Stil:** Uhrzeit klein in der Blase statt in einer eigenen Zeile, gleiche Person kurz hintereinander rückt zusammen, Tagestrenner („heute“, „gestern“). Das Bild im Chat-Kopf liegt auf einer Kachel in der Hintergrundfarbe und ist damit auch bei „hört gerade“ (Akzentfüllung) sichtbar.
 - **Nachricht genauer ansehen:** Rechtsklick oder lange drücken auf eine Nachricht zeigt gesendet/gelesen-Zeiten und Aktionen (kopieren, abspielen, einreihen, zurücknehmen).
