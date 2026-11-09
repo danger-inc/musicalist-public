@@ -274,10 +274,12 @@ class FriendsMixin:
         entries = []
         mine = f._payload().get("pf") if f.share else None
         entries.append((f.name + " (ich)", mine, True))
-        week = time.time() * 1000 - 8 * 86400_000
+        import analyse
+        week = analyse.bounds("w", 0)[0] * 1000      # Wochenbeginn (Mo 4 Uhr, wie bei meiner eigenen Rechnung)
         for x in f.friends:
-            if (x.get("at") or 0) >= week:
-                entries.append((x["name"], (x.get("prof") or {}).get("pf"), False))
+            # Profil-Stand ist ein Schnappschuss vom letzten Senden: älter als diese Woche = noch nichts gehört → nicht die Stunden der Vorwoche zeigen
+            fresh = (x.get("at") or 0) >= week
+            entries.append((x["name"], (x.get("prof") or {}).get("pf") if fresh else None, False))
         rows = top_rows(entries, cat)
         if not rows:
             panel.append(label("noch keine Angaben – Freunde müssen teilen (umfang normal/mehr für alles außer hörzeit; vielfalt, entdecker, serie nur bei „mehr“).", "dim", wrap=True))

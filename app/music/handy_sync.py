@@ -277,7 +277,7 @@ class Server:
         fr = getattr(self.p, "friends", None)
         if fr is not None and isinstance(req.get("friends"), dict):
             try:
-                fr.sync_in(req["friends"])
+                fr.sync_in(req["friends"], dev_id)
                 res["friends"] = fr.sync_out()
             except Exception as e:  # noqa: BLE001
                 engine.log(f"handy-abgleich: freunde {e!r}")

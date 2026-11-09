@@ -85,6 +85,11 @@ class Friends:
         v = engine.setting("friends_share")
         return True if v is None else bool(v)          # Default: an (Freunde sehen nur mit deinem Code etwas)
 
+    @property
+    def aliases(self):
+        """Codes der eigenen gekoppelten Geräte (dev_id → Code): wer einen davon hat, sieht dieselbe Hörzeit."""
+        return [v for v in (engine.setting("friends_alias") or {}).values() if isinstance(v, str) and len(v) == 16 and v != self.secret]
+
     LEVELS = ("minimal", "normal", "mehr")
 
     @property
@@ -233,9 +238,15 @@ class Friends:
                 return
             self._last_pub = time.time()
             try:
-                _publish(self.secret, self._payload())
+                o = self._payload()
             except Exception as e:  # noqa: BLE001
-                engine.log(f"freunde: senden {e!r}")
+                engine.log(f"freunde: payload {e!r}")
+                return
+            for sec in [self.secret] + self.aliases:       # gekoppelte Geräte (Handy/Laptop) = eine Person: Stand in alle Themen
+                try:
+                    _publish(sec, o)
+                except Exception as e:  # noqa: BLE001
+                    engine.log(f"freunde: senden {e!r}")
         threading.Thread(target=run, daemon=True).start()
 
     def _retract(self):
@@ -360,12 +371,36 @@ class Friends:
         return dict(engine.setting("friends_gone") or {})
 
     def sync_out(self):
-        return {"f": [{"s": f["secret"], "n": f.get("name") or "freund", "t": int(f.get("t") or 1)} for f in self.friends], "g": self.gone}
+        return {"me": self.secret, "rc": [{**{k: r[k] for k in ("id", "t", "a")}, "at": r.get("at", 0)} for r in self.recent[:8]], "f": [{"s": f["secret"], "n": f.get("name") or "freund", "t": int(f.get("t") or 1)} for f in self.friends], "g": self.gone}
 
-    def sync_in(self, o):
-        """Freunde vom Handy übernehmen (Vereinigung; bei Streit gewinnt der spätere Zeitpunkt)."""
+    def sync_in(self, o, dev="handy"):
+        """Freunde vom Handy übernehmen (Vereinigung; bei Streit gewinnt der spätere Zeitpunkt). Dazu: eigener Code
+        und „zuletzt gehört“ des gekoppelten Geräts → beide Geräte zeigen Freunden dieselbe Person."""
         gone = self.gone
         changed = False
+        me = norm(o.get("me"))
+        if len(me) == 16 and me != self.secret:
+            al = dict(engine.setting("friends_alias") or {})
+            if al.get(dev) != me:
+                al[dev] = me
+                engine.set_setting("friends_alias", al)
+                changed = True
+            if any(f["secret"] == me for f in self.friends):
+                self.friends = [f for f in self.friends if f["secret"] != me]
+                changed = True
+        rc = [{"id": str(r.get("id")), "t": str(r.get("t") or "?")[:70], "a": str(r.get("a") or "")[:50], "at": int(r.get("at") or 0)}
+              for r in (o.get("rc") or []) if isinstance(r, dict) and r.get("id")]
+        if rc:
+            seen = {}
+            for r in rc + self.recent:
+                if r["id"] not in seen or r.get("at", 0) > seen[r["id"]].get("at", 0):
+                    seen[r["id"]] = r
+            merged = sorted(seen.values(), key=lambda r: -(r.get("at") or 0))[:8]
+            if [r["id"] for r in merged] != [r["id"] for r in self.recent]:
+                self.recent = merged
+                engine.set_setting("friends_recent", merged)
+                changed = True
+                self._touch()
         for sec, ts in (o.get("g") or {}).items():
             ts = int(ts)
             mine = next((f for f in self.friends if f["secret"] == sec), None)
@@ -378,7 +413,7 @@ class Friends:
                     changed = True
         for x in o.get("f") or []:
             sec, t = norm(x.get("s")), int(x.get("t") or 1)
-            if len(sec) != 16 or sec == self.secret or gone.get(sec, 0) >= t:
+            if len(sec) != 16 or sec == self.secret or sec in self.aliases or gone.get(sec, 0) >= t:
                 continue
             if not any(f["secret"] == sec for f in self.friends):
                 self.friends.append({"secret": sec, "name": str(x.get("n") or "freund")[:24], "prof": None, "at": 0, "t": t})

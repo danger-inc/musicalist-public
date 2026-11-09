@@ -1,5 +1,9 @@
 # musicalist – Änderungen
 
+## 1.35.0 (2026-11-09)
+- **Freunde: gekoppelte Geräte sind eine Person.** Sind Handy und PC gekoppelt, senden beide ihren Stand an beide Freundes-Codes; wer nur einen Code hat, sieht trotzdem die gemeinsame Hörzeit (aus dem zusammengeführten Hörprotokoll) und das gemeinsame „zuletzt gehört“. Bestehende Codes bleiben gültig, der eigene zweite Code taucht nicht in der Freundesliste auf. Wirkt, sobald beide Geräte die neue Version haben und einmal abgeglichen haben.
+- **Top-Liste am Wochenanfang:** Freunde, die diese Woche (seit Montag 4 Uhr) noch nichts gesendet haben, stehen unter „ohne Angabe“ statt mit den Stunden der Vorwoche – deine eigene Zeit wird ja ebenfalls zurückgesetzt.
+
 ## 1.34.2 (2026-11-08)
 - **QR-Code der Marmelade überarbeitet:** Er ließ sich nicht scannen (helle Module auf dunklem Grund und nur 1 Modul Rand). Jetzt immer dunkle Module auf heller Fläche mit vollem Rand, aber in den Farben des Designs statt auf reinem Weiß (die hellere von Vordergrund/Hintergrund ist die Fläche). Gilt für Marmelade-Kasten und Fernseher-Modus; mit einem QR-Leser gegengeprüft.
 
