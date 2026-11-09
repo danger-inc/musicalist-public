@@ -145,7 +145,7 @@ class TvPage(Gtk.Box):
         self.sound_btn = bx("󰓃", lambda: win.sound_menu(self.sound_btn), "Klang: Equalizer und Überblendung")
         self.auto_btn = bx("󰑐", self._toggle_autoplay, "Autoplay: am Ende ähnliche Titel weiterspielen")
         self.artist_btn = bx("󰠃", self._open_artist, "Künstlerseite")
-        self.album_btn = bx("󰀥", self._open_album, "Album öffnen")
+        self.album_btn = bx("󰀥", self._open_album, "Album öffnen (bei Podcast-Folgen: den Podcast)")
         self.rec_btn = bx("󰡉", self._recommend, "An alle Freunde empfehlen")
         self.bar_all = {
             "shuffle": (self.shuffle_btn, "󰒝 mischen"), "repeat": (self.repeat_btn, "󰑗 wiederholen"),
@@ -371,7 +371,10 @@ class TvPage(Gtk.Box):
 
     def _open_album(self):
         t = self.p.current
-        if t and t.get("albumId"):
+        if t and t.get("podcastId"):
+            self.w.tv_mode(False)
+            self.w.open_detail("podcast", t["podcastId"])
+        elif t and t.get("albumId"):
             self.w.tv_mode(False)
             self.w.open_detail("album", t["albumId"])
         else:

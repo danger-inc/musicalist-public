@@ -638,7 +638,7 @@ class Music:
             out.append({"videoId": e["videoId"], "title": e.get("title") or "?", "artist": name,
                         "artistId": None, "albumId": None, "album": d.get("title", ""),
                         "duration": podcast_secs(e.get("duration")), "thumb": thumbs[-1]["url"] if thumbs else "",
-                        "liked": False, "setVideoId": None, "podcast": True,
+                        "liked": False, "setVideoId": None, "podcast": True, "podcastId": pid,
                         "note": e.get("date") or ""})
         return d.get("title", ""), out
 
@@ -1027,6 +1027,11 @@ class Resolver:
             ev.set()
 
     def local_info(self, vid):
+        if localmusic.is_pod(vid):               # Handy-Podcast: Adresse kam mit der Empfehlung
+            u = (setting("pod_urls") or {}).get(vid)
+            if not u:
+                raise RuntimeError("podcast-folge: Adresse unbekannt – bitte die Empfehlung erneut schicken lassen")
+            return {"url": u, "ua": UA, "abr": None, "codec": "mp3", "duration": None, "kind": "fast"}
         if localmusic.is_local(vid):             # Datei aus dem Musikordner
             f = localmusic.path_of(vid)
             if not os.path.exists(f):
@@ -1451,6 +1456,9 @@ class Stats:
     @staticmethod
     def rebuild(vid, title, artist, dur):
         """Spielbarer Titel aus einer Protokollzeile (Cover: Standardbild von YouTube)."""
+        if localmusic.is_pod(vid):
+            return {"videoId": vid, "title": title, "artist": artist, "artistId": None, "albumId": None, "album": "",
+                    "duration": dur, "thumb": "", "liked": False, "setVideoId": None}
         if localmusic.is_local(vid):
             return localmusic.make_track(localmusic.path_of(vid), (title, artist, "", dur))
         return {"videoId": vid, "title": title, "artist": artist, "artistId": None, "albumId": None, "album": "",
@@ -3183,7 +3191,7 @@ class Mpris:
                 "xesam:title": GLib.Variant("s", t["title"] or ""), "xesam:artist": GLib.Variant("as", [t["artist"] or ""]),
                 "xesam:album": GLib.Variant("s", t["album"] or ""), "mpris:artUrl": GLib.Variant("s", t["thumb"] or ""),
                 "mpris:length": GLib.Variant("x", int((self.p.dur or t["duration"] or 0) * 1e6)),
-                "xesam:url": GLib.Variant("s", ("file://" + localmusic.path_of(t["videoId"])) if localmusic.is_local(t)
+                "xesam:url": GLib.Variant("s", ("file://" + localmusic.path_of(t["videoId"])) if localmusic.is_local(t) and not localmusic.is_pod(t)
                                            else f"https://music.youtube.com/watch?v={t['videoId']}")}
 
     def props(self, iface):

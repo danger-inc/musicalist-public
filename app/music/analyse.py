@@ -504,12 +504,12 @@ def dur(sec, short=False):
     sec = int(sec or 0)
     h, m = divmod(sec // 60, 60)
     if h >= 100:
-        return f"{h} h"
+        return f"{h}h"
     if h:
-        return f"{h} h {m:02d} min" if not short else f"{h}h{m:02d}"
+        return (f"{h}h {m}min" if m else f"{h}h") if not short else f"{h}h{m:02d}"
     if sec < 60:
-        return f"{sec} s"
-    return f"{m} min"
+        return f"{sec}s"
+    return f"{m}min"
 
 
 def delta_text(p):

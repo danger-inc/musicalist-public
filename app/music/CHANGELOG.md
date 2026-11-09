@@ -1,5 +1,20 @@
 # musicalist – Änderungen
 
+## 1.40.0 (2026-11-09)
+- **Chat überarbeitet:** Chat und Profil einer Person sind jetzt eigene Seiten im Zurück-Stapel – 2-Finger-Zurück zeigt beim Verlassen die gewohnte Animation. Eigene Nachrichten stehen rechts gefüllt (Akzentfarbe), fremde links mit Rahmen; Lieder sind entsprechend umrahmt.
+- **„󰝚 musik“-Knopf** (statt „󰝚“) öffnet ein Menü: aktueller Song oder anderer Song (Suche direkt im Menü). Feld, „musik“ und „senden“ sind gleich hoch.
+- **Nachricht zurücknehmen:** Bis 5 Minuten nach dem Senden erscheint „󰕌 zurücknehmen“; die Nachricht verschwindet auch beim anderen (neue Version nötig).
+- **Hörprofil grafisch** und mit größerer Schrift: große Hörzeit, Balken für Künstler und Titel, Meter für Kennzahlen.
+- **Incognito** (Einstellungen → Freunde): 15 min, 30 min oder bis du es ausschaltest. Andere sehen weder Lied noch „zuletzt gehört“ noch Profil, aber „󰗹 incognito“ (mit Ende). Der **Umfang** wird nur noch in den Einstellungen gewählt.
+- **Wer gerade hört** ist in der Liste und im Chat-Kopf mit umgekehrten Farben hervorgehoben (Füllung in der Akzentfarbe, Schrift in der Hintergrundfarbe).
+
+## 1.39.0 (2026-11-09)
+- **Chat mit Freund·innen:** In der Freunde-Liste (Hörverlauf → freunde) steht unter der Top-Liste für jede Person ein Container mit Name und aktuellem Lied (ohne Bild). Antippen öffnet den Chat: oben Name und aktuelles Lied mit Bild (anklicken → Profil mit allen Angaben: empfiehlt, zuletzt gehört, Hörprofil, entfernen), darunter der Verlauf, unten Eingabe, „󰝚“ schickt den laufenden Titel. Lied-Empfehlungen („direkt an …“) landen jetzt ebenfalls im Chat und bleiben dort stehen; ungelesene Nachrichten zeigen „n neu“. Gleiches verschlüsseltes Protokoll wie in der Handy-App (0.25.0); ältere Versionen sehen Lieder weiter im Eingang, reine Texte nicht.
+- **Zeitangaben** überall als „2h 16min“ statt Dezimalstunden (Analyse, Hörprofil und Top-Liste der Freunde).
+
+## 1.38.1 (2026-11-09)
+- **Podcasts überarbeitet:** Ein Klick auf den „Künstler“ einer Podcast-Folge öffnet jetzt den Podcast (YouTube hat für Podcasts keine Künstlerseite). Der Album-Knopf (Steuerung, Fernseher-Modus) und das Titelmenü führen bei Folgen zum Podcast statt zur Fehlermeldung „zu diesem titel ist kein album bekannt“. „An freund·in empfehlen“ gilt für Folgen wie für Songs. Podcast-Folgen, die jemand von der Handy-App empfiehlt, spielen jetzt auch am PC (direkt aus dem Feed, ohne YouTube-Funktionen wie Liken oder Radio).
+
 ## 1.38.0 (2026-11-09)
 - **Abgleich mit weiteren Geräten, nicht nur Rechnern:** Unter „handy-app“ → „weiteres gerät“ verbindest du dich jetzt auch mit **musicalist auf einem anderen Handy** (dort „koppeln lassen“ drücken, Adresse und Code hier eintragen) – oder mit weiteren Rechnern wie bisher. Beliebig viele Geräte, Ketten funktionieren (Handy – PC – Handy). Neue Hörprotokoll-Einträge tragen den Gerätenamen (`dn`) für die Analyse.
 

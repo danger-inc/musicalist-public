@@ -12,6 +12,7 @@ import time
 import urllib.request
 
 import engine
+import localmusic
 
 RELAY = "https://ntfy.sh"
 ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -31,6 +32,20 @@ def _topic(sec):
 
 def _key(sec):
     return hashlib.sha256(f"musicalist-friend-key|{sec}".encode()).digest()
+
+
+def inc_active(v):
+    """Incognito-Angabe eines Profils: 1 = bis zum Ausschalten, sonst Ende (Unix-Sekunden)."""
+    try:
+        v = int(v or 0)
+    except (TypeError, ValueError):
+        return False
+    return v == 1 or v > time.time()
+
+
+def fid(sec):
+    """Kennung des Absenders (aus seinem Code, verrät ihn nicht): damit ordnet der Empfänger Nachrichten dem Freund zu."""
+    return hashlib.sha256(f"musicalist-friend-id|{sec}".encode()).hexdigest()[:12]
 
 
 def _publish(sec, obj):
@@ -58,6 +73,12 @@ def to_track(e, who=None):
     """Eintrag → engine-Titel (Quelle „freunde“)."""
     t = {"videoId": e["id"], "title": e.get("t") or "?", "artist": e.get("a") or "", "album": "", "duration": 0,
          "thumb": f"https://i.ytimg.com/vi/{e['id']}/hqdefault.jpg", "artistId": None, "albumId": None}
+    if localmusic.is_pod(e["id"]) and e.get("pu"):        # Handy-Podcast: Adresse merken, dann spielt er wie lokal
+        urls = dict(engine.setting("pod_urls") or {})
+        if urls.get(e["id"]) != e["pu"]:
+            urls[e["id"]] = e["pu"]
+            engine.set_setting("pod_urls", dict(list(urls.items())[-300:]))
+        t.update(thumb=e.get("th") or "", album=e.get("pn") or "")
     t["_src"] = ("freunde", who or "")
     return t
 
@@ -73,6 +94,7 @@ class Friends:
         self._cur_id = None
         self._playing = False
         self._cur = None
+        self._chat_lock = threading.Lock()
         self.friends = list(engine.setting("friends") or [])     # [{secret,name,prof,at}]
         self.recs = list(engine.setting("friends_recs") or [])
         self.recent = list(engine.setting("friends_recent") or [])
@@ -89,6 +111,33 @@ class Friends:
     def aliases(self):
         """Codes der eigenen gekoppelten Geräte (dev_id → Code): wer einen davon hat, sieht dieselbe Hörzeit."""
         return [v for v in (engine.setting("friends_alias") or {}).values() if isinstance(v, str) and len(v) == 16 and v != self.secret]
+
+    @property
+    def inc_until(self):
+        """0 = aus, 1 = bis zum Ausschalten, sonst Ende (Unix-Sekunden)."""
+        v = int(engine.setting("friends_inc") or 0)
+        return v if (v == 1 or v > time.time()) else 0
+
+    @property
+    def incognito(self):
+        return self.inc_until != 0
+
+    def set_incognito(self, minutes):
+        """minutes: None = aus, 0 = bis ich es ausschalte, sonst so viele Minuten."""
+        until = 0 if minutes is None else (1 if minutes == 0 else int(time.time()) + minutes * 60)
+        engine.set_setting("friends_inc", until)
+        self._pf_at = 0
+        self._touch(0)
+        if until > 1:
+            def end():
+                if int(engine.setting("friends_inc") or 0) == until:
+                    engine.set_setting("friends_inc", 0)
+                    self._touch(0)
+                    for fn in list(self.listeners):
+                        fn()
+            t = threading.Timer(minutes * 60 + 1.5, end)
+            t.daemon = True
+            t.start()
 
     LEVELS = ("minimal", "normal", "mehr")
 
@@ -152,7 +201,7 @@ class Friends:
 
     def _played(self, pid, t):
         """Nach 5 s echter Wiedergabe in „zuletzt gehört“."""
-        if self._cur_id != pid or not self._playing:
+        if self._cur_id != pid or not self._playing or self.incognito:
             return
         self.recent = [{**entry(t), "at": int(time.time() * 1000)}] + [r for r in self.recent if r.get("id") != pid]
         self.recent = self.recent[:8]
@@ -181,7 +230,7 @@ class Friends:
                 self._pf = None
             else:
                 lv = self.level
-                self._pf = {"h": round(r["base"]["secs"] / 360) / 10}
+                self._pf = {"h": round(r["base"]["secs"] / 360) / 10, "hm": round(r["base"]["secs"] / 60)}
                 if lv != "minimal":
                     na, nt = 5, 3
                     self._pf.update({"n": r["base"]["tracks"], "ar": r["base"]["artists"],
@@ -204,12 +253,15 @@ class Friends:
     def _payload(self):
         """Genau das sehen Freunde von dir."""
         t = self._cur
-        now = entry(t) if t and not str(t["videoId"]).startswith("local:") else None
+        inc = self.inc_until
+        now = entry(t) if t and not str(t["videoId"]).startswith("local:") and not inc else None
         lv = self.level
         o = {"k": "prof", "v": 1, "name": self.name, "ts": int(time.time()), "now": now, "pl": bool(now and self._playing),
-             "recent": [{k: r[k] for k in ("id", "t", "a")} for r in self.recent[:5]],
+             "recent": [] if inc else [{k: r[k] for k in ("id", "t", "a")} for r in self.recent[:5]],
              "recs": [] if lv == "minimal" else [{k: r[k] for k in ("id", "t", "a")} for r in self.recs[:6]]}
-        pf = self.profile()
+        pf = None if inc else self.profile()
+        if inc:
+            o["inc"] = inc
         if pf:
             o["pf"] = pf
         size = lambda: len(json.dumps(o, ensure_ascii=False))
@@ -270,19 +322,119 @@ class Friends:
         self._touch(0)
         return True
 
-    def send_to(self, f, t):
-        """Direkt an einen Freund (Nachricht in SEIN Thema, mit seinem Schlüssel)."""
-        if str(t.get("videoId", "")).startswith("local:"):
+    # ----- Chat -----
+    # Nachricht in SEIN Thema (verschlüsselt mit seinem Schlüssel): {"k":"msg","from","fid","ts","x":Text} bzw.
+    # {"k":"rec",…,"t":Lied,"x":Text?}. Ältere Versionen kennen nur "rec" (→ Eingang) und ignorieren "msg".
+    CHAT_MAX = 300
+
+    def _chats(self):
+        return engine.setting("friends_chat") or {}
+
+    def messages(self, sec):
+        return list(self._chats().get(sec) or [])
+
+    def _log(self, sec, item):
+        with self._chat_lock:
+            d = dict(self._chats())
+            l = list(d.get(sec) or [])
+            if item.get("mid") and any(x.get("mid") == item["mid"] for x in l):
+                return False
+            l.append(item)
+            l.sort(key=lambda x: x.get("at") or 0)
+            d[sec] = l[-self.CHAT_MAX:]
+            engine.set_setting("friends_chat", d)
+        return True
+
+    def unread(self, sec):
+        rd = (engine.setting("friends_read") or {}).get(sec) or 0
+        return sum(1 for m in self.messages(sec) if not m.get("me") and (m.get("at") or 0) > rd)
+
+    def unread_total(self):
+        return sum(self.unread(f["secret"]) for f in self.friends)
+
+    def mark_read(self, sec):
+        d = dict(engine.setting("friends_read") or {})
+        d[sec] = int(time.time() * 1000) + 1
+        engine.set_setting("friends_read", d)
+
+    def friend_by(self, fx_id, name):
+        for f in self.friends:
+            if fid(f["secret"]) == fx_id:
+                return f
+        for f in self.friends:       # ältere Versionen/zweites Gerät: über den Namen
+            if not fx_id and f.get("name") == name:
+                return f
+        return None
+
+    def send_msg(self, f, text="", t=None):
+        """Text und/oder Lied an einen Freund; steht sofort im eigenen Verlauf."""
+        text = (text or "").strip()[:1000]
+        if t is not None and str(t.get("videoId", "")).startswith("local:"):
             return False
-        msg = {"k": "rec", "from": self.name, "ts": int(time.time()), "t": entry(t)}
+        if not text and t is None:
+            return False
+        now = int(time.time() * 1000)
+        mid = secrets.token_hex(6)
+        msg = {"k": "rec" if t is not None else "msg", "from": self.name, "fid": fid(self.secret), "ts": now // 1000, "mid": mid}
+        if text:
+            msg["x"] = text
+        item = {"mid": mid, "me": True, "at": now}
+        if text:
+            item["x"] = text
+        if t is not None:
+            msg["t"] = entry(t)
+            item["t"] = entry(t)
+        self._log(f["secret"], item)
 
         def run():
             try:
                 _publish(f["secret"], msg)
             except Exception as e:  # noqa: BLE001
-                engine.log(f"freunde: empfehlen {e!r}")
+                engine.log(f"freunde: senden {e!r}")
+                self._mark_failed(f["secret"], mid)
         threading.Thread(target=run, daemon=True).start()
+        for fn in list(self.listeners):
+            fn()
         return True
+
+    def _mark_failed(self, sec, mid):
+        with self._chat_lock:
+            d = dict(self._chats())
+            l = [dict(x, failed=True) if x.get("mid") == mid else x for x in d.get(sec) or []]
+            d[sec] = l
+            engine.set_setting("friends_chat", d)
+        for fn in list(self.listeners):
+            fn()
+
+    UNSEND_MS = 5 * 60_000
+
+    def can_unsend(self, m):
+        return bool(m.get("me")) and time.time() * 1000 - (m.get("at") or 0) < self.UNSEND_MS
+
+    def unsend(self, f, mid):
+        """Eigene Nachricht innerhalb von 5 Minuten zurücknehmen (verschwindet auch beim anderen, wenn er die neue Version hat)."""
+        m = next((x for x in self.messages(f["secret"]) if x.get("mid") == mid), None)
+        if m is None or not self.can_unsend(m):
+            return False
+        with self._chat_lock:
+            d = dict(self._chats())
+            d[f["secret"]] = [x for x in d.get(f["secret"]) or [] if x.get("mid") != mid]
+            engine.set_setting("friends_chat", d)
+        msg = {"k": "del", "from": self.name, "fid": fid(self.secret), "mid": mid, "ts": int(time.time())}
+
+        def run():
+            try:
+                _publish(f["secret"], msg)
+            except Exception as e:  # noqa: BLE001
+                engine.log(f"freunde: zurücknehmen {e!r}")
+        threading.Thread(target=run, daemon=True).start()
+        for fn in list(self.listeners):
+            fn()
+        return True
+
+    def send_to(self, f, t):
+        """Direkt an einen Freund: erscheint in seinem Chat mit dir."""
+        return self.send_msg(f, "", t)
 
     @property
     def inbox(self):
@@ -300,6 +452,7 @@ class Friends:
         seen = list(engine.setting("friends_inbox_seen") or [])
         fresh = []
         added = []
+        chat_new = 0
         try:
             with urllib.request.urlopen(f"{RELAY}/{_topic(sec)}/json?poll=1&since=all", timeout=12) as r:
                 for line in r.read().decode("utf-8", "replace").splitlines():
@@ -318,19 +471,45 @@ class Friends:
                             self._save()
                             added.append(str(m.get("name") or "jemand"))
                         continue
+                    if m and m.get("k") == "del" and m.get("mid"):
+                        seen.append(e.get("id"))
+                        who = self.friend_by(str(m.get("fid") or ""), str(m.get("from") or ""))
+                        if who is not None:
+                            with self._chat_lock:
+                                d = dict(self._chats())
+                                l = d.get(who["secret"]) or []
+                                keep = [x for x in l if x.get("mid") != "m" + str(m["mid"])]
+                                if len(keep) != len(l):
+                                    d[who["secret"]] = keep
+                                    engine.set_setting("friends_chat", d)
+                                    chat_new += 1
+                        continue
+                    if m and m.get("k") in ("msg", "rec") and m.get("fid") and (m.get("x") or isinstance(m.get("t"), dict)):
+                        who = self.friend_by(str(m.get("fid")), str(m.get("from") or ""))
+                        if who is not None:                              # neue Nachricht → in den Chat mit diesem Freund
+                            seen.append(e.get("id"))
+                            item = {"mid": ("m" + str(m["mid"])) if m.get("mid") else "n" + str(e.get("id")), "me": False, "at": int(e.get("time") or 0) * 1000}
+                            if m.get("x"):
+                                item["x"] = str(m["x"])[:1000]
+                            if isinstance(m.get("t"), dict):
+                                item["t"] = {k: m["t"][k] for k in ("id", "t", "a", "pu", "th", "pn") if m["t"].get(k)}
+                            if self._log(who["secret"], item):
+                                chat_new += 1
+                        continue
                     if not m or m.get("k") != "rec" or not isinstance(m.get("t"), dict):
                         continue
                     seen.append(e.get("id"))
-                    fresh.append({**{k: m["t"].get(k, "") for k in ("id", "t", "a")}, "from": str(m.get("from") or "freund")[:24],
+                    fresh.append({**{k: m["t"].get(k, "") for k in ("id", "t", "a", "pu", "th", "pn") if m["t"].get(k)},
+                                  **{k: m["t"].get(k, "") for k in ("id", "t", "a")}, "from": str(m.get("from") or "freund")[:24],
                                   "at": int(e.get("time") or 0) * 1000})
         except Exception:  # noqa: BLE001
             return 0
-        engine.set_setting("friends_inbox_seen", seen[-80:])
+        engine.set_setting("friends_inbox_seen", seen[-500:])
         if fresh:
             engine.set_setting("friends_inbox", (fresh + self.inbox)[:30])
         if added and getattr(self, "say", None):
             self.say(f"{', '.join(added)} hat dich hinzugefügt – ihr seid jetzt befreundet")
-        return len(fresh)
+        return len(fresh) + chat_new
 
     def unrecommend(self, vid):
         self.recs = [r for r in self.recs if r.get("id") != vid]
@@ -344,7 +523,7 @@ class Friends:
     @staticmethod
     def live(f):
         pr = f.get("prof") or {}
-        return bool(pr.get("now") and pr.get("pl") and f.get("at") and time.time() * 1000 - f["at"] < 6 * 60_000)
+        return bool(not inc_active(pr.get("inc")) and pr.get("now") and pr.get("pl") and f.get("at") and time.time() * 1000 - f["at"] < 6 * 60_000)
 
     def fetch(self, sec):
         """Letzten Stand holen → (prof|None, at_ms). Wirft bei Netzfehlern."""

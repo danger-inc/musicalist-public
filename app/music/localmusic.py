@@ -7,9 +7,18 @@ AUDIO = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".wav", ".aac", ".wma", ".oga
 PREFIX = "local:"
 
 
-def is_local(t):
+POD = "pod_"      # Podcast-Folge vom Handy (RSS, Adresse der Audiodatei steht in settings "pod_urls")
+
+
+def is_pod(t):
     vid = t.get("videoId") if isinstance(t, dict) else t
-    return bool(vid) and str(vid).startswith(PREFIX)
+    return bool(vid) and str(vid).startswith(POD)
+
+
+def is_local(t):
+    """Nicht von YouTube: lokale Datei oder Handy-Podcast (kein Liken/Radio/Verlauf/Offline)."""
+    vid = t.get("videoId") if isinstance(t, dict) else t
+    return bool(vid) and str(vid).startswith((PREFIX, POD))
 
 
 def path_of(vid):

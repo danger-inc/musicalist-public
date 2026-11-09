@@ -60,6 +60,38 @@ class SettingsMixin:
                                 tooltip="Was läuft, zuletzt gehört, Empfehlungen, Wochenprofil – nur für Freunde mit deinem Code (Bibliothek → freunde).")
         self.fr_chk.set_margin_top(10)
         panel.body.append(self.fr_chk)
+        fr_ = getattr(self.p, "friends", None)
+        if fr_ is not None:
+            panel.body.append(label("umfang – was freunde sehen", "dim", xalign=0))
+            self.fr_lv_row = hbox(spacing=6)
+            self.fr_lv_btns = {}
+
+            def paint_lv():
+                for k, b in self.fr_lv_btns.items():
+                    (b.add_css_class if k == fr_.level else b.remove_css_class)("on")
+            for k in fr_.LEVELS:
+                b = tui.Button(k, lambda k=k: (fr_.set_level(k), paint_lv()))
+                self.fr_lv_btns[k] = b
+                self.fr_lv_row.append(b)
+            paint_lv()
+            panel.body.append(self.fr_lv_row)
+            panel.body.append(label("minimal: läuft gerade, letzte 5 titel, hörzeit der woche · normal: dazu empfehlungen, top künstler/titel, "
+                                    "lieblingsstunde, skip-rate · mehr: dazu typ, vielfalt, wiederholer, neue künstler, durchhör-quote, serie.",
+                                    "dim", wrap=True, xalign=0))
+            panel.body.append(label("󰗹 incognito – andere sehen nicht, was du hörst (nur dass du incognito bist)", "dim", xalign=0))
+            self.fr_inc_state = label("", "dim", wrap=True, xalign=0)
+
+            def paint_inc():
+                u = fr_.inc_until
+                self.fr_inc_state.set_label("aus." if not u else ("an, bis du es ausschaltest." if u == 1
+                                            else f"an bis {time.strftime('%H:%M', time.localtime(u))}."))
+            inc_row = hbox(spacing=6)
+            for txt, mins in (("15 min", 15), ("30 min", 30), ("bis ich ausschalte", 0)):
+                inc_row.append(tui.Button(txt, lambda m=mins: (fr_.set_incognito(m), paint_inc())))
+            inc_row.append(tui.Button("aus", lambda: (fr_.set_incognito(None), paint_inc())))
+            paint_inc()
+            panel.body.append(inc_row)
+            panel.body.append(self.fr_inc_state)
         panel.body.append(label("aus: ✕ / q beendet musicalist, die musik stoppt. an: nur das fenster geht zu.",
                                 "dim", wrap=True, xalign=0))
         self.hist_chk = tui.Check("hörverlauf führen", engine.setting("history"), self.set_history,

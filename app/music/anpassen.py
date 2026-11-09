@@ -31,7 +31,9 @@ class AnpassenMixin:
 
         def album():
             t = cur()
-            if t and t.get("albumId"):
+            if t and t.get("podcastId"):
+                self.open_detail("podcast", t["podcastId"])
+            elif t and t.get("albumId"):
                 self.open_detail("album", t["albumId"])
             else:
                 self.say("zu diesem titel ist kein album bekannt")

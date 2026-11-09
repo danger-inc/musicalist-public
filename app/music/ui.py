@@ -59,6 +59,14 @@ button.ctl.play label { font-size: 22px; }
 flowbox.opts > flowboxchild { padding: 0; min-width: 0; min-height: 0; }
 .album-badge { font-size: 9px; font-weight: bold; letter-spacing: 1px; color: @on_primary; background: @primary;
                border-radius: 4px; padding: 0 5px; }
+.frlive, button.frlive { background-color: @primary; border-radius: 4px; }
+.frlive label, .frlive label.accent, .frlive label.dim, .frlive label.glyph { color: @on_primary; }
+.row.trk.frlive:hover { background-color: alpha(@primary, 0.85); }
+.bub-me { background-color: @primary; border-radius: 12px 4px 12px 12px; padding: 6px 12px; }
+.bub-me label { color: @on_primary; }
+.bub-o { border: 1px solid alpha(@primary, 0.55); border-radius: 4px 12px 12px 12px; padding: 6px 12px; }
+.bub-me-song { border: 2px solid @primary; border-radius: 6px; padding: 2px; }
+.bub-o-song { border: 1px solid alpha(@primary, 0.4); border-radius: 6px; padding: 2px; }
 .row.trk:hover { background-color: alpha(@primary, 0.1); border-radius: 4px; }
 .row.trk > button.rowhead:hover { background: none; }
 button.artlink { background: none; background-image: none; border: none; box-shadow: none; padding: 0 2px;
@@ -650,11 +658,16 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         tab = self.current_tab() or "now"
         if tab == "lib" and self.lib_stack.get_visible_child_name() == "detail" and self.detail_key:
             return ("detail",) + self.detail_key
+        if tab == "stats" and getattr(self, "hear_sub", "") == "friends" and getattr(self, "_fr_view", None):
+            return ("fr",) + tuple(self._fr_view)          # Chat / Profil einer Person = eigene Seite im Zurück-Stapel
         return ("tab", tab)
 
     def nav_title(self, loc):
         if loc[0] == "detail":
             return self.detail_names.get(loc[1:], self.DETAIL_NAMES.get(loc[1], "playlist"))
+        if loc[0] == "fr":
+            fx = next((x for x in (self.fr.friends if self.fr else []) if x["secret"] == loc[2]), None)
+            return (fx["name"] if fx else "freunde") + (" · profil" if loc[1] == "profile" else "")
         names = {t: n for t, n, _i in self.TABS}
         return self.TAB_SUP.get(loc[1], "") + names.get(loc[1], loc[1])
 
@@ -713,20 +726,27 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
     def nav_go_back(self):
         loc = self._nav_next(pop=True)
         self._nav_skip = True
+        self._nav_open(loc)
+        self.nav_note()
+
+    def _nav_open(self, loc):
         if loc[0] == "detail":
             self.open_detail(loc[1], loc[2])
+        elif loc[0] == "fr":
+            self.show_tab("stats")
+            self.hear_select("friends")
+            self._fr_goto((loc[1], loc[2]), note=False)
         else:
             if loc[1] == "lib":
                 self.lib_stack.set_visible_child_name("home")
+            if loc[1] == "stats" and getattr(self, "_fr_view", None):
+                self._fr_view = None
+                self.fill_friends()
             self.show_tab(loc[1])
-        self.nav_note()
 
     def nav_goto(self, loc):
         self._nav_skip = False
-        if loc[0] == "detail":
-            self.open_detail(loc[1], loc[2])
-        else:
-            self.show_tab(loc[1])
+        self._nav_open(loc)
         self.nav_note()
         return True
 

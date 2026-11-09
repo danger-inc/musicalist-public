@@ -143,9 +143,11 @@ class SongMenus:
                if p.friends.recommend(t) else None)
             for fx in p.friends.friends[:6]:
                 it("󰡉", f"direkt an {fx.get('name') or 'freund'}", lambda fx=fx: (p.friends.send_to(fx, t), w.say(f"an {fx.get('name') or 'freund'} geschickt")))
-        if t.get("artist") or t.get("albumId"):
+        if t.get("artist") or t.get("albumId") or t.get("podcastId"):
             self._rub(main, "öffnen")
-            if t.get("artist"):
+            if t.get("podcastId"):
+                it("󰦖", f"podcast · {t.get('album') or t.get('artist') or 'öffnen'}", lambda: w.open_detail("podcast", t["podcastId"]))
+            elif t.get("artist"):
                 it("󰠃", f"künstler · {(t.get('artist') or '').split(',')[0]}", lambda: w.open_artist(t))
             if t.get("albumId"):
                 it("󰀥", f"album · {t.get('album') or 'öffnen'}", lambda: w.open_detail("album", t["albumId"]))
@@ -158,7 +160,7 @@ class SongMenus:
                 it("󰇚", "offline nicht mehr halten", lambda: (off.unpin([t["videoId"]]), w.say("offline: freigegeben")))
             else:
                 it("󰇚", "offline speichern", lambda: (off.pin([t]), w.say(f"offline: {t['title']} wird geladen …")))
-        if loc:
+        if loc and not localmusic.is_pod(t):
             folder = os.path.dirname(localmusic.path_of(t["videoId"]))
             it("󰉋", "im ordner zeigen", lambda: engine.open_url(folder))
         else:

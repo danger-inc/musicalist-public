@@ -221,6 +221,9 @@ class LibraryMixin:
         """Künstlerseite zum Titel t – ohne gespeicherte ID per Suche nach dem Namen."""
         if not t:
             return
+        if t.get("podcastId"):            # Podcast-Folge: der „Künstler“ ist der Podcast (Kanal-Seiten gibt es nicht)
+            self.open_detail("podcast", t["podcastId"])
+            return
         if t.get("artistId"):
             self.open_detail("artist", t["artistId"])
             return
