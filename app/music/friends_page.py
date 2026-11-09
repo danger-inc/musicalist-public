@@ -1,4 +1,5 @@
 """Freunde-Seite (unter Bibliothek): eigener Code, Freund hinzufügen, was sie hören / empfehlen."""
+import os
 import time
 
 from gi.repository import GLib, Gtk
@@ -296,6 +297,8 @@ class FriendsMixin:
             box.append(label("freunde nicht verfügbar", "dim"))
             return
         view = getattr(self, "_fr_view", None)
+        if view and view[0] == "recaps":
+            return self._fill_recaps()
         x = next((x for x in f.friends if view and x["secret"] == view[1]), None)
         if view and x is None:
             view = self._fr_view = None
@@ -303,8 +306,22 @@ class FriendsMixin:
             return self._fill_chat(x)
         if view and view[0] == "profile":
             return self._fill_profile(x)
-        top = hbox(label("", hexpand=True), tui.Button("󰑐", self.refresh_friends, tooltip="neu abfragen"), spacing=8)
+        rc = getattr(f, "recaps", None)
+        top = hbox(label("", hexpand=True), *([tui.Button("󰄨 rückblicke", lambda: self._fr_goto(("recaps", "-")),
+                                                         tooltip="Wochen-, Monats- und Jahresbild")] if rc is not None else []),
+                   tui.Button("󰑐", self.refresh_friends, tooltip="neu abfragen"), spacing=8)
         box.append(top)
+        new = rc.unseen[0] if rc is not None and rc.unseen else None
+        if new is not None:               # neues Rückblick-Bild: Hinweis ganz oben
+            kinds = {"w": "wochenrückblick", "m": "monatsrückblick", "y": "jahresrückblick"}
+            b = Gtk.Button(hexpand=True)
+            b.add_css_class("rowhead")
+            b.add_css_class("frlive")
+            b.set_child(hbox(vbox(label(f"󰄨 neu: {kinds.get(new['k'], 'rückblick')}", "accent"),
+                                  label(f"{new['winner']} hat am meisten gehört · {new['win']} – ansehen und herunterladen", "dim", wrap=True),
+                                  spacing=2), label("›", "accent"), spacing=10))
+            b.connect("clicked", lambda *_: self._fr_goto(("recaps", "-")))
+            box.append(b)
         box.append(self._top_list())
         # --- ich ---
         me = vbox(spacing=6)
@@ -752,6 +769,59 @@ class FriendsMixin:
         if chips:
             box.append(label("  ·  ".join(chips), "accent", wrap=True))
         return box
+
+    def _fill_recaps(self):
+        """Alle Rückblick-Bilder: ansehen, herunterladen (nach ~/Pictures/musicalist), Ordner öffnen."""
+        f = self.fr
+        rc = f.recaps
+        box = self.fr_body
+        box.append(hbox(tui.Button("‹ freunde", lambda: self._fr_goto(None)), label("󰄨 rückblicke", "accent", hexpand=True), spacing=8))
+        fresh = {i["key"] for i in rc.unseen}
+        rc.mark_seen()
+        if not rc.items:
+            box.append(label("jeden sonntagabend entsteht dein wochenrückblick, am monatsletzten der monatsrückblick, an silvester der "
+                             "jahresrückblick – mit der farbe der person mit der meisten hörzeit, ihrem meistgespielten lied und den ranglisten "
+                             "deiner freunde. unter einstellungen → freunde kannst du die bilder automatisch herunterladen lassen.", "dim", wrap=True))
+        from gi.repository import GdkPixbuf
+        for it in rc.items:
+            row = hbox(spacing=12)
+            row.add_css_class("bub-me-song" if it["key"] in fresh else "bub-o-song")
+            try:
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(rc.path(it), 160, 200, True)
+                pic = Gtk.Picture.new_for_pixbuf(pb)
+                pic.set_size_request(pb.get_width(), pb.get_height())
+                pic.set_can_shrink(False)
+                row.append(pic)
+            except Exception:  # noqa: BLE001
+                pass
+            col = vbox(spacing=2)
+            col.set_hexpand(True)
+            col.append(label(it["title"], "accent", wrap=True))
+            col.append(label(it["range"], "dim"))
+            col.append(label(f"{it['winner']} · {it['win']}" + ("  · neu" if it["key"] in fresh else ""), "accent" if it["key"] in fresh else ""))
+
+            def save(it=it):
+                try:
+                    p = rc.save_pictures(it)
+                    self.say(f"gespeichert: {p}")
+                except Exception as e:  # noqa: BLE001
+                    self.say(f"speichern geht nicht: {e}", error=True)
+            col.append(hbox(tui.Button("ansehen", lambda it=it: self._recap_big(it)), tui.Button("󰇚 herunterladen", save),
+                            tui.Button("󰉋 ordner", lambda it=it: (save(), engine.open_url(os.path.join(os.path.expanduser("~"), "Pictures", "musicalist")))),
+                            spacing=8))
+            row.append(col)
+            box.append(row)
+
+    def _recap_big(self, it):
+        from gi.repository import GdkPixbuf
+        rc = self.fr.recaps
+        win = Gtk.Window(title=it["title"], transient_for=self if isinstance(self, Gtk.Window) else None, modal=True)
+        pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(rc.path(it), 760, 950, True)
+        pic = Gtk.Picture.new_for_pixbuf(pb)
+        pic.set_size_request(pb.get_width(), pb.get_height())
+        pic.set_can_shrink(False)
+        win.set_child(pic)
+        win.present()
 
     def _fill_profile(self, x):
         box = self.fr_body

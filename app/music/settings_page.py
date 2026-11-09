@@ -84,6 +84,19 @@ class SettingsMixin:
                                     "dim", wrap=True, xalign=0))
             panel.body.append(tui.Check("lesebestätigungen senden („gelesen“ bei den anderen)", fr_.read_receipts,
                                         lambda on: fr_.set_read_receipts(on)))
+            rc_ = getattr(fr_, "recaps", None)
+            if rc_ is not None:
+                panel.body.append(label("󰄨 rückblick-bilder: sonntags ein wochenbild, am monatsletzten ein monatsbild, an silvester ein jahresbild", "dim", wrap=True, xalign=0))
+                panel.body.append(tui.Check("bilder automatisch herunterladen (~/Pictures/musicalist)", rc_.auto, lambda on: rc_.set_auto(on)))
+
+                def test_recap():
+                    def done(res):
+                        if isinstance(res, Exception):
+                            self.say(f"rückblick: {res}", error=True)
+                        else:
+                            self.say("fertig – unter freunde → 󰄨 rückblicke" if res else "noch keine zahlen für diese woche")
+                    tui.background(lambda: rc_.make("w", force=True), done=done)
+                panel.body.append(hbox(tui.Button("󰄨 wochenbild jetzt testweise", test_recap), spacing=8))
             panel.body.append(label("󰗹 incognito – andere sehen nicht, was du hörst (nur dass du incognito bist)", "dim", xalign=0))
             self.fr_inc_state = label("", "dim", wrap=True, xalign=0)
 

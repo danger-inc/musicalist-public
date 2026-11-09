@@ -155,6 +155,12 @@ class Friends:
         self.recs = list(engine.setting("friends_recs") or [])
         self.recent = list(engine.setting("friends_recent") or [])
         player.listeners.append(self._on_player)
+        try:
+            import recap
+            self.recaps = recap.Recaps(self)          # Rückblick-Bilder (Woche/Monat/Jahr)
+        except Exception as e:  # noqa: BLE001
+            engine.log(f"rückblick: {e!r}")
+            self.recaps = None
         threading.Thread(target=self._beat, daemon=True).start()
 
     # ----- eigene Einstellungen -----
@@ -429,6 +435,8 @@ class Friends:
                     self._touch(0)
                 if self.named and time.time() - getattr(self, "_claim_at", 0) > 6 * 3600:
                     self._claim()
+                if self.recaps is not None:
+                    self.recaps.check()               # Sonntagabend / Monatsende / Silvester
             except Exception:  # noqa: BLE001
                 pass
 
@@ -450,7 +458,7 @@ class Friends:
                     na, nt = 5, 3
                     self._pf.update({"n": r["base"]["tracks"], "ar": r["base"]["artists"],
                             "art": [{"n": x["name"][:30], "m": round(x["secs"] / 60)} for x in r["artists"][:na]],
-                            "trk": [{"t": x["t"][:40], "a": x["a"][:30], "n": x["plays"]} for x in r["tracks"][:nt]],
+                            "trk": [{"t": x["t"][:40], "a": x["a"][:30], "n": x["plays"], "i": x.get("id")} for x in r["tracks"][:nt]],
                             "pk": r.get("peak_hour", 0), "sk": round(r.get("skip_rate") or 0)})
                 if lv == "mehr":         # die interessantesten weiteren Zahlen aus der Analyse (nur Zahlen/Kurzwörter, keine Titel)
                     self._pf.update({"ct": r.get("chronotype") or "", "dv": round(r.get("diversity") or 0),
@@ -460,10 +468,39 @@ class Friends:
                         self._pf["cr"] = round(r.get("complete_rate") or 0)
                     if r.get("streak_now"):
                         self._pf["sn"] = int(r["streak_now"])
+            if self._pf is not None:
+                self._pf["ac"] = self._accent()
+                rows = self.p.journal.load() or []
+
+                def agg(art):
+                    rr = analyse.analyse(rows, art, 0)
+                    if rr.get("empty"):
+                        return None
+                    a = {"hm": round(rr["base"]["secs"] / 60)}
+                    if self.level != "minimal":
+                        a.update({"n": rr["base"]["tracks"], "ar": rr["base"]["artists"]})
+                        if rr["artists"]:
+                            a["a"] = {"n": rr["artists"][0]["name"][:30], "m": round(rr["artists"][0]["secs"] / 60)}
+                        if rr["tracks"]:
+                            t0 = rr["tracks"][0]
+                            a["s"] = {"t": t0["t"][:40], "a": t0["a"][:30], "n": t0["plays"], "i": t0.get("id")}
+                    return a
+                for key, art in (("mo", "m"), ("yr", "y")):          # Summen für Monats-/Jahresrückblick
+                    v = agg(art)
+                    if v:
+                        self._pf[key] = v
         except Exception as e:  # noqa: BLE001
             engine.log(f"freunde: profil {e!r}")
             self._pf = None
         return self._pf
+
+    @staticmethod
+    def _accent():
+        try:
+            import recap
+            return recap.own_accent()
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _payload(self):
         """Genau das sehen Freunde von dir."""
@@ -478,12 +515,15 @@ class Friends:
         if inc:
             o["inc"] = inc
         if pf:
-            o["pf"] = pf
+            o["pf"] = dict(pf)
         size = lambda: len(json.dumps(o, ensure_ascii=False))
         if size() > 2500:                       # Nachrichten sind auf 4 kB begrenzt: erst Empfehlungen, dann „zuletzt“, zuletzt das Profil kürzen
             o["recs"] = o["recs"][:3]
         if size() > 2500:
             o["recent"] = o["recent"][:5]
+        if size() > 2500 and "pf" in o:                # Monat/Jahr zuerst weglassen
+            o["pf"].pop("mo", None)
+            o["pf"].pop("yr", None)
         if size() > 2500:
             o.pop("pf", None)
         if size() > 2500:

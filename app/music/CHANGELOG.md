@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.44.0 (2026-11-09)
+- **Rückblick-Bilder (PNG 1080 × 1350):** Jeden Sonntagabend (ab 20 Uhr) entsteht ein Wochenbild im Terminal-Stil, am Monatsletzten ein Monatsplakat, am 31. Dezember ein Jahresbild (Mischung aus beidem). Die Farbe ist die Akzentfarbe der Person mit der meisten Hörzeit, das Cover gehört zu ihrem meistgespielten Lied, dazu die Ranglisten hörzeit / titel / künstler·innen aus deiner Freundesliste (nur was geteilt wird, Incognito fehlt). Hinweis ganz oben im Freunde-Tab, Desktop-Benachrichtigung, Seite „󰄨 rückblicke“ mit allen bisherigen Bildern (ansehen, herunterladen nach ~/Pictures/musicalist, Ordner öffnen).
+- **Einstellungen → Freunde:** „bilder automatisch herunterladen“ (Standard aus) und „wochenbild jetzt testweise“.
+- Das Profil des PCs enthält jetzt Akzentfarbe, Lied-Kennung und Monats-/Jahressummen, damit PC-Nutzer auch in den Bildern der Handy-App richtig erscheinen.
+
 ## 1.43.0 (2026-11-09)
 - **Nutzername in den Einstellungen ändern** (Einstellungen → Freunde → „✎ ändern“). Gekoppelte Geräte übernehmen den neuen Namen beim nächsten Abgleich.
 - **Top-Liste als Auswahl:** Die Rubrik wählst du per Dropdown; in der Auswahl steht je Rubrik rechts die Person auf Platz 1, gewählt wird die ganze Rangliste gezeigt.
