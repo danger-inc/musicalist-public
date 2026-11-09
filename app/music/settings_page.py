@@ -93,6 +93,7 @@ class SettingsMixin:
         page.append(panel)
         page.append(self.build_offline())
         page.append(self.build_handy())
+        page.append(self.build_spotify())
         page.append(self.build_local())
         page.append(self.build_ytdlp())
         self.add_page("settings", page)
@@ -204,6 +205,105 @@ class SettingsMixin:
         when = time.strftime("%d.%m. %H:%M", time.localtime(t)) if t else "noch nie"
         self.ytdlp_info.set_label(f"version {engine.ytdlp_version()} · zuletzt geprüft {when}")
         return False
+
+    # ---------- spotify-import (DSGVO-Datenexport → playlists, spotify_import.py) ----------
+    def build_spotify(self):
+        panel = tui.Panel("󰓇 von spotify importieren")
+        b = panel.body
+        b.append(label("spotify → privatsphäre → „deine daten herunterladen“ (kontodaten). aus der zip-datei (oder dem entpackten "
+                       "ordner) werden playlists und gespeicherte titel gelesen, jeder titel wird in youtube music gesucht und "
+                       "als private playlist angelegt. braucht die anmeldung (⚙ → konto).", "dim", wrap=True, xalign=0))
+        self.sp_file = label("", "dim", hexpand=True, ellipsize=True, xalign=0)
+        self.sp_list = vbox(spacing=2)
+        self.sp_sel = {}
+        self.sp_state = label("", "accent", wrap=True, xalign=0)
+        self.sp_go = tui.Button("󰐊 importieren", self.spotify_go)
+        self.sp_go.set_visible(False)
+        b.append(hbox(self.sp_file, tui.Button("󰈙 export wählen …", self.spotify_pick),
+                      tui.Button("󰉋 ordner …", lambda: self.spotify_pick(True)), spacing=10))
+        b.append(self.sp_list)
+        b.append(hbox(self.sp_go, self.sp_state, spacing=10))
+        self.sp_pls = []
+        self.sp_cancel = None
+        return panel
+
+    def spotify_pick(self, folder=False):
+        dlg = Gtk.FileDialog(title="Spotify-Export wählen")
+        home = Gio.File.new_for_path(os.path.expanduser("~/Downloads"))
+        if home.query_exists(None):
+            dlg.set_initial_folder(home)
+
+        def done(d, res):
+            try:
+                f = (d.select_folder_finish if folder else d.open_finish)(res)
+            except GLib.Error:
+                return
+            self.spotify_load(f.get_path())
+        (dlg.select_folder if folder else dlg.open)(self, None, done)
+
+    def spotify_load(self, path):
+        import spotify_import as si
+        try:
+            self.sp_pls = si.parse(path)
+        except Exception as e:  # noqa: BLE001
+            self.sp_pls = []
+            self.say(f"spotify-export nicht lesbar: {e}", error=True)
+        self.sp_file.set_label(os.path.basename(path))
+        while (c := self.sp_list.get_first_child()):
+            self.sp_list.remove(c)
+        self.sp_sel = {}
+        if not self.sp_pls:
+            self.sp_state.set_label("keine playlists gefunden – ist das der export „kontodaten“ (Playlist1.json)?")
+            self.sp_go.set_visible(False)
+            return
+        for i, p in enumerate(self.sp_pls):
+            self.sp_sel[i] = True
+            self.sp_list.append(tui.Check(f"{p['name']} · {len(p['tracks'])} titel", True,
+                                          lambda on, i=i: self.sp_sel.__setitem__(i, on)))
+        self.sp_state.set_label(f"{len(self.sp_pls)} playlists gefunden")
+        self.sp_go.set_visible(True)
+
+    def spotify_go(self):
+        import spotify_import as si
+        if not os.path.exists(engine.BROWSER_JSON):
+            self.say("zum importieren erst bei youtube music anmelden", error=True)
+            return
+        if self.sp_cancel is not None:
+            self.sp_cancel.set()
+            return
+        pick = [p for i, p in enumerate(self.sp_pls) if self.sp_sel.get(i)]
+        if not pick:
+            return
+        import threading
+        self.sp_cancel = threading.Event()
+        self.sp_go.set_label("󰜺 abbrechen")
+
+        def prog(d, t, txt):
+            GLib.idle_add(self.sp_state.set_label, txt)
+
+        def work():
+            try:
+                rep = si.run(self.p.music, pick, prog, self.sp_cancel)
+            except Exception as e:  # noqa: BLE001
+                rep = {"made": 0, "tracks": 0, "missing": [], "errors": [engine.explain(e)]}
+            GLib.idle_add(fin, rep)
+
+        def fin(rep):
+            self.sp_cancel = None
+            self.sp_go.set_label("󰐊 importieren")
+            txt = f"{rep['made']} playlists angelegt ({rep['tracks']} titel)"
+            if rep["missing"]:
+                txt += f" · {len(rep['missing'])} nicht gefunden (Liste: {si.MISSING_FILE})"
+            if rep["errors"]:
+                txt += " · " + "; ".join(rep["errors"][:2])
+            self.sp_state.set_label(txt)
+            self.say(txt, error=bool(rep["errors"]))
+            if rep["made"] and hasattr(self, "refresh_library"):
+                try:
+                    self.refresh_library()
+                except Exception:  # noqa: BLE001
+                    pass
+        threading.Thread(target=work, daemon=True).start()
 
     # ---------- handy-app (abgleich im wlan, handy_sync.py) ----------
     def build_handy(self):

@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 1.36.0 (2026-11-09)
+- **Spotify-Import:** Einstellungen → „von spotify importieren“. Den Datenexport von Spotify (Privatsphäre → „Deine Daten herunterladen“, Kontodaten) als ZIP/Ordner wählen; Playlists und gespeicherte Titel werden gelesen, jeder Titel in YouTube Music gesucht (Abgleich von Titel und Künstler) und als private Playlist angelegt. Gleichnamige vorhandene Playlists werden nur ergänzt, Treffer werden gemerkt (Abbruch/Wiederholung ist schnell), nicht gefundene Titel stehen in `spotify_nicht_gefunden.txt`. Braucht die Anmeldung.
+
 ## 1.35.0 (2026-11-09)
 - **Freunde: gekoppelte Geräte sind eine Person.** Sind Handy und PC gekoppelt, senden beide ihren Stand an beide Freundes-Codes; wer nur einen Code hat, sieht trotzdem die gemeinsame Hörzeit (aus dem zusammengeführten Hörprotokoll) und das gemeinsame „zuletzt gehört“. Bestehende Codes bleiben gültig, der eigene zweite Code taucht nicht in der Freundesliste auf. Wirkt, sobald beide Geräte die neue Version haben und einmal abgeglichen haben.
 - **Top-Liste am Wochenanfang:** Freunde, die diese Woche (seit Montag 4 Uhr) noch nichts gesendet haben, stehen unter „ohne Angabe“ statt mit den Stunden der Vorwoche – deine eigene Zeit wird ja ebenfalls zurückgesetzt.
