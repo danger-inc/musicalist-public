@@ -201,6 +201,7 @@ class Server:
             def do_GET(self):
                 if self.path == "/hello":
                     self._json(200, {"app": "musicalist", "v": 1, "name": socket.gethostname().split(".")[0],
+                                     "dev": engine.device_id()[:8],
                                      "pairing": srv.pairing is not None and srv.pairing["until"] > time.time()})
                 else:
                     self._json(404, {"error": "?"})
@@ -272,8 +273,8 @@ class Server:
         login (Anmeldung mitschicken)."""
         j = self.p.journal
         added = j.merge(req.get("rows") or [])
-        rows, nxt, more = j.lines_from(int(req.get("have") or 0), limit=4000, skip_dev="handy")
-        res = {"rows": rows, "next": nxt, "more": more, "added": added}
+        rows, nxt, more = j.lines_from(int(req.get("have") or 0), limit=4000, skip_dev=str(req.get("skip") or "handy"))
+        res = {"rows": rows, "next": nxt, "more": more, "added": added, "me": engine.device_id()[:8]}
         fr = getattr(self.p, "friends", None)
         if fr is not None and isinstance(req.get("friends"), dict):
             try:
@@ -298,3 +299,163 @@ class Server:
                 self._save()
         self._notify()
         return res
+
+
+# ----- Anderer Rechner (PC ↔ PC): dieser Rechner ist der Client, der andere hat „handy koppeln“ gedrückt -----
+PEERS = os.path.join(engine.DATA, "peers.json")
+
+
+class Peers:
+    """Verbindet mehrere Rechner: gleiches Protokoll wie beim Handy, jede Seite schickt alles, was die andere noch
+    nicht hat (auch Einträge, die sie selbst von Handy/dritten Rechnern bekam – so läuft es über Ketten A–B–C).
+    Gleiche Einträge (at + id) werden übersprungen, Schleifen sind damit harmlos. Gespeichert in peers.json."""
+    EVERY = 300
+
+    def __init__(self, player):
+        self.p = player
+        self.lock = threading.Lock()
+        self.busy = False
+        self.listeners = []
+        self.peers = self._load()
+        self.started = False
+
+    def _load(self):
+        try:
+            with open(PEERS) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self):
+        tmp = PEERS + ".tmp"
+        with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+            json.dump(self.peers, f)
+        os.replace(tmp, PEERS)
+
+    def _notify(self):
+        from gi.repository import GLib
+        for fn in list(self.listeners):
+            GLib.idle_add(lambda f=fn: f() and False)
+
+    def remove(self, pid):
+        with self.lock:
+            self.peers.pop(pid, None)
+            self._save()
+        self._notify()
+
+    def start(self):
+        if self.started:
+            return
+        self.started = True
+        threading.Thread(target=self._loop, daemon=True, name="peers-sync").start()
+
+    def _loop(self):
+        time.sleep(45)
+        while True:
+            if self.peers:
+                self.sync_all()
+            time.sleep(self.EVERY)
+
+    @staticmethod
+    def _split(addr):
+        addr = addr.strip().replace("http://", "").rstrip("/")
+        host, _, port = addr.partition(":")
+        return host, int(port) if port.isdigit() else PORT
+
+    @staticmethod
+    def _post(host, port, path, body, headers=None, timeout=15):
+        import urllib.request
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        rq = urllib.request.Request(f"http://{host}:{port}{path}", data=data, headers=headers or {}, method="POST")
+        with urllib.request.urlopen(rq, timeout=timeout) as r:
+            return r.read()
+
+    def pair(self, addr, code):
+        """Koppeln (blockierend, aus einem Thread). Gibt den Namen des anderen Rechners zurück oder wirft Exception."""
+        import urllib.error
+        import urllib.request
+        host, port = self._split(addr)
+        code = "".join(c for c in code.upper() if c in ALPHA)
+        if not host or len(code) != 8:
+            raise RuntimeError("adresse und 8-stelliger code nötig")
+        try:
+            with urllib.request.urlopen(f"http://{host}:{port}/hello", timeout=6) as r:
+                hello = json.loads(r.read())
+            if hello.get("app") != "musicalist":
+                raise RuntimeError("dort läuft kein musicalist")
+            a = secrets.randbits(256)
+            A = pow(G, a, P)
+            r1 = json.loads(self._post(host, port, "/pair", {"A": format(A, "x"),
+                                                             "name": socket.gethostname().split(".")[0]}))
+            B = int(r1["B"], 16)
+            if not 1 < B < P - 1:
+                raise RuntimeError("ungültige antwort")
+            key = hashlib.sha256(_int_bytes(pow(B, a, P))).digest()
+            want = _hm(code.encode(), b"srv", _int_bytes(A), _int_bytes(B)).hex()
+            if not hmac.compare_digest(want, str(r1.get("tag"))):
+                raise RuntimeError("code falsch")
+            tag = _hm(code.encode(), b"cli", _int_bytes(A), _int_bytes(B)).hex()
+            r2 = json.loads(self._post(host, port, "/pair2", {"A": format(A, "x"), "tag": tag}))
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read()).get("error")
+            except Exception:  # noqa: BLE001
+                msg = None
+            raise RuntimeError(msg or f"fehler {e.code}") from None
+        except (urllib.error.URLError, OSError) as e:
+            raise RuntimeError(f"nicht erreichbar ({getattr(e, 'reason', e)}) – gleiches wlan? port {port} frei?") from None
+        pid = r2["id"]
+        name = str(r1.get("name") or host)[:40]
+        with self.lock:
+            self.peers[pid] = {"name": name, "host": host, "port": port, "key": key.hex(), "paired": time.time(),
+                               "last": None, "have": 0, "sent": 0, "got": 0, "dev": hello.get("dev")}
+            self._save()
+        self.start()
+        self._notify()
+        self.sync_peer(pid)
+        return name
+
+    def sync_all(self):
+        for pid in list(self.peers):
+            self.sync_peer(pid)
+
+    def sync_peer(self, pid):
+        """Eine Runde (oder mehrere, solange es mehr gibt). Gibt Zahl neuer Einträge oder None bei Fehler."""
+        d = self.peers.get(pid)
+        if d is None:
+            return None
+        j = self.p.journal
+        key = bytes.fromhex(d["key"])
+        me = engine.device_id()[:8]
+        total = 0
+        with self.lock:
+            if self.busy:
+                return None
+            self.busy = True
+        try:
+            for _ in range(20):
+                mine, nxt_sent, _more = j.lines_from(int(d.get("sent") or 0), limit=2000, skip_dev=d.get("dev"))
+                req = {"rows": mine, "have": int(d.get("have") or 0), "skip": me}
+                try:
+                    out = self._post(d["host"], d["port"], "/sync", box(key, json.dumps(req, ensure_ascii=False).encode()),
+                                     {"X-Dev": pid, "Content-Type": "application/octet-stream"}, timeout=40)
+                    res = json.loads(unbox(key, out))
+                except Exception as e:  # noqa: BLE001
+                    d["error"] = str(e)[:120]
+                    engine.log(f"pc-abgleich {d.get('name')}: {e!r}")
+                    self._notify()
+                    return None
+                added = j.merge(res.get("rows") or [])
+                total += added
+                d.update(sent=nxt_sent, have=int(res.get("next") or 0), last=time.time(), error=None,
+                         got=int(d.get("got") or 0) + added)
+                if res.get("me"):
+                    d["dev"] = res["me"]
+                with self.lock:
+                    self._save()
+                if not res.get("more") and not _more:
+                    break
+        finally:
+            self.busy = False
+        self._notify()
+        return total

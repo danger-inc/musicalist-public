@@ -66,6 +66,9 @@ class App(Gtk.Application):
         self.player.handy = handy_sync.Server(self.player)
         if engine.setting("handy_sync"):
             self.player.handy.start()
+        self.player.peers = handy_sync.Peers(self.player)
+        if self.player.peers.peers:
+            self.player.peers.start()
         import jam
         self.player.jam = jam.Jam(self.player)
         import friends

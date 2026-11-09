@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 1.37.0 (2026-11-09)
+- **Mehrere Rechner verknüpfen:** Einstellungen → „handy-app“ → **weiterer rechner**. Am einen Rechner „handy koppeln“ drücken (Adresse + Code erscheinen), am anderen Adresse und Code eintragen → „verbinden“. Danach gleichen sich die Hörprotokolle im WLAN alle 5 Minuten (und per „jetzt“) in beide Richtungen ab, sodass Hörzeit, Analyse und Rückblick auf jedem Gerät alles zusammenrechnen. Es läuft auch über Ketten (Handy – PC 1 – PC 2): jedes Gerät gibt auch Einträge anderer weiter; doppelte werden übersprungen. Gleiches verschlüsseltes Protokoll wie beim Handy, Port 37526/tcp muss am Rechner mit dem Code offen sein. Neue Einträge tragen eine Gerätemarke (`dev`).
+
 ## 1.36.0 (2026-11-09)
 - **Spotify-Import:** Einstellungen → „von spotify importieren“. Den Datenexport von Spotify (Privatsphäre → „Deine Daten herunterladen“, Kontodaten) als ZIP/Ordner wählen; Playlists und gespeicherte Titel werden gelesen, jeder Titel in YouTube Music gesucht (Abgleich von Titel und Künstler) und als private Playlist angelegt. Gleichnamige vorhandene Playlists werden nur ergänzt, Treffer werden gemerkt (Abbruch/Wiederholung ist schnell), nicht gefundene Titel stehen in `spotify_nicht_gefunden.txt`. Braucht die Anmeldung.
 

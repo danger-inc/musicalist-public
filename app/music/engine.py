@@ -1566,6 +1566,16 @@ def push_local_likes(music):
     return len(l)
 
 
+def device_id():
+    """Eigene zufällige Geräte-Kennung (bleibt; gleiche wie bei der Marmelade)."""
+    import secrets
+    d = setting("device_id")
+    if not d:
+        d = secrets.token_hex(10)
+        set_setting("device_id", d)
+    return d
+
+
 class Journal:
     """Genaues Hörprotokoll (eine JSON-Zeile je angespieltem Titel, auch kurz übersprungene). Felder:
     at/end (Beginn/Ende), id, t (Titel), a (Künstler), aid, al (Album), alid, d (Länge), p (wirklich gehörte
@@ -1685,7 +1695,7 @@ class Journal:
     def begin(self, t, player, src=None):
         """Neuer Titel beginnt (vorigen vorher mit finish() abschließen)."""
         loc = localmusic.is_local(t)
-        e = {"at": round(time.time(), 1), "id": t["videoId"], "t": t.get("title") or "?", "a": t.get("artist") or "",
+        e = {"at": round(time.time(), 1), "dev": device_id()[:8], "id": t["videoId"], "t": t.get("title") or "?", "a": t.get("artist") or "",
              "d": round(t.get("duration") or 0), "p": 0.0, "mx": 0.0, "sk": 0, "pa": 0, "ps": 0.0,
              "v": player.volume, "sh": bool(player.shuffle), "rp": player.repeat,
              "k": "lokal" if loc else ("offline" if player.offline.path(t["videoId"]) else "stream")}

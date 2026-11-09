@@ -320,15 +320,62 @@ class SettingsMixin:
         b.append(self.handy_code)
         self.handy_list = vbox(spacing=4)
         b.append(self.handy_list)
-        b.append(label("das hörprotokoll von handy und pc wird im wlan zusammengeführt – die analyse zeigt dann "
-                       "alles. auf wunsch übernimmt das handy die youtube-anmeldung von hier. alles verschlüsselt, "
+        # weitere rechner: dieser rechner verbindet sich mit einem, auf dem „handy koppeln“ gedrückt wurde
+        sep = label("weiterer rechner", "accent", xalign=0)
+        sep.set_margin_top(8)
+        b.append(sep)
+        self.peer_addr = tui.Entry("adresse des anderen rechners", width=22)
+        self.peer_code = tui.Entry("code (8 zeichen)", width=12)
+        self.peer_btn = tui.Button("󰌷 verbinden", self.peer_pair,
+                                   tooltip="Am anderen Rechner: einstellungen → „handy koppeln“ drücken,\n"
+                                           "dort erscheinen Adresse und Code. Hier eintragen.")
+        b.append(hbox(self.peer_addr, self.peer_code, self.peer_btn, spacing=8))
+        self.peer_list = vbox(spacing=4)
+        b.append(self.peer_list)
+        b.append(label("das hörprotokoll von handy und allen gekoppelten rechnern wird im wlan zusammengeführt – analyse "
+                       "und hörzeit zeigen dann alles, auch über ketten (handy–pc 1–pc 2). auf wunsch übernimmt das handy die youtube-anmeldung von hier. alles verschlüsselt, "
                        f"nur gekoppelte geräte. braucht port {self._handy_port()}/tcp in der firewall "
                        f"(z. b. sudo ufw allow {self._handy_port()}/tcp).", "dim", wrap=True, xalign=0))
         h = getattr(self.p, "handy", None)
         if h is not None:
             h.listeners.append(self.update_handy)
+        pe = getattr(self.p, "peers", None)
+        if pe is not None:
+            pe.listeners.append(self.update_peers)
         self.update_handy()
+        self.update_peers()
         return panel
+
+    def peer_pair(self):
+        pe = getattr(self.p, "peers", None)
+        if pe is None:
+            return
+        addr, code = self.peer_addr.get_text(), self.peer_code.get_text()
+        self.say("verbinde …")
+
+        def done(res):
+            if isinstance(res, Exception):
+                self.say(str(res), error=True)
+            else:
+                self.peer_code.set_text("")
+                self.say(f"mit {res} verbunden – hörprotokoll wird abgeglichen")
+        tui.background(pe.pair, addr, code, done=done)
+
+    def update_peers(self):
+        pe = getattr(self.p, "peers", None)
+        if pe is None or getattr(self, "peer_list", None) is None:
+            return False
+        tui.clear(self.peer_list)
+        for pid, d in sorted(pe.peers.items(), key=lambda kv: kv[1].get("paired") or 0):
+            last = d.get("last")
+            when = time.strftime("%d.%m. %H:%M", time.localtime(last)) if last else "noch nie"
+            info = f"⚠ {d['error']}" if d.get("error") else f"abgleich {when} · {d.get('got', 0)} einträge"
+            self.peer_list.append(hbox(
+                label(f"󰟀 {d.get('name') or 'rechner'}", hexpand=True, xalign=0, ellipsize=True),
+                label(info, "dim", ellipsize=True),
+                tui.Button("jetzt", lambda i=pid: tui.background(pe.sync_peer, i)),
+                tui.Button("entfernen", lambda i=pid: pe.remove(i), danger=True), spacing=10))
+        return False
 
     @staticmethod
     def _handy_port():
