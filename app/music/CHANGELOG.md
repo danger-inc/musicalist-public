@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 1.45.1 (2026-11-10)
+- **Playlists von Freund·innen:** Vom Handy empfohlene Playlists erscheinen als Playlist-Zeile (Chat, Eingang, Empfehlungen) und lassen sich öffnen.
+
 ## 1.45.0 (2026-11-10)
 - **Suche „alles“ (neu, Standard):** Ein Tippen sucht Titel, Alben, Künstler·innen, Playlists und Podcasts gleichzeitig. Der wahrscheinlichste Treffer steht groß oben („wahrscheinlich gemeint“) – bewertet nach Namens-Übereinstimmung, deinem Hörprotokoll und der Beliebtheit bei YouTube. Darunter ein Kasten je Art mit fünf Zeilen, „mehr“ klappt bis 15 auf. Die bisherigen Einzelsuchen (songs, alben, …) bleiben im Dropdown.
 - **Alben empfehlen:** Rechtsklick (oder langes Drücken) auf ein Album → öffnen, abspielen, anhängen, „in bibliothek speichern“ (mit Anmeldung), an alle Freunde empfehlen oder direkt an eine Person schicken. Empfohlene Alben erscheinen bei Freund·innen im Chat, im Eingang und in den Empfehlungen als Album-Zeile; Handy und PC verstehen sich dabei.

@@ -435,6 +435,9 @@ class FriendsMixin:
         """Von Freunden empfohlenes Album → Zeile (öffnen; Rechtsklick: speichern, abspielen …) oder None bei normalen Titeln."""
         if not fr.is_album(e):
             return None
+        if str(e["id"]).startswith("pl:"):
+            row = coll_row("󰲸", e.get("t") or "?", "playlist", lambda b=e["id"][3:]: self.open_detail("playlist", b[2:] if b.startswith("VL") else b))
+            return row
         alb = {"browseId": e["id"][4:], "title": e.get("t"), "artist": e.get("a"), "thumb": e.get("th")}
         row = coll_row("󰀥", e.get("t") or "?", "album", lambda b=alb["browseId"]: self.open_detail("album", b), artist=(e.get("a") or "", None))
         self.songs.attach_album(row, alb)
@@ -726,7 +729,7 @@ class FriendsMixin:
         if m.get("x"):
             item("󰆏 text kopieren", lambda: self.copy_text(m["x"], "kopiert"))
         if m.get("t") and fr.is_album(m["t"]):
-            item("󰀥 album öffnen", lambda: self.open_detail("album", m["t"]["id"][4:]))
+            item("󰀥 öffnen", lambda: self.open_detail("playlist" if str(m["t"]["id"]).startswith("pl:") else "album", m["t"]["id"].split(":", 1)[1]))
         elif m.get("t"):
             t = fr.to_track(m["t"], None if me else x["name"])
             item("󰐊 jetzt abspielen", lambda: self.p.play_tracks([t]))

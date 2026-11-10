@@ -164,7 +164,9 @@ def entry(t):
 
 
 def is_album(e):
-    return str((e or {}).get("id", "")).startswith("alb:")
+    """Album („alb:“) oder Playlist („pl:“) als Empfehlung – wird als Sammlungs-Zeile gezeigt."""
+    i = str((e or {}).get("id", ""))
+    return i.startswith("alb:") or i.startswith("pl:")
 
 
 def album_artist(alb):
