@@ -485,7 +485,50 @@ def require_login():
         ok = False
     if not ok:
         raise LoginRequired("anmeldung nicht bestätigt – bitte neu mit google anmelden")
+    pr = premium_status()
+    if pr is False:
+        raise LoginRequired("zum abspielen braucht das angemeldete konto youtube premium (oder music premium)")
+    if pr is None:
+        raise LoginRequired("youtube premium konnte nicht geprüft werden (internet? anmeldung abgelaufen?) – nochmal versuchen")
     _verified = stamp
+
+
+def premium_status():
+    """Hat das angemeldete Konto YouTube Premium? True / False / None (nicht feststellbar).
+    Gleiches Merkmal wie bei yt-dlp: auf youtube.com zeigt die Kopfzeile eines Premium-Kontos das Premium-Logo."""
+    import urllib.request
+    try:
+        cookie = browser_auth().get("cookie") or ""
+        if not cookie:
+            return None
+        if "SOCS=" not in cookie:
+            cookie += "; SOCS=CAI"          # Cookie-Hinweis in der EU nicht als Seite dazwischen
+        rq = urllib.request.Request("https://www.youtube.com/", headers={
+            "Cookie": cookie, "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"})
+        with urllib.request.urlopen(rq, timeout=15) as r:
+            html = r.read().decode("utf-8", "replace")
+        return _premium_from_page(html)
+    except Exception as e:  # noqa: BLE001
+        log(f"premium-prüfung: {e!r}")
+        return None
+
+
+def _premium_from_page(html):
+    """Aus der Startseite von youtube.com: True (Premium-Logo), False (angemeldet, normales Logo), None (nichts erkannt)."""
+    m = re.search(r"ytInitialData\s*=\s*(\{.+?\})\s*;\s*</script>", html, re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1))
+    except ValueError:
+        return None
+    tlr = ((((data.get("topbar") or {}).get("desktopTopbarRenderer") or {}).get("logo") or {}).get("topbarLogoRenderer")) or {}
+    if not tlr:
+        return None
+    tip = json.dumps(tlr.get("tooltipText") or "").lower()
+    if (tlr.get("iconImage") or {}).get("iconType") == "YOUTUBE_PREMIUM_LOGO" or "premium" in tip:
+        return True
+    return False
 
 
 def logout():

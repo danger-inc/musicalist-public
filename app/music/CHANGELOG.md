@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 1.46.1 (2026-11-10)
+- **Öffentliche Ausgabe:** Musik spielt nur noch, wenn das angemeldete Konto YouTube Premium (oder Music Premium) hat. Geprüft wird über das Premium-Logo auf youtube.com für deine Sitzung (wie yt-dlp); ist das nicht feststellbar, wird nicht gespielt. Die volle Ausgabe ist nicht betroffen.
+
 ## 1.46.0 (2026-11-10)
 - **Mein Profil:** Die Ansicht, die Freund·innen von dir haben (läuft gerade, zuletzt gehört, Empfehlungen, Hörprofil) – mit deinen Daten. Öffnen: Konto-Kasten in der Bibliothek anklicken, Kontomenü → „mein profil“ oder in der Freunde-Liste. Darunter die Profil-Einstellungen (teilen, Nutzername, Umfang, Lesebestätigungen, Rückblick-Bilder, Incognito) – sie sind aus den Einstellungen hierher gezogen; „so sehen dich Freunde“ entfällt.
 - **Rückblick-Bild:** übernimmt auch Hintergrund-, Schrift- und Linienfarbe vom App-Design der Person mit der meisten Hörzeit.

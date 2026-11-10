@@ -99,8 +99,9 @@ if it causes trouble: just leave it off.
 in the tab "bibliothek" click "mit zen/firefox anmelden": musicalist takes over the youtube session from your
 zen, firefox or librewolf profile (snap/flatpak too). log in at music.youtube.com there first.
 chrome/chromium don't work (they encrypt their cookies).
-**playback needs a login:** searching and browsing work without, but tracks only play once
-the google login is confirmed.
+**playback needs a login with YouTube Premium:** searching and browsing work without, but tracks only play
+once the google login is confirmed *and* the logged-in account has YouTube Premium (or Music Premium).
+musicalist checks this itself (same signal yt-dlp uses: the premium logo on youtube.com for your session).
 
 the login data stays local in `~/.local/share/rice-apps/music/auth` (permissions 600) and is never
 uploaded anywhere.
