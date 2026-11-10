@@ -1,5 +1,12 @@
 # musicalist – Änderungen
 
+## 1.45.0 (2026-11-10)
+- **Suche „alles“ (neu, Standard):** Ein Tippen sucht Titel, Alben, Künstler·innen, Playlists und Podcasts gleichzeitig. Der wahrscheinlichste Treffer steht groß oben („wahrscheinlich gemeint“) – bewertet nach Namens-Übereinstimmung, deinem Hörprotokoll und der Beliebtheit bei YouTube. Darunter ein Kasten je Art mit fünf Zeilen, „mehr“ klappt bis 15 auf. Die bisherigen Einzelsuchen (songs, alben, …) bleiben im Dropdown.
+- **Alben empfehlen:** Rechtsklick (oder langes Drücken) auf ein Album → öffnen, abspielen, anhängen, „in bibliothek speichern“ (mit Anmeldung), an alle Freunde empfehlen oder direkt an eine Person schicken. Empfohlene Alben erscheinen bei Freund·innen im Chat, im Eingang und in den Empfehlungen als Album-Zeile; Handy und PC verstehen sich dabei.
+- **Equalizer: eigene Voreinstellungen** – Regler einstellen, Namen eintippen, „speichern“; ✕ löscht die gewählte eigene Voreinstellung.
+- **2-Finger-Zurück:** Rahmen und Ziel-Chip bleiben beim Aufklappen deutlich länger sichtbar.
+- **Freunde:** Eine einzige Anfrage für alle (ntfy.sh-Limit) – siehe 1.44.2.
+
 ## 1.44.2 (2026-11-10)
 - **Freunde sahen sich nicht mehr:** Der Relay ntfy.sh erlaubt je Internetanschluss nur 60 Anfragen / 5 min und 250 Nachrichten / Tag; musicalist fragte je Freund einzeln ab und sendete bei jedem Titelwechsel doppelt – das Limit war schnell voll (Fehler 429), Stände kamen nicht mehr an. Jetzt: eine einzige Anfrage für alle Freunde, Abfrage alle 60 s (Chat-Eingang 12 s), nach 429 90 s Pause ohne den alten Stand zu verlieren, ein neuer Titel wird erst nach 5 s gemeldet (eine statt zwei Nachrichten), unveränderter Stand wird nicht erneut gesendet, Herzschlag alle 4 min.
 

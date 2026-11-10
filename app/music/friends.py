@@ -163,6 +163,21 @@ def entry(t):
     return {"id": t["videoId"], "t": (t.get("title") or "?")[:70], "a": (t.get("artist") or "")[:50]}
 
 
+def is_album(e):
+    return str((e or {}).get("id", "")).startswith("alb:")
+
+
+def album_artist(alb):
+    ars = [x["name"] for x in alb.get("artists") or [] if x.get("name")]
+    return ", ".join(ars) or alb.get("artist") or ""
+
+
+def album_entry(alb):
+    """Album (ytmusicapi-Treffer) → {id:"alb:<browseId>", t, a, th}. Ältere Versionen zeigen es als Titel ohne Ton."""
+    th = alb.get("thumb") or ((alb.get("thumbnails") or [{}])[-1].get("url") if alb.get("thumbnails") else "") or ""
+    return {"id": "alb:" + str(alb.get("browseId")), "t": (alb.get("title") or "?")[:70], "a": album_artist(alb)[:50], "th": th}
+
+
 def to_track(e, who=None):
     """Eintrag → engine-Titel (Quelle „freunde“)."""
     t = {"videoId": e["id"], "title": e.get("t") or "?", "artist": e.get("a") or "", "album": "", "duration": 0,
@@ -552,7 +567,7 @@ class Friends:
         lv = self.level
         o = {"k": "prof", "v": 1, "dev": engine.device_id()[:8], "name": self.name, "ts": int(time.time()), "now": now, "pl": bool(now and self._playing),
              "recent": [] if inc else [{k: r[k] for k in ("id", "t", "a")} for r in self.recent[:5]],
-             "recs": [] if lv == "minimal" else [{k: r[k] for k in ("id", "t", "a")} for r in self.recs[:6]]}
+             "recs": [] if lv == "minimal" else [{k: r[k] for k in ("id", "t", "a", "th") if k in r} for r in self.recs[:6]]}
         pf = None if inc else self.profile()
         if inc:
             o["inc"] = inc
@@ -618,6 +633,16 @@ class Friends:
         if str(t.get("videoId", "")).startswith("local:"):
             return False
         self.recs = [{**entry(t), "at": int(time.time() * 1000)}] + [r for r in self.recs if r.get("id") != t["videoId"]]
+        self.recs = self.recs[:12]
+        engine.set_setting("friends_recs", self.recs)
+        self._touch(0)
+        return True
+
+    def recommend_album(self, alb):
+        if not alb.get("browseId"):
+            return False
+        e = album_entry(alb)
+        self.recs = [{**e, "at": int(time.time() * 1000)}] + [r for r in self.recs if r.get("id") != e["id"]]
         self.recs = self.recs[:12]
         engine.set_setting("friends_recs", self.recs)
         self._touch(0)
@@ -715,22 +740,24 @@ class Friends:
                 return f
         return None
 
-    def send_msg(self, f, text="", t=None):
+    def send_msg(self, f, text="", t=None, alb=None):
         """Text und/oder Lied an einen Freund; steht sofort im eigenen Verlauf."""
         text = (text or "").strip()[:1000]
         if t is not None and str(t.get("videoId", "")).startswith("local:"):
             return False
-        if not text and t is None:
+        if not text and t is None and alb is None:
             return False
         now = int(time.time() * 1000)
         mid = secrets.token_hex(6)
-        msg = {"k": "rec" if t is not None else "msg", "from": self.name, "fid": fid(self.secret), "ts": now // 1000, "mid": mid}
+        msg = {"k": "rec" if (t is not None or alb is not None) else "msg", "from": self.name, "fid": fid(self.secret), "ts": now // 1000, "mid": mid}
         if text:
             msg["x"] = text
         item = {"mid": mid, "me": True, "at": now}
         if text:
             item["x"] = text
-        if t is not None:
+        if alb is not None:
+            msg["t"] = item["t"] = album_entry(alb)
+        elif t is not None:
             msg["t"] = entry(t)
             item["t"] = entry(t)
         self._log(f["secret"], item)

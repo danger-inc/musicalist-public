@@ -777,6 +777,13 @@ class Music:
     def dislike(self, vid, on):
         self.yt.rate_song(vid, "DISLIKE" if on else "INDIFFERENT")
 
+    def save_album(self, bid):
+        """Album in die eigene Bibliothek legen (wie „Zur Bibliothek hinzufügen“ in YT Music)."""
+        pid = self.yt.get_album(bid).get("audioPlaylistId")
+        if not pid:
+            raise RuntimeError("album nicht gefunden")
+        self.yt.rate_playlist(pid, "LIKE")
+
 
 # ---------- Songtexte ----------
 import re as _re

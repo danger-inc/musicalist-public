@@ -43,22 +43,30 @@ class SoundMixin:
                 GLib.source_remove(st["id"])
             st["id"] = GLib.timeout_add(self.EQ_DEBOUNCE_MS, commit)
 
+        def customs():
+            return dict(engine.setting("eq_custom") or {})
+
+        def opts():
+            return [(n, n) for n in audiofx.all_presets(customs())] + [("eigene", "eigene")]
+
         def paint():
             for i, (m, v) in enumerate(zip(meters, vals)):
                 g = st["eq"]["gains"][i] if i < 10 else st["eq"]["pre"]
                 m.busy_until = 0
                 m.set_value(g + audiofx.GAIN_MAX)
                 v.set_label(f"{g:+.0f} dB")
-            name = audiofx.preset_name(st["eq"]["gains"])
-            preset.set_options([(n, n) for n in audiofx.PRESETS] + [("eigene", "eigene")], name)
+            name = audiofx.preset_name(st["eq"]["gains"], customs())
+            preset.set_options(opts(), name)
+            delb.set_visible(name in customs())
 
         def on_toggle(on):
             st["eq"]["on"] = on
             changed()
 
         def on_preset(name):
-            if name in audiofx.PRESETS:
-                st["eq"]["gains"] = [float(x) for x in audiofx.PRESETS[name]]
+            allp = audiofx.all_presets(customs())
+            if name in allp:
+                st["eq"]["gains"] = [float(x) for x in allp[name]]
                 st["eq"]["on"] = True
                 chk.set_active(True)
                 paint()
@@ -75,13 +83,32 @@ class SoundMixin:
                 st["eq"]["on"] = True
                 chk.set_active(True)
             if i < 10:
-                preset.set_options([(n, n) for n in audiofx.PRESETS] + [("eigene", "eigene")],
-                                   audiofx.preset_name(st["eq"]["gains"]))
+                name = audiofx.preset_name(st["eq"]["gains"], customs())
+                preset.set_options(opts(), name)
+                delb.set_visible(name in customs())
             changed()
 
         chk = tui.Check("an", st["eq"]["on"], on_toggle, tooltip="Equalizer ein/aus")
         preset = tui.Select(on_preset, tooltip="Voreinstellung")
-        box.append(hbox(chk, label("", hexpand=True), preset, spacing=10))
+        delb = tui.Button("✕", lambda: (lambda n: (engine.set_setting("eq_custom", {k: v for k, v in customs().items() if k != n}),
+                                                  paint(), self.say(f"voreinstellung „{n}“ gelöscht")))(audiofx.preset_name(st["eq"]["gains"], customs())),
+                          danger=True, tooltip="Diese eigene Voreinstellung löschen")
+        box.append(hbox(chk, label("", hexpand=True), preset, delb, spacing=10))
+        namee = tui.Entry("name für eigene voreinstellung …", width=22)
+
+        def save_custom():
+            n = namee.get_text().strip()[:24]
+            if not n or n in audiofx.PRESETS:
+                self.say("bitte einen eigenen namen eingeben (nicht „flach“, „rock“ …)", error=True)
+                return
+            c = customs()
+            c[n] = [float(g) for g in st["eq"]["gains"]]
+            engine.set_setting("eq_custom", c)
+            namee.set_text("")
+            paint()
+            self.say(f"voreinstellung „{n}“ gespeichert")
+        namee.connect("activate", lambda *_: save_custom())
+        box.append(hbox(namee, tui.Button("speichern", save_custom, tooltip="Aktuelle Reglerstellung als eigene Voreinstellung merken"), spacing=8))
         grid = vbox(spacing=0)
         for i in range(11):
             name = (audiofx.LABELS[i] + " Hz") if i < 10 else "vorverstärker"

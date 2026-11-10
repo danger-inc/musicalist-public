@@ -33,9 +33,18 @@ def normalize(eq):
     return out
 
 
-def preset_name(gains):
+def all_presets(customs=None):
+    """Eingebaute + eigene (benannte) Voreinstellungen: Name → 10 Werte."""
+    out = dict(PRESETS)
+    for n, v in (customs or {}).items():
+        if isinstance(v, (list, tuple)) and len(v) == 10 and n not in PRESETS:
+            out[n] = [float(x) for x in v]
+    return out
+
+
+def preset_name(gains, customs=None):
     """Name des Presets, dessen Werte genau passen – sonst „eigene“."""
-    for name, vals in PRESETS.items():
+    for name, vals in all_presets(customs).items():
         if all(abs(a - b) < 0.05 for a, b in zip(gains, vals)):
             return name
     return "eigene"

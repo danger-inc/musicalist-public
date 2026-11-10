@@ -46,6 +46,54 @@ class SongMenus:
         mo.connect("leave", lambda c: self._hover(c.get_widget(), t, False))
         row.add_controller(mo)
 
+    # ---------- Album-Menü (Rechtsklick/lange drücken auf eine Album-Zeile) ----------
+    def attach_album(self, row, alb):
+        """alb: ytmusicapi-Album ({browseId,title,artists,thumbnails,year}) oder {browseId,title,artist,thumb}."""
+        click = Gtk.GestureClick(button=3)
+        click.connect("pressed", lambda g, n, x, y: (g.set_state(Gtk.EventSequenceState.CLAIMED), self.album_menu(g.get_widget(), x, y, alb)))
+        row.add_controller(click)
+        lp = Gtk.GestureLongPress()
+        lp.connect("pressed", lambda g, x, y: self.album_menu(g.get_widget(), x, y, alb))
+        row.add_controller(lp)
+
+    def album_menu(self, widget, x, y, alb):
+        import friends as fr
+        w, p = self.win, self.p
+        bid = alb.get("browseId")
+        if not bid:
+            return
+        title = alb.get("title") or "?"
+        pop = self._popover(widget, x, y)
+        main = vbox(spacing=1)
+        head = label(title, "kp-title", ellipsize=True)
+        head.set_max_width_chars(34)
+        main.append(head)
+        main.append(label(fr.album_artist(alb), "kp-sub", ellipsize=True))
+        it = lambda *a, **k: self._item(main, pop, *a, **k)
+        self._rub(main, "album")
+        it("󰀥", "album öffnen", lambda: w.open_detail("album", bid))
+
+        def tracks(fn):
+            def done(res):
+                if isinstance(res, Exception) or not res[1]:
+                    w.say("album ließ sich nicht laden", error=True)
+                else:
+                    fn(res[1])
+            tui.background(p.music.album, bid, done=done)
+        it("󰐊", "album abspielen", lambda: tracks(lambda ts: p.play_tracks(ts)))
+        it("+", "an warteschlange anhängen", lambda: tracks(lambda ts: ([p.add(dict(t)) for t in ts], w.say(f"{len(ts)} titel angehängt"))))
+        if getattr(w, "account", None) is not None:
+            it("󰋑", "in bibliothek speichern", lambda: tui.background(p.music.save_album, bid, done=lambda r: w.say(
+                f"speichern: {engine.explain(r)}" if isinstance(r, Exception) else f"„{title}“ in der bibliothek gespeichert")))
+        if getattr(p, "friends", None) is not None:
+            self._rub(main, "freunde")
+            it("󰡉", "an alle freunde empfehlen", lambda: w.say("freunde sehen: album empfohlen" + ("" if p.friends.share else " – sobald du teilen einschaltest"))
+               if p.friends.recommend_album(alb) else None)
+            for fx in p.friends.friends[:6]:
+                it("󰡉", f"direkt an {fx.get('name') or 'freund'}", lambda fx=fx: (p.friends.send_msg(fx, "", alb=alb), w.say(f"album an {fx.get('name') or 'freund'} geschickt")))
+        pop.set_child(main)
+        pop.popup()
+
     def _hover(self, w, t, on):
         tid = getattr(w, "_warm_id", None)
         if tid:

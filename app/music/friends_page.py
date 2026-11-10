@@ -365,8 +365,11 @@ class FriendsMixin:
             inbox = vbox(spacing=2)
             inbox.append(label("󰋑 für dich empfohlen", "accent"))
             for i, e in enumerate(ib):
-                t = fr.to_track(e, e["from"])
                 inbox.append(label(f"von {e['from']}", "dim"))
+                if self._album_row(e) is not None:
+                    inbox.append(self._album_row(e))
+                    continue
+                t = fr.to_track(e, e["from"])
                 inbox.append(track_row(t, lambda t=t: self.p.play_tracks([t]),
                                        [("✕", "Ausblenden", lambda i=i: (f.dismiss(i), self.fill_friends()))], menus=self.songs))
             box.append(inbox)
@@ -418,12 +421,24 @@ class FriendsMixin:
             mine = vbox(spacing=2)
             mine.append(label("󰋑 meine empfehlungen", "accent"))
             for i, r in enumerate(f.recs):
+                if self._album_row(r) is not None:
+                    mine.append(self._album_row(r))
+                    continue
                 t = fr.to_track(r)
                 row = track_row(t, lambda t=t: self.p.play_tracks([t]),
                                 [("✕", "Empfehlung zurücknehmen", lambda r=r: (f.unrecommend(r["id"]), self.fill_friends()))],
                                 menus=self.songs)
                 mine.append(row)
             box.append(mine)
+
+    def _album_row(self, e):
+        """Von Freunden empfohlenes Album → Zeile (öffnen; Rechtsklick: speichern, abspielen …) oder None bei normalen Titeln."""
+        if not fr.is_album(e):
+            return None
+        alb = {"browseId": e["id"][4:], "title": e.get("t"), "artist": e.get("a"), "thumb": e.get("th")}
+        row = coll_row("󰀥", e.get("t") or "?", "album", lambda b=alb["browseId"]: self.open_detail("album", b), artist=(e.get("a") or "", None))
+        self.songs.attach_album(row, alb)
+        return row
 
     @staticmethod
     def _now_text(x, f):
@@ -658,10 +673,11 @@ class FriendsMixin:
             col.append(bub)
             targets.append(bub)
         if m.get("t"):
-            t = fr.to_track(m["t"], None if me else x["name"])
+            arow = self._album_row(m["t"])
+            t = None if arow is not None else fr.to_track(m["t"], None if me else x["name"])
             if not m.get("x"):
                 col.append(label("du empfiehlst" if me else "empfiehlt", "dim", xalign=1.0 if me else 0.0))
-            row = track_row(t, lambda t=t: self.p.play_tracks([t]),
+            row = arow if arow is not None else track_row(t, lambda t=t: self.p.play_tracks([t]),
                             [("+", "An Warteschlange anhängen", lambda t=t: self.p.add(t)),
                              ("»", "Als nächstes spielen", lambda t=t: self.p.add(t, next_=True))], menus=self.songs)
             wrap = Gtk.Box()
@@ -709,7 +725,9 @@ class FriendsMixin:
             box.append(b)
         if m.get("x"):
             item("󰆏 text kopieren", lambda: self.copy_text(m["x"], "kopiert"))
-        if m.get("t"):
+        if m.get("t") and fr.is_album(m["t"]):
+            item("󰀥 album öffnen", lambda: self.open_detail("album", m["t"]["id"][4:]))
+        elif m.get("t"):
             t = fr.to_track(m["t"], None if me else x["name"])
             item("󰐊 jetzt abspielen", lambda: self.p.play_tracks([t]))
             item("» als nächstes", lambda: self.p.add(t, next_=True))
@@ -835,10 +853,16 @@ class FriendsMixin:
                 continue
             sec = vbox(spacing=2)
             sec.append(label(f"{title} · {len(items)}", "accent"))
-            tracks = [fr.to_track(m["t"], x["name"]) for m in items]
-            for i, (m, t) in enumerate(zip(items, tracks)):
+            tracks = [fr.to_track(m["t"], x["name"]) for m in items if not fr.is_album(m["t"])]
+            ti = -1
+            for m in items:
                 sec.append(label(time.strftime("%d.%m.%Y, %H:%M", time.localtime((m.get("at") or 0) / 1000)) +
                                  (" · gelesen" if mine and m.get("rd") else ""), "dim"))
+                if fr.is_album(m["t"]):
+                    sec.append(self._album_row(m["t"]))
+                    continue
+                ti += 1
+                i, t = ti, tracks[ti]
                 sec.append(track_row(t, lambda i=i, tr=tracks: self.p.play_tracks(tr, start=i),
                                      [("+", "An Warteschlange anhängen", lambda t=t: self.p.add(t)),
                                       ("»", "Als nächstes spielen", lambda t=t: self.p.add(t, next_=True))], menus=self.songs))
@@ -914,7 +938,10 @@ class FriendsMixin:
             if not items:
                 return
             card.append(label(title, "dim"))
-            tracks = [fr.to_track(r, x["name"]) for r in items]
+            for r in items:
+                if self._album_row(r) is not None:
+                    card.append(self._album_row(r))
+            tracks = [fr.to_track(r, x["name"]) for r in items if not fr.is_album(r)]
             for i, t in enumerate(tracks):
                 card.append(track_row(t, lambda i=i, tr=tracks: self.p.play_tracks(tr, start=i),
                                       [("+", "An Warteschlange anhängen", lambda t=t: self.p.add(t)),

@@ -8,6 +8,7 @@ from tui import label, hbox, vbox, esc
 import engine
 from engine import fmt
 import localmusic
+import searchrank
 from rows import track_row, coll_row, artist_link
 from widgets import Cover, preview_supported, DESK_POS
 
@@ -26,7 +27,7 @@ class SearchMixin:
         qk.connect("key-pressed", self.on_query_key)
         self.query.add_controller(qk)
         self.kind = tui.Select(lambda k: (self.kind.set_options(self.kind.options, k), self.do_search(now=True)))
-        self.kind.set_options([(k, k) for k in ("songs", "alben", "playlists", "künstler", "videos", "podcasts", "lokal", "meine")], "songs")
+        self.kind.set_options([(k, k) for k in ("alles", "songs", "alben", "playlists", "künstler", "videos", "podcasts", "lokal", "meine")], "alles")
         self.sugg_row = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=4, row_spacing=2,
                                     max_children_per_line=12, homogeneous=False, halign=Gtk.Align.START)
         self.sugg_row.add_css_class("opts")
@@ -34,11 +35,14 @@ class SearchMixin:
         self.sugg_row.set_visible(False)
         page.append(tui.Panel("󰍉 suche", vbox(hbox(label("/", "accent"), self.query, self.kind, spacing=10),
                                               self.sugg_row, spacing=4)))
-        self.top_panel = tui.Panel("bester treffer")
+        self.top_panel = tui.Panel("wahrscheinlich gemeint")
         self.top_box = vbox(spacing=0)
         self.top_panel.body.append(self.top_box)
         self.top_panel.set_visible(False)
         page.append(self.top_panel)
+        self.all_box = vbox(spacing=8)          # Kästen je Art (Suche „alles“)
+        self.all_box.set_visible(False)
+        page.append(self.all_box)
         self.albums_panel = tui.Panel("alben")
         self.albums_box = vbox(spacing=0)
         self.albums_panel.body.append(self.albums_box)
@@ -137,6 +141,15 @@ class SearchMixin:
         gen = self.search_gen
         key = (q.lower(), kind)
         hit = self.search_cache.get(key)
+        if kind != "alles":
+            self.all_box.set_visible(False)
+        if kind == "alles":                  # alles parallel; wahrscheinlichster Treffer groß, Rest in Kästen
+            self.results_panel.set_visible(False)
+            self.albums_panel.set_visible(False)
+            self.top_panel.set_visible(False)
+            self.shown_q = (q, kind)
+            self.search_all(q, gen)
+            return
         if kind == "meine":                  # kein Netz: Verlauf, Bibliothek, offline, lokal
             self.top_panel.set_visible(False)
             self.albums_panel.set_visible(False)
@@ -183,6 +196,129 @@ class SearchMixin:
             self.top_panel.set_visible(False)
             self.albums_panel.set_visible(False)
 
+    # ---------- „alles“: wahrscheinlichster Treffer + Kästen je Art ----------
+    FOLD, MAXROWS = 5, 15
+
+    def search_all(self, q, gen):
+        m = self.p.music
+        hit = self.search_cache.get((q.lower(), "alles"))
+        if hit and time.monotonic() - hit[0] < 600:
+            return self.show_all(hit[1], q, gen)
+
+        def work():
+            import concurrent.futures as cf
+            jobs = {"song": "songs", "album": "alben", "artist": "künstler", "playlist": "playlists", "podcast": "podcasts"}
+            with cf.ThreadPoolExecutor(5) as ex:
+                futs = {k: ex.submit(m.search, q, v) for k, v in jobs.items()}
+            out = {}
+            for k, f in futs.items():
+                try:
+                    out[k] = f.result(timeout=25) or []
+                except Exception:  # noqa: BLE001
+                    out[k] = []
+            return out
+
+        def done(res):
+            if not isinstance(res, Exception):
+                self.search_cache[(q.lower(), "alles")] = (time.monotonic(), res)
+            self.show_all(res, q, gen)
+        self.all_box.set_visible(True)
+        tui.clear(self.all_box)
+        self.all_box.append(label(f"sucht „{q}“ …", "dim", xalign=0))
+        tui.background(work, done=done)
+
+    @staticmethod
+    def _names(r):
+        return ", ".join(a["name"] for a in r.get("artists") or [] if a.get("name"))
+
+    def show_all(self, res, q, gen):
+        if gen != self.search_gen:
+            return
+        tui.clear(self.all_box)
+        if isinstance(res, Exception):
+            self.say(f"suche: {engine.explain(res)}", error=True)
+            self.all_box.set_visible(False)
+            return
+        st = searchrank.stats(list(self.p.stats.rows)) if getattr(self.p, "stats", None) else ({}, {})
+        cands = []                                   # (punkte, art, ergebnis)
+        for kind, lst in res.items():
+            for i, r in enumerate(lst):
+                name = r.get("artist") if kind == "artist" else r.get("title")
+                sub = self._names(r) or (r.get("author") if isinstance(r.get("author"), str) else "")
+                if not name:
+                    continue
+                ident = r.get("videoId") or r.get("browseId") or ""
+                cands.append((searchrank.score(q, kind, name, sub, i, ident, st), kind, r))
+        if not cands:
+            self.all_box.append(label("nichts gefunden", "empty", xalign=0.5))
+            self.all_box.set_visible(True)
+            return
+        cands.sort(key=lambda c: -c[0])
+        top = next((c for c in cands if c[1] != "podcast"), cands[0])
+        if top[1] != "podcast":
+            r = dict(top[2])
+            r.setdefault("resultType", top[1])
+            self.show_top(r, q, gen)
+        topid = top[2].get("videoId") or top[2].get("browseId")
+        order = []
+        for _s, kind, _r in cands:
+            if kind not in order:
+                order.append(kind)
+        titles = {"song": "󰝚 titel", "album": "󰀥 alben", "artist": "󰠃 künstler", "playlist": "󰲸 playlists", "podcast": "󰦖 podcasts"}
+        for kind in order:
+            rows = [r for r in res.get(kind, []) if (r.get("videoId") or r.get("browseId")) != topid][:self.MAXROWS]
+            if not rows:
+                continue
+            widgets = self._all_rows(kind, rows)
+            panel = tui.Panel()
+            panel.set_title(f"{titles[kind]} <span alpha='60%'>{len(widgets)}</span>", markup=True)
+            col = vbox(spacing=0)
+            for w in widgets[:self.FOLD]:
+                col.append(w)
+            if len(widgets) > self.FOLD:
+                extra = vbox(spacing=0)
+                for w in widgets[self.FOLD:]:
+                    extra.append(w)
+                rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN, transition_duration=220, child=extra)
+                btn = tui.Button(f"mehr ({len(widgets) - self.FOLD})", None)
+
+                def toggle(rev=rev, btn=btn, n=len(widgets) - self.FOLD):
+                    on = not rev.get_reveal_child()
+                    rev.set_reveal_child(on)
+                    btn.set_label("weniger" if on else f"mehr ({n})")
+                btn.connect("clicked", lambda *_: toggle())
+                col.append(rev)
+                col.append(hbox(btn, spacing=8))
+            panel.body.append(col)
+            self.all_box.append(panel)
+        self.all_box.set_visible(True)
+
+    def _all_rows(self, kind, rows):
+        out = []
+        if kind == "song":
+            tracks = [t for t in map(engine.track, rows) if t]
+            return [self.song_row(t, tracks) for t in tracks]
+        for a in rows:
+            ars = [x for x in a.get("artists") or [] if x.get("name")]
+            artist = (", ".join(x["name"] for x in ars), next((x.get("id") for x in ars if x.get("id")), None))
+            if kind == "album" and a.get("browseId"):
+                row = coll_row("󰀥", a.get("title", "?"), str(a.get("year") or ""),
+                               lambda b=a["browseId"]: self.open_detail("album", b), artist=artist)
+                self.songs.attach_album(row, a)
+            elif kind == "artist" and a.get("browseId"):
+                row = coll_row("󰠃", a.get("artist", "?"), a.get("subscribers") or "", lambda b=a["browseId"]: self.open_detail("artist", b))
+            elif kind == "playlist" and a.get("browseId"):
+                row = coll_row("󰲸", a.get("title", "?"), f"{a.get('author', '')} · {a.get('itemCount', '')}",
+                               lambda b=a["browseId"]: self.open_detail("playlist", b[2:] if b.startswith("VL") else b))
+            elif kind == "podcast" and (a.get("browseId") or a.get("playlistId")):
+                au = a.get("author")
+                row = coll_row("󰦖", a.get("title", "?"), au.get("name", "") if isinstance(au, dict) else str(au or ""),
+                               lambda b=(a.get("browseId") or a.get("playlistId")): self.open_detail("podcast", b))
+            else:
+                continue
+            out.append(row)
+        return out
+
     def show_albums(self, res, gen):
         if gen != self.search_gen:
             return
@@ -197,6 +333,7 @@ class SearchMixin:
             row = coll_row("󰀥", a.get("title", "?"), " · ".join(x for x in (a.get("type"), str(a.get("year") or "")) if x),
                            lambda b=a["browseId"]: self.open_detail("album", b),
                            artist=(", ".join(x["name"] for x in ars), next((x.get("id") for x in ars if x.get("id")), None)))
+            self.songs.attach_album(row, a)
             head = row.get_first_child().get_child()
             head.prepend(label("ALBUM", "album-badge"))
             self.albums_box.append(row)
@@ -310,10 +447,11 @@ class SearchMixin:
         elif kind == "alben":
             for a in res:
                 ars = [x for x in a.get("artists") or [] if x.get("name")]
-                self.results.append(coll_row("󰀥", a.get("title", "?"), str(a.get("year") or ""),
+                self.results.append(row := coll_row("󰀥", a.get("title", "?"), str(a.get("year") or ""),
                                              lambda b=a["browseId"]: self.open_detail("album", b),
                                              artist=(", ".join(x["name"] for x in ars),
                                                      next((x.get("id") for x in ars if x.get("id")), None))))
+                self.songs.attach_album(row, a)
         elif kind == "playlists":
             for pl in res:
                 self.results.append(coll_row("󰲸", pl.get("title", "?"),
