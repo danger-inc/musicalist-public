@@ -55,62 +55,13 @@ class SettingsMixin:
                                         "An: das Fenster verschwindet nur, die Musik läuft weiter.")
         self.bg_chk.set_margin_top(10)
         panel.body.append(self.bg_chk)
-        self.fr_chk = tui.Check("meinen stand mit freunden teilen", getattr(self.p.friends, "share", True) if getattr(self.p, "friends", None) else True,
-                                lambda on: self.p.friends.set_share(on) if getattr(self.p, "friends", None) else None,
-                                tooltip="Was läuft, zuletzt gehört, Empfehlungen, Wochenprofil – nur für Freunde mit deinem Code (Bibliothek → freunde).")
-        self.fr_chk.set_margin_top(10)
-        panel.body.append(self.fr_chk)
-        fr_ = getattr(self.p, "friends", None)
-        if fr_ is not None:
-            nm_row = hbox(label("nutzername:", "dim"), label("", "accent"), tui.Button("✎ ändern", lambda: self.ask_username()), spacing=8)
-            self.fr_name_lbl = nm_row.get_first_child().get_next_sibling()
-            self.fr_name_lbl.set_label(fr_.name if fr_.named else "noch keiner")
-            panel.body.append(nm_row)
-            panel.body.append(label("umfang – was freunde sehen", "dim", xalign=0))
-            self.fr_lv_row = hbox(spacing=6)
-            self.fr_lv_btns = {}
-
-            def paint_lv():
-                for k, b in self.fr_lv_btns.items():
-                    (b.add_css_class if k == fr_.level else b.remove_css_class)("on")
-            for k in fr_.LEVELS:
-                b = tui.Button(k, lambda k=k: (fr_.set_level(k), paint_lv()))
-                self.fr_lv_btns[k] = b
-                self.fr_lv_row.append(b)
-            paint_lv()
-            panel.body.append(self.fr_lv_row)
-            panel.body.append(label("minimal: läuft gerade, letzte 5 titel, hörzeit der woche · normal: dazu empfehlungen, top künstler/titel, "
-                                    "lieblingsstunde, skip-rate · mehr: dazu typ, vielfalt, wiederholer, neue künstler, durchhör-quote, serie.",
-                                    "dim", wrap=True, xalign=0))
-            panel.body.append(tui.Check("lesebestätigungen senden („gelesen“ bei den anderen)", fr_.read_receipts,
-                                        lambda on: fr_.set_read_receipts(on)))
-            rc_ = getattr(fr_, "recaps", None)
-            if rc_ is not None:
-                panel.body.append(label("󰄨 rückblick-bilder: sonntags ein wochenbild, am monatsletzten ein monatsbild, an silvester ein jahresbild", "dim", wrap=True, xalign=0))
-                panel.body.append(tui.Check("bilder automatisch herunterladen (~/Pictures/musicalist)", rc_.auto, lambda on: rc_.set_auto(on)))
-
-                def test_recap():
-                    def done(res):
-                        if isinstance(res, Exception):
-                            self.say(f"rückblick: {res}", error=True)
-                        else:
-                            self.say("fertig – unter freunde → 󰄨 rückblicke" if res else "noch keine zahlen für diese woche")
-                    tui.background(lambda: rc_.make("w", force=True), done=done)
-                panel.body.append(hbox(tui.Button("󰄨 wochenbild jetzt testweise", test_recap), spacing=8))
-            panel.body.append(label("󰗹 incognito – andere sehen nicht, was du hörst (nur dass du incognito bist)", "dim", xalign=0))
-            self.fr_inc_state = label("", "dim", wrap=True, xalign=0)
-
-            def paint_inc():
-                u = fr_.inc_until
-                self.fr_inc_state.set_label("aus." if not u else ("an, bis du es ausschaltest." if u == 1
-                                            else f"an bis {time.strftime('%H:%M', time.localtime(u))}."))
-            inc_row = hbox(spacing=6)
-            for txt, mins in (("15 min", 15), ("30 min", 30), ("bis ich ausschalte", 0)):
-                inc_row.append(tui.Button(txt, lambda m=mins: (fr_.set_incognito(m), paint_inc())))
-            inc_row.append(tui.Button("aus", lambda: (fr_.set_incognito(None), paint_inc())))
-            paint_inc()
-            panel.body.append(inc_row)
-            panel.body.append(self.fr_inc_state)
+        if getattr(self.p, "friends", None) is not None:
+            self.fr_name_lbl = None
+            prof = tui.Button("󰀄 profil & freunde-einstellungen", lambda: self.open_profile(),
+                              tooltip="Teilen, Nutzername, Umfang, Incognito und Rückblick-Bilder stehen jetzt im Profil.")
+            prof.set_margin_top(10)
+            prof.set_halign(Gtk.Align.START)
+            panel.body.append(prof)
         panel.body.append(label("aus: ✕ / q beendet musicalist, die musik stoppt. an: nur das fenster geht zu.",
                                 "dim", wrap=True, xalign=0))
         self.hist_chk = tui.Check("hörverlauf führen", engine.setting("history"), self.set_history,

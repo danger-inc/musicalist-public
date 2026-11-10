@@ -609,6 +609,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
             item("󰑐", "anmeldung neu einlesen", self.login)
         else:
             item("󰍂", "mit zen / firefox anmelden", self.login)
+        if self.fr is not None:
+            item("󰀄", "mein profil", self.open_profile)
         rub("bibliothek")
         if on:
             item("󰋑", "lieblingssongs", lambda: self.open_detail("playlist", "LM"))
@@ -718,6 +720,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
             return self.detail_names.get(loc[1:], self.DETAIL_NAMES.get(loc[1], "playlist"))
         if loc[0] == "fr" and loc[1] == "recaps":
             return "rückblicke"
+        if loc[0] == "fr" and loc[1] == "me":
+            return "mein profil"
         if loc[0] == "fr":
             fx = next((x for x in (self.fr.friends if self.fr else []) if x["secret"] == loc[2]), None)
             return (fx["name"] if fx else "freunde") + (" · profil" if loc[1] == "profile" else "")

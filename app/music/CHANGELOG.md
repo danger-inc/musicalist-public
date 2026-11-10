@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 1.46.0 (2026-11-10)
+- **Mein Profil:** Die Ansicht, die Freund·innen von dir haben (läuft gerade, zuletzt gehört, Empfehlungen, Hörprofil) – mit deinen Daten. Öffnen: Konto-Kasten in der Bibliothek anklicken, Kontomenü → „mein profil“ oder in der Freunde-Liste. Darunter die Profil-Einstellungen (teilen, Nutzername, Umfang, Lesebestätigungen, Rückblick-Bilder, Incognito) – sie sind aus den Einstellungen hierher gezogen; „so sehen dich Freunde“ entfällt.
+- **Rückblick-Bild:** übernimmt auch Hintergrund-, Schrift- und Linienfarbe vom App-Design der Person mit der meisten Hörzeit.
+- Abstürze (Segfault/abort) landen mit Python-Stapel in rice-music.log.
+
 ## 1.45.1 (2026-11-10)
 - **Playlists von Freund·innen:** Vom Handy empfohlene Playlists erscheinen als Playlist-Zeile (Chat, Eingang, Empfehlungen) und lassen sich öffnen.
 

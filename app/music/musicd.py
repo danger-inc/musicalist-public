@@ -269,6 +269,11 @@ def claim_port():
 
 
 if __name__ == "__main__":
+    try:                                  # harte Abstürze (Segfault/abort) mit Python-Stapel in rice-music.log festhalten
+        import faulthandler
+        faulthandler.enable()
+    except Exception:  # noqa: BLE001
+        pass
     if engine.IS_WIN:
         claim_port()
     app = App("--show" in sys.argv)

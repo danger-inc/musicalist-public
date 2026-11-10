@@ -84,6 +84,33 @@ def own_accent():
     return ""
 
 
+def own_palette():
+    """Ganze Palette des aktuellen App-Designs: Akzent, Hintergrund, Schrift, Linie als #rrggbb."""
+    out = {}
+    try:
+        import tui
+        cs = tui.colors()
+        for key, name in (("ac", "primary"), ("bg", "background"), ("fg", "foreground"), ("ln", "outline")):
+            c = cs.get(name)
+            if c is not None:
+                out[key] = "#%02x%02x%02x" % (round(c.red * 255), round(c.green * 255), round(c.blue * 255))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def mix(a, b, t):
+    return tuple(a[i] * (1 - t) + b[i] * t for i in range(3)) + (1.0,)
+
+
+def palette(win, ac, hue):
+    """(bg, fg, dim, line) – aus dem Design des Meisthörers, sonst aus dem Akzent abgeleitet."""
+    bg, fg = win.get("bg"), win.get("fg")
+    if not bg or not fg:
+        return hsl(hue, .22, .07), hsl(hue, .12, .9), hsl(hue, .10, .58), hsl(hue, .14, .22)
+    return bg, fg, mix(bg, fg, .58), (win.get("ln") and mix(bg, win["ln"], .8)) or mix(bg, fg, .16)
+
+
 def collect(fr, kind):
     """Zahlen des laufenden Zeitraums für dich und deine Freunde → dict oder None. kind = w | m | y."""
     import analyse
@@ -94,7 +121,7 @@ def collect(fr, kind):
     if not r.get("empty") and r["base"]["secs"] > 0:
         a0 = (r.get("artists") or [None])[0]
         t0 = (r.get("tracks") or [None])[0]
-        people.append({"name": fr.name, "ac": parse_hex(own_accent()), "hm": round(r["base"]["secs"] / 60),
+        people.append({"name": fr.name, "ac": parse_hex(own_accent()), **{k: parse_hex(v) for k, v in own_palette().items() if k != "ac"}, "hm": round(r["base"]["secs"] / 60),
                        "n": r["base"]["tracks"], "ar": r["base"]["artists"],
                        "artist": (a0["name"], round(a0["secs"] / 60)) if a0 else None,
                        "song": {"t": t0["t"], "a": t0["a"], "n": t0["plays"], "id": t0.get("id")} if t0 else None, "me": True})
@@ -119,7 +146,8 @@ def collect(fr, kind):
             artist = (a["n"], a["m"]) if a else None
             s = src.get("s")
             song = {"t": s["t"], "a": s["a"], "n": s["n"], "id": s.get("i")} if s else None
-        people.append({"name": x["name"], "ac": parse_hex(pf.get("ac")), "hm": hm, "n": src.get("n"), "ar": src.get("ar"),
+        people.append({"name": x["name"], "ac": parse_hex(pf.get("ac")), "bg": parse_hex(pf.get("bg")), "fg": parse_hex(pf.get("fg")),
+                       "ln": parse_hex(pf.get("ln")), "hm": hm, "n": src.get("n"), "ar": src.get("ar"),
                        "artist": artist, "song": song, "me": False})
     if not people:
         return None
@@ -269,14 +297,14 @@ def _footer(cr, pen, win, ac, dim, label):
 
 
 def terminal(cr, pen, d, win, ac, hue, grid):
-    bg, fg, dim, line = hsl(hue, .22, .07), hsl(hue, .12, .9), hsl(hue, .10, .58), hsl(hue, .14, .22)
+    bg, fg, dim, line = palette(win, ac, hue)
     cr.set_source_rgba(*bg)
     cr.paint()
     pen.text("MUSICALIST", 6.5, 9, 2.5, dim, spacing=.14)
     pen.text(f"{d['label'].split(' ·')[0].upper()} · {d['range'].upper()}", 93.5, 9, 2.5, dim, spacing=.14, right=True, max_u=70)
     pen.text("wochenrückblick", 6.5, 20, 8.6, ac, bold=True, spacing=-.04)
     top, sz = 25, 36
-    draw_dots(cr, grid, 6.5 * U, top * U, sz * U, ac, bg, hsl(hue, .14, .2))
+    draw_dots(cr, grid, 6.5 * U, top * U, sz * U, ac, bg, line)
     mx, mw = 48, 45.5
     pen.text("meistgehört", mx, top + 4, 2.6, dim)
     s = win.get("song")
@@ -292,24 +320,29 @@ def terminal(cr, pen, d, win, ac, hue, grid):
 
 
 def poster(cr, pen, d, win, ac, hue, grid):
-    ink = hsl(hue, .45, .09) if light_of(ac) > .55 else hsl(hue, .30, .97)
-    cr.set_source_rgba(*ac)
+    if win.get("bg") and win.get("fg"):
+        pbg, ink = win["bg"], win["fg"]
+        pac, disc, numc = ac, mix(pbg, ink, .12), ac
+    else:
+        ink = hsl(hue, .45, .09) if light_of(ac) > .55 else hsl(hue, .30, .97)
+        pbg, pac, disc, numc = ac, ac, ink, ink
+    cr.set_source_rgba(*pbg)
     cr.paint()
     pen.text(f"MUSICALIST · {d['label'].upper()}", 6, 9, 2.6, ink, spacing=.14, max_u=88)
     pen.text("hörte am meisten", 6, 17, 2.6, alpha(ink, .75), spacing=.1)
     pen.text(win["name"], 6, 23.5, 5.6, ink, bold=True, spacing=-.02, max_u=60)
     num = str(win["hm"] // 60)
     size = min(46, 84 / (len(num) * .6 + .45))
-    pen.text(num, 4.2, 58, size, ink, bold=True, spacing=-.06)
-    pen.text("h", 4.2 + pen.width(num, size, True, -.06) + 1, 58, size * .3, ink, bold=True)
+    pen.text(num, 4.2, 58, size, numc, bold=True, spacing=-.06)
+    pen.text("h", 4.2 + pen.width(num, size, True, -.06) + 1, 58, size * .3, numc, bold=True)
     pen.text(f"{win['hm'] % 60} min dazu", 6, 65, 3, ink, spacing=.1)
     rect(cr, 6, 66.6, 9, .45, ink)
     r, cx, cy = 13, 84, 76
     cr.set_source_rgba(0, 0, 0, .27)
     cr.arc(cx * U, (cy + .6) * U, r * U, 0, 2 * math.pi)
     cr.fill()
-    draw_dots(cr, grid, (cx - r) * U, (cy - r) * U, 2 * r * U, ac, ink, alpha(ac, .35), circle=True)
-    cr.set_source_rgba(*ac)
+    draw_dots(cr, grid, (cx - r) * U, (cy - r) * U, 2 * r * U, pac, disc, alpha(pac, .35), circle=True)
+    cr.set_source_rgba(*pbg)
     cr.arc(cx * U, cy * U, 1.8 * U, 0, 2 * math.pi)
     cr.fill()
     s = win.get("song")
@@ -328,7 +361,7 @@ def poster(cr, pen, d, win, ac, hue, grid):
 
 
 def year(cr, pen, d, win, ac, hue, grid):
-    bg, fg, dim, line = hsl(hue, .22, .07), hsl(hue, .12, .9), hsl(hue, .10, .58), hsl(hue, .14, .22)
+    bg, fg, dim, line = palette(win, ac, hue)
     cr.set_source_rgba(*bg)
     cr.paint()
     pen.text("MUSICALIST", 6.5, 9, 2.5, dim, spacing=.14)
@@ -337,7 +370,7 @@ def year(cr, pen, d, win, ac, hue, grid):
     size = min(34, 58 / (len(num) * .6 + .5))
     pen.text(num, 5.5, 37, size, ac, bold=True, spacing=-.06)
     pen.text("h", 5.5 + pen.width(num, size, True, -.06) + .8, 37, size * .3, ac, bold=True)
-    draw_dots(cr, grid, 66 * U, 14 * U, 27.5 * U, ac, bg, hsl(hue, .14, .2))
+    draw_dots(cr, grid, 66 * U, 14 * U, 27.5 * U, ac, bg, line)
     pen.text(f"{win['name']} hörte am meisten", 6.5, 46, 3.2, fg, bold=True, max_u=85)
     s = win.get("song")
     if s:

@@ -267,6 +267,12 @@ class FriendsMixin:
                 return self._fr_goto(view)
             self.fill_friends()
 
+    def open_profile(self):
+        """Eigenes Profil (aus Bibliothek-Konto, Kontomenü oder Freunde-Liste)."""
+        self.show_tab("stats")
+        self.hear_select("friends")
+        self._fr_goto(("me", "-"))
+
     def _fr_goto(self, view, note=True):
         """None = Liste · ("chat", code) · ("profile", code)."""
         self._fr_view = view
@@ -299,6 +305,8 @@ class FriendsMixin:
         view = getattr(self, "_fr_view", None)
         if view and view[0] == "recaps":
             return self._fill_recaps()
+        if view and view[0] == "me":
+            return self._fill_me()
         x = next((x for x in f.friends if view and x["secret"] == view[1]), None)
         if view and x is None:
             view = self._fr_view = None
@@ -323,42 +331,14 @@ class FriendsMixin:
             b.connect("clicked", lambda *_: self._fr_goto(("recaps", "-")))
             box.append(b)
         box.append(self._top_list())
-        # --- ich ---
-        me = vbox(spacing=6)
-        me.append(label("ich", "accent"))
-        chk = tui.Check("meinen stand teilen (läuft gerade, zuletzt gehört, empfehlungen)", f.share,
-                        lambda on: (f.set_share(on), self.fill_friends()))
-        me.append(chk)
-        me.append(label("freunde mit deinem code sehen, was du hörst." if f.share
-                        else "aus – niemand sieht etwas. mit einschalten wird dein code aktiv.", "dim", wrap=True))
-        me.append(label("umfang und incognito stellst du in den einstellungen ein.", "dim", wrap=True))
-        # Nutzername statt Code: so finden dich Freunde (gekoppelte Geräte teilen denselben Namen)
-        me.append(label("dein nutzername", "dim"))
-        nm = label("", "accent")
-        nm.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(f.name)}</span>")
-        me.append(nm)
-        me.append(hbox(tui.Button("✎ ändern", self.ask_username), spacing=8))
-        me.append(label("freunde suchen dich mit diesem namen und schicken dir eine anfrage, die du bestätigst.", "dim", wrap=True))
-        seen = vbox(spacing=2)
-
-        def toggle_seen():
-            self._fr_seen = not getattr(self, "_fr_seen", False)
-            self.fill_friends()
-        seen.append(hbox(tui.Button(("‹ so sehen dich freunde" if getattr(self, "_fr_seen", False) else "󰈈 so sehen dich freunde"),
-                                    toggle_seen), spacing=8))
-        if getattr(self, "_fr_seen", False):
-            p = f._payload()
-            seen.append(label("teilen ist an." if f.share else "teilen ist aus – im moment sieht niemand etwas.", "dim"))
-            if p.get("now"):
-                seen.append(label(("spielt gerade: " if p["pl"] else "zuletzt: ") + f"{p['now']['t']} – {p['now']['a']}", "dim", wrap=True))
-            if p["recent"]:
-                seen.append(label("zuletzt gehört: " + " · ".join(r["t"] for r in p["recent"]), "dim", wrap=True))
-            if p["recs"]:
-                seen.append(label("empfehlungen: " + " · ".join(r["t"] for r in p["recs"]), "dim", wrap=True))
-            for ln in prof_lines(p["pf"]) if p.get("pf") else []:
-                seen.append(label(ln, "dim", wrap=True))
-        me.append(seen)
-        box.append(me)
+        # --- ich: eigenes Profil (gleiche Ansicht wie bei Freunden, plus Profil-Einstellungen) ---
+        mb = Gtk.Button(hexpand=True)
+        mb.add_css_class("rowhead")
+        mb.set_child(hbox(vbox(label("󰀄 mein profil", "accent"),
+                               label(f"{f.name} · " + ("teilen an" if f.share else "teilen aus") + " – ansehen und einstellen", "dim", wrap=True),
+                               spacing=2), label("›", "accent"), spacing=10))
+        mb.connect("clicked", lambda *_: self.open_profile())
+        box.append(mb)
         # --- Eingang: direkt geschickte Empfehlungen ---
         ib = f.inbox
         if ib:
@@ -871,6 +851,86 @@ class FriendsMixin:
                                       ("»", "Als nächstes spielen", lambda t=t: self.p.add(t, next_=True))], menus=self.songs))
             box.append(sec)
 
+    def _fill_me(self):
+        """Mein Profil: genau die Ansicht, die Freunde von mir haben – darunter die Profil-Einstellungen."""
+        f, box = self.fr, self.fr_body
+        box.append(hbox(tui.Button("‹ freunde", lambda: self._fr_goto(None)), label("", hexpand=True), spacing=8))
+        p = f._payload()
+        inc = bool(f.inc_until)
+        pr = {"now": p.get("now"), "pl": p.get("pl"), "recent": p.get("recent") or [], "recs": p.get("recs") or [],
+              "pf": p.get("pf"), "inc": p.get("inc")}
+        me = {"name": f.name, "prof": pr, "at": int(time.time() * 1000), "secret": "-"}
+        if not f.share:
+            box.append(label("teilen ist aus – so siehst nur du dein profil, freunde sehen nichts.", "dim", wrap=True))
+        elif inc:
+            box.append(label("incognito an – freunde sehen nur, dass du incognito bist.", "dim", wrap=True))
+        box.append(self._friend_card(me, me=True))
+        box.append(self._me_settings())
+
+    def _me_settings(self):
+        f = self.fr
+        sb = vbox(spacing=6)
+        sb.set_margin_top(10)
+        sb.append(label("profil-einstellungen", "accent"))
+        sb.append(tui.Check("meinen stand mit freunden teilen (läuft gerade, zuletzt gehört, empfehlungen)", f.share,
+                            lambda on: (f.set_share(on), self.fill_friends()),
+                            tooltip="Nur für Freunde, die du bestätigt hast."))
+        sb.append(label("aus – niemand sieht etwas." if not f.share else "freunde sehen dein profil wie oben.", "dim", wrap=True))
+        sb.append(label("nutzername", "dim"))
+        nm = label("", "accent")
+        nm.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(f.name)}</span>")
+        sb.append(nm)
+        sb.append(hbox(tui.Button("✎ ändern", self.ask_username), spacing=8))
+        sb.append(label("freunde suchen dich mit diesem namen und schicken dir eine anfrage, die du bestätigst.", "dim", wrap=True))
+        sb.append(label("umfang – was freunde sehen", "dim"))
+        row = hbox(spacing=6)
+        btns = {}
+
+        def paint():
+            for k, b in btns.items():
+                (b.add_css_class if k == f.level else b.remove_css_class)("on")
+        for k in f.LEVELS:
+            b = tui.Button(k, lambda k=k: (f.set_level(k), paint(), self.fill_friends()))
+            btns[k] = b
+            row.append(b)
+        paint()
+        sb.append(row)
+        sb.append(label("minimal: läuft gerade, letzte 5 titel, hörzeit der woche · normal: dazu empfehlungen, top künstler/titel, "
+                        "lieblingsstunde, skip-rate · mehr: dazu typ, vielfalt, wiederholer, neue künstler, durchhör-quote, serie.",
+                        "dim", wrap=True))
+        sb.append(tui.Check("lesebestätigungen senden („gelesen“ bei den anderen)", f.read_receipts,
+                            lambda on: f.set_read_receipts(on)))
+        rc = getattr(f, "recaps", None)
+        if rc is not None:
+            sb.append(label("󰄨 rückblick-bilder: sonntags ein wochenbild, am monatsletzten ein monatsbild, an silvester ein jahresbild",
+                            "dim", wrap=True))
+            sb.append(tui.Check("bilder automatisch herunterladen (~/Pictures/musicalist)", rc.auto, lambda on: rc.set_auto(on)))
+
+            def test_recap():
+                def done(res):
+                    if isinstance(res, Exception):
+                        self.say(f"rückblick: {res}", error=True)
+                    else:
+                        self.say("fertig – unter freunde → 󰄨 rückblicke" if res else "noch keine zahlen für diese woche")
+                tui.background(lambda: rc.make("w", force=True), done=done)
+            sb.append(hbox(tui.Button("󰄨 wochenbild jetzt testweise", test_recap),
+                           tui.Button("󰄨 rückblicke ansehen", lambda: self._fr_goto(("recaps", "-"))), spacing=8))
+        sb.append(label("󰗹 incognito – andere sehen nicht, was du hörst (nur dass du incognito bist)", "dim", wrap=True))
+        state = label("", "dim", wrap=True)
+
+        def paint_inc():
+            u = f.inc_until
+            state.set_label("aus." if not u else ("an, bis du es ausschaltest." if u == 1
+                                                  else f"an bis {time.strftime('%H:%M', time.localtime(u))}."))
+        inc = hbox(spacing=6)
+        for txt, mins in (("15 min", 15), ("30 min", 30), ("bis ich ausschalte", 0)):
+            inc.append(tui.Button(txt, lambda m=mins: (f.set_incognito(m), paint_inc(), self.fill_friends())))
+        inc.append(tui.Button("aus", lambda: (f.set_incognito(None), paint_inc(), self.fill_friends())))
+        paint_inc()
+        sb.append(inc)
+        sb.append(state)
+        return sb
+
     def _top_list(self):
         """Wochen-Topliste aus den geteilten Hörprofilen (ich + Freunde). Rubrik per Dropdown wählen: in der Auswahl steht je
         Rubrik rechts die Person auf Platz 1; gewählt wird die ganze Rangliste gezeigt."""
@@ -920,7 +980,7 @@ class FriendsMixin:
             panel.append(label("ohne Angabe: " + ", ".join(absent), "dim", wrap=True))
         return panel
 
-    def _friend_card(self, x):
+    def _friend_card(self, x, me=False):
         f = self.fr
         pr = x.get("prof") or {}
         card = vbox(spacing=3)
@@ -934,7 +994,8 @@ class FriendsMixin:
                                   [("+", "An Warteschlange anhängen", lambda t=t: self.p.add(t)),
                                    ("»", "Als nächstes spielen", lambda t=t: self.p.add(t, next_=True))], menus=self.songs))
         else:
-            card.append(label(x.get("error") or "noch nichts gesehen – hat er das teilen an?" if not x.get("at")
+            card.append(label("hörst gerade nichts" if me else
+                              x.get("error") or "noch nichts gesehen – hat er das teilen an?" if not x.get("at")
                               else f"hört gerade nichts · {ago(x.get('at'))}", "dim"))
 
         def section(title, items):
@@ -957,7 +1018,8 @@ class FriendsMixin:
             card.append(self._profile_graphic(pr["pf"]))
         if x.get("error") and x.get("at"):
             card.append(label(f"offline: {x['error']}", "dim"))
-        card.append(hbox(tui.Button("󰆴 entfernen", lambda s=x["secret"]: (f.remove(s), self._fr_goto(None)),
-                                    danger=True), spacing=8))
+        if not me:
+            card.append(hbox(tui.Button("󰆴 entfernen", lambda s=x["secret"]: (f.remove(s), self._fr_goto(None)),
+                                        danger=True), spacing=8))
 
         return card

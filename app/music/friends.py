@@ -528,7 +528,7 @@ class Friends:
                     if r.get("streak_now"):
                         self._pf["sn"] = int(r["streak_now"])
             if self._pf is not None:
-                self._pf["ac"] = self._accent()
+                self._pf.update(self._palette())
                 rows = self.p.journal.load() or []
 
                 def agg(art):
@@ -552,6 +552,14 @@ class Friends:
             engine.log(f"freunde: profil {e!r}")
             self._pf = None
         return self._pf
+
+    @staticmethod
+    def _palette():
+        try:
+            import recap
+            return recap.own_palette()
+        except Exception:  # noqa: BLE001
+            return {}
 
     @staticmethod
     def _accent():
