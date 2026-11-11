@@ -73,6 +73,9 @@ class App(Gtk.Application):
         self.player.jam = jam.Jam(self.player)
         import friends
         self.player.friends = friends.Friends(self.player)
+        import account                       # Konto bei musicalist-server (Abgleich mit Handy/anderen PCs)
+        self.player.account = account.create(self.player)
+        self.player.account.start()
         self.cava = ui.Cava()
         self.cava.attach(self.player)
         self.sources = sources.Sources()

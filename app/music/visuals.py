@@ -500,7 +500,7 @@ class Visuals(Gtk.Overlay):
     def update_track(self):
         t = self.p.current
         self.title.set_label(t["title"] if t else "nichts läuft")
-        self.artist.set_label(t["artist"] if t else "⁶ suchen → titel wählen")
+        self.artist.set_label(t["artist"] if t else "⁴ suchen → titel wählen")
         self.album.set_label(t.get("album") or "" if t else "")
         self.album.set_visible(bool(t and t.get("album")))
         url = t.get("thumb") if t else None

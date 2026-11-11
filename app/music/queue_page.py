@@ -18,7 +18,7 @@ class QueueMixin:
         page.set_margin_top(6)
         self.queue_panel = tui.Panel("warteschlange")
         self.queue_box = vbox(spacing=0)
-        self.queue_empty = label("leer – unter ⁶suchen titel auswählen", "empty", xalign=0.5)
+        self.queue_empty = label("leer – unter ⁴suchen titel auswählen", "empty", xalign=0.5)
         self.queue_panel.body.append(hbox(label("", hexpand=True),
                                           self._sh(tui.Button("󰒝 mischen", self.p.shuffle_queue), "󰒝 mischen", "󰒝"),
                                           self._sh(tui.Button("󰐹 radio auffüllen", self.p.extend_radio),
@@ -40,7 +40,7 @@ class QueueMixin:
         self.undo_bar.add_css_class("loginbox")
         self.undo_bar.set_visible(False)
         self._undo_timer = 0
-        page.append(self.build_jam())
+        self.jam_panel = self.build_jam()          # sitzt auf Seite „jetzt“ (ui.py)
         page.append(self.undo_bar)
         page.append(self.queue_panel)
         self.add_page("queue", page)

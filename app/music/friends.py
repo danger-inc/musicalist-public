@@ -16,6 +16,23 @@ import engine
 import localmusic
 
 RELAY = "https://ntfy.sh"
+NTFY = "https://ntfy.sh"
+
+
+def relay_open(target, timeout=12):
+    """urlopen für Relay-Aufrufe: geht der eigene Server nicht (Fehler, 429, offline), fällt es auf ntfy.sh zurück (gleiches Protokoll)."""
+    try:
+        return urllib.request.urlopen(target, timeout=timeout)
+    except (urllib.error.URLError, OSError):
+        if RELAY.rstrip("/") == NTFY:
+            raise
+        url = target.full_url if isinstance(target, urllib.request.Request) else target
+        if not url.startswith(RELAY):
+            raise
+        new = NTFY + url[len(RELAY):]
+        if isinstance(target, urllib.request.Request):
+            new = urllib.request.Request(new, data=target.data, method=target.get_method(), headers=dict(target.header_items()))
+        return urllib.request.urlopen(new, timeout=timeout)
 ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
@@ -85,7 +102,7 @@ def _post_plain(topic, obj):
     def go():
         req = urllib.request.Request(f"{RELAY}/{topic}", data=json.dumps(obj, ensure_ascii=False).encode(), method="POST",
                                      headers={"Content-Type": "text/plain"})
-        return urllib.request.urlopen(req, timeout=12).read()
+        return relay_open(req, timeout=12).read()
     _retry(go)
 
 
@@ -93,7 +110,7 @@ def _read_plain(topic):
     """Alle lesbaren JSON-Nachrichten eines Namens-Themas → [(ntfy-Ereignis, Nachricht)]."""
     out = []
     def go():
-        with urllib.request.urlopen(f"{RELAY}/{topic}/json?poll=1&since=all", timeout=12) as r:
+        with relay_open(f"{RELAY}/{topic}/json?poll=1&since=all", timeout=12) as r:
             return r.read().decode("utf-8", "replace")
     if True:
         for line in _retry(go).splitlines():
@@ -146,7 +163,7 @@ def _publish(sec, obj):
     from handy_sync import box
     body = base64.b64encode(box(_key(sec), json.dumps(obj, ensure_ascii=False).encode()))
     req = urllib.request.Request(f"{RELAY}/{_topic(sec)}", data=body, method="POST", headers={"Content-Type": "text/plain"})
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with relay_open(req, timeout=10) as r:
         r.read()
 
 
@@ -840,7 +857,7 @@ class Friends:
         added = []
         chat_new = 0
         try:
-            with urllib.request.urlopen(f"{RELAY}/{_topic(sec)}/json?poll=1&since=all", timeout=12) as r:
+            with relay_open(f"{RELAY}/{_topic(sec)}/json?poll=1&since=all", timeout=12) as r:
                 for line in r.read().decode("utf-8", "replace").splitlines():
                     try:
                         e = json.loads(line)
@@ -912,6 +929,9 @@ class Friends:
     # ----- Freunde -----
     def _save(self):
         engine.set_setting("friends", self.friends)
+        a = getattr(self.p, "account", None) if hasattr(self, "p") else None
+        if a is not None:
+            a.push_soon()                              # Konto: Freundesliste bald sichern
 
     @staticmethod
     def live(f):
@@ -925,7 +945,7 @@ class Friends:
         by = {_topic(s): s for s in secs}
         out = {}
         try:
-            with urllib.request.urlopen(f"{RELAY}/{','.join(by)}/json?poll=1&since=all", timeout=15) as r:
+            with relay_open(f"{RELAY}/{','.join(by)}/json?poll=1&since=all", timeout=15) as r:
                 for line in r.read().decode("utf-8", "replace").splitlines():
                     try:
                         e = json.loads(line)

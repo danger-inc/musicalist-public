@@ -15,9 +15,11 @@ UPDATE=0; [[ "${1:-}" == "--update" ]] && UPDATE=1
 say "== musicalist installieren =="
 # Fehlt Wichtiges (z. B. weil eine ältere Installation bei apt abgebrochen ist), installiert auch
 # ./update.sh die Systempakete nach – sonst fragt nur die normale Installation.
+# System-Python (nicht pyenv/conda/asdf!): nur der hat PyGObject (gi). Eine mit pyenv angelegte Umgebung findet gi nicht.
+SYSPY0=python3; [ -x /usr/bin/python3 ] && SYSPY0=/usr/bin/python3
 basics_missing() {
     command -v mpv >/dev/null 2>&1 || return 0
-    python3 -c 'import ensurepip, gi; gi.require_version("Gtk", "4.0")' 2>/dev/null || return 0
+    "$SYSPY0" -c 'import ensurepip, gi; gi.require_version("Gtk", "4.0")' 2>/dev/null || return 0
     return 1
 }
 if { (( UPDATE )) && basics_missing && say "Es fehlen Systempakete – werden nachinstalliert …"; } \
@@ -65,9 +67,22 @@ cp -f "$SRC/app/tui.py" "$SRC/app/glass.py" "$SRC/app/istheme.py" "$SRC/app/ist-
 cp -f "$SRC"/app/fonts/* "$RICE/fonts/"                           # Symbolschrift (Icons ohne Nerd Font)
 
 say "Python-Umgebung (ytmusicapi, yt-dlp) …"
+pick_python() {
+    local p
+    for p in /usr/bin/python3 /usr/local/bin/python3 /usr/bin/python3.[0-9]* /usr/bin/python3.[0-9][0-9]; do
+        [ -x "$p" ] && "$p" -c 'import gi' 2>/dev/null && { echo "$p"; return; }
+    done
+    echo "$SYSPY0"
+}
+SYSPY=$(pick_python)
+if ! "$SYSPY" -c 'import gi' 2>/dev/null; then
+    warn "Das System-Python ($SYSPY) hat kein PyGObject (gi). Installiere python3-gi / python-gobject (siehe oben) – dann ./install.sh erneut."
+    exit 1
+fi
+echo "  Python: $SYSPY ($("$SYSPY" -c 'import sys; print("%d.%d" % sys.version_info[:2])'))"
 if [ ! -x "$DIR/venv/bin/python" ] || ! "$DIR/venv/bin/python" -c "import gi, pip" 2>/dev/null; then
     rm -rf "$DIR/venv"
-    if ! python3 -m venv --system-site-packages "$DIR/venv"; then
+    if ! "$SYSPY" -m venv --system-site-packages "$DIR/venv"; then
         warn "Konnte keine Python-Umgebung anlegen. Debian/Ubuntu/Mint: sudo apt install python3-venv – dann ./install.sh erneut."
         exit 1
     fi

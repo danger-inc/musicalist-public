@@ -50,6 +50,8 @@ CSS = """
 button.qtile { padding: 3px; border: 1px solid alpha(@primary, 0.35); border-radius: 6px; background: none; min-width: 0; min-height: 0; }
 button.qtile:hover { border-color: @primary; background: alpha(@primary, 0.12); }
 button.ctl { font-size: 18px; padding: 2px 12px; }
+button.iconact { padding: 3px 16px; }
+button.iconact label { font-size: 17px; }
 button.ctl label { font-size: 18px; }
 button.ctl.play label { font-size: 22px; }
 .lyric { font-size: 16px; color: alpha(@foreground, 0.5); padding: 4px 24px; }
@@ -374,9 +376,12 @@ class Spectrum(Gtk.DrawingArea):
 class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsMixin, AnpassenMixin, LyricsMixin, SoundMixin, StatsMixin,
                   tui.TuiWindow):
     APP_ID = "de.invincible.Music"
-    TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"),
-            ("lyrics", "lyrics", "\U000f0370"), ("visuals", "visuals", "󱑽"), ("search", "suchen", "󰍉"),
-            ("stats", "hören · freunde", "󰄨"), ("settings", "einstellungen", "󰒓")]   # einstellungen: kein Tab, sondern ⚙ oben rechts
+    # sichtbare Reiter: jetzt · warteschlange · bibliothek · suchen (ganz rechts). Die übrigen Seiten haben keinen Reiter:
+    # lyrics/visuals unter „läuft“, hörverhalten in der Bibliothek, freunde oben rechts neben dem Konto, einstellungen = ⚙
+    TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"), ("search", "suchen", "󰍉"),
+            ("lyrics", "lyrics", "\U000f0370"), ("visuals", "visuals", "󱑽"), ("stats", "hörverhalten", "󰄨"),
+            ("friends", "freunde", "󰡉"), ("settings", "einstellungen", "󰒓")]
+    HIDDEN_TABS = ("lyrics", "visuals", "stats", "friends", "settings")
     ESC_CLOSES = False          # Esc soll den Player nicht zumachen (nur Tastenkürzel aus der Config / q / ✕)
 
     def __init__(self, app, player, cava, srcs):
@@ -429,7 +434,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.tv_on, self._tv_cookie = False, 0
         self.build_tv()
         self.build_stats()
-        self.build_hear()
+        self.add_page("friends", self.friends_page, scroll=False)
+        self.now_page.insert_child_after(self.jam_panel, self.ctl_panel)
         self.build_settings()
         self.spec = Spectrum(rows=2, cell=9, height=34)
         self.spec.set_margin_top(6)
@@ -454,6 +460,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.drawer.set_enabled(engine.setting("history"))
         self.show_tab("now")
         self.update_tab_labels()
+        self.nav_track_scroll()
+        self.attach_pixel_menu(self.cover)        # Rechtsklick auf das Titelbild-Raster = Rastereinstellungen
 
         keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self.on_key)
@@ -484,7 +492,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
                                                  propagate_natural_height=True, child=top))
         self.glass_btn = next((w for w in self._children(top) if isinstance(w, tui.glass.GlassToggle)), None)
         for tid, b in self.tab_btns:
-            if tid == "settings":
+            if tid in self.HIDDEN_TABS:
                 b.set_visible(False)
         self.fill_hints()
         # was läuft – nur wenn nicht auf Seite 1 und genug Platz
@@ -508,6 +516,9 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         pop.connect("show", lambda *_: self.fill_account_menu())
         self.acct_btn.set_popover(pop)
         self.acct_pop = pop
+        self.friends_btn = tui.Button("󰡉", lambda: self.open_friends(), tooltip="freunde – hinzufügen, entfernen, chat, empfehlungen")
+        self.friends_btn.add_css_class("ibtn")
+        self.header_extra.append(self.friends_btn)
         self.header_extra.append(self.acct_btn)
         self.tv_btn = tui.Button("󰔂", lambda: self.tv_mode(not self.tv_on), tooltip="fernseher-modus (t)")
         self.tv_btn.add_css_class("ibtn")
@@ -517,11 +528,11 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.header_extra.append(self.gear_btn)
 
     # Tastenhinweise unten: breit alle, halbes Fenster die wichtigsten, schmal keine; ? zeigt immer alle
-    HINTS = [(0, "1-7", "tab"), (1, "leer", "play"), (1, "n/p", "weiter/zurück"), (1, "/", "suche"),
+    HINTS = [(0, "1-4", "tab"), (1, "leer", "play"), (1, "n/p", "weiter/zurück"), (1, "/", "suche"),
              (0, "l", "♥"), (0, "a", "playlist"), (1, "?", "alle tasten")]
     KEYS = [("leertaste", "play / pause"), ("n · p", "nächster / voriger titel"), ("← →", "5 s spulen"),
             ("+ −", "lauter / leiser"), ("l · d", "gefällt mir / gefällt mir nicht"), ("t", "fernseher-modus an / aus"), ("a", "titel zu playlist hinzufügen"),
-            ("1 – 7", "tabs"), ("bild↑ · bild↓", "analyse: früherer / späterer zeitraum"),
+            ("1 – 4", "tabs"), ("bild↑ · bild↓", "analyse: früherer / späterer zeitraum"),
             ("w · m · j · g", "analyse: woche / monat / jahr / gesamt"), ("/", "suchen (tab übernimmt den 1. vorschlag)"), ("h", "hörverlauf-leiste"),
             (",", "einstellungen"), ("[ ]", "lyrics früher / später"), ("s", "sleep-timer"), ("e", "klang: equalizer / überblenden"), ("v · f", "visuals: modus / vollbild"),
             ("rechtsklick", "mehr zu jedem titel"), ("q", "schließen"), ("?", "diese liste"),
@@ -670,7 +681,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         for tid, (name_lbl, icon_lbl) in self.tab_names.items():
             name_lbl.set_visible(tid == cur and self.tier < 2)
             name_lbl.set_margin_start(5)
-        chip = self.p.current is not None and cur != "now" and self.tier == 0 and not self.focus_mode
+        chip = (self.p.current is not None and cur != "now" and not self.focus_mode
+                and (self.tier == 0 or cur in self.HIDDEN_TABS))      # Seiten ohne Reiter: Weg zurück nach „jetzt“
         self.np_chip.set_visible(chip)
 
     def set_tier(self, tier):
@@ -705,13 +717,13 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         return btn
 
     # ---------- Navigation (2-Finger-Zurück) ----------
-    TAB_SUP = {"now": "¹ ", "queue": "² ", "lib": "³ ", "lyrics": "⁴ ", "visuals": "⁵ ", "search": "⁶ ", "stats": "⁷ ", "settings": ""}
+    TAB_SUP = {"now": "¹ ", "queue": "² ", "lib": "³ ", "search": "⁴ "}
 
     def nav_loc(self):
         tab = self.current_tab() or "now"
         if tab == "lib" and self.lib_stack.get_visible_child_name() == "detail" and self.detail_key:
             return ("detail",) + self.detail_key
-        if tab == "stats" and getattr(self, "hear_sub", "") == "friends" and getattr(self, "_fr_view", None):
+        if tab == "friends" and getattr(self, "_fr_view", None):
             return ("fr",) + tuple(self._fr_view)          # Chat / Profil einer Person = eigene Seite im Zurück-Stapel
         return ("tab", tab)
 
@@ -765,7 +777,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         return False
 
     def nav_can_back(self):
-        return self.nav_loc() != ("tab", "now") and not self.focus_mode
+        return self.focus_mode or self.nav_loc() != ("tab", "now")
 
     def _nav_next(self, pop):
         cur = self.nav_loc()
@@ -781,22 +793,76 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         return loc, self.nav_title(loc)
 
     def nav_go_back(self):
+        if self.focus_mode:                 # Visuals-Vollbild: Wischen = zurück ins Fenster
+            self.toggle_focus(False)
+            return
+        if self.tv_on:                      # Fernseher-Modus: Wischen = raus, zurück auf die Seite davor
+            self.tv_mode(False)
+            return
         loc = self._nav_next(pop=True)
         self._nav_skip = True
         self._nav_open(loc)
         self.nav_note()
 
+    # ---------- Scrollstand je Seite (2fz stellt ihn wieder her) ----------
+    def _page_scroller(self, name):
+        w = self.stack.get_child_by_name(name)
+        if w is None or isinstance(w, Gtk.ScrolledWindow):
+            return w
+        todo = [w]
+        while todo:
+            x = todo.pop(0)
+            if isinstance(x, Gtk.ScrolledWindow):
+                return x
+            c = x.get_first_child()
+            while c is not None:
+                todo.append(c)
+                c = c.get_next_sibling()
+        return None
+
+    def nav_track_scroll(self):
+        """Merkt sich den Scrollstand jeder Seite unter ihrem Verlaufsschlüssel (nav_loc)."""
+        self._nav_pos = {}
+        for t, _n, _i in self.TABS:
+            sw = self._page_scroller(t)
+            if isinstance(sw, Gtk.ScrolledWindow):
+                sw.get_vadjustment().connect("value-changed", lambda a, sw=sw: self._nav_rec(sw, a))
+
+    def _nav_rec(self, sw, adj):
+        if sw.get_mapped() and self._nav_id is None and not getattr(self, "_nav_restoring", False):
+            self._nav_pos[self.nav_loc()] = adj.get_value()
+
+    def _nav_restore(self, loc, tries=(60, 200, 500)):
+        pos = self._nav_pos.get(loc)
+        if not pos:
+            return
+        sw = self._page_scroller(self.current_tab() or "now")
+        if not isinstance(sw, Gtk.ScrolledWindow):
+            return
+
+        def go():
+            a = sw.get_vadjustment()
+            self._nav_restoring = True
+            a.set_value(min(pos, max(0.0, a.get_upper() - a.get_page_size())))
+            self._nav_restoring = False
+            return False
+        for ms in tries:
+            GLib.timeout_add(ms, go)
+
     def _nav_open(self, loc):
+        self._nav_open0(loc)
+        self._nav_restore(loc)
+
+    def _nav_open0(self, loc):
         if loc[0] == "detail":
             self.open_detail(loc[1], loc[2])
         elif loc[0] == "fr":
-            self.show_tab("stats")
-            self.hear_select("friends")
+            self.show_tab("friends")
             self._fr_goto((loc[1], loc[2]), note=False)
         else:
             if loc[1] == "lib":
                 self.lib_stack.set_visible_child_name("home")
-            if loc[1] == "stats" and getattr(self, "_fr_view", None):
+            if loc[1] == "friends" and getattr(self, "_fr_view", None):
                 self._fr_view = None
                 self.fill_friends()
             self.show_tab(loc[1])
@@ -820,41 +886,6 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.visuals.set_margin_top(4)
         self.add_page("visuals", self.visuals, scroll=False)
         self.visuals.update_track()
-
-    # ---------- Tab 7: hörverhalten (analyse) und freunde als zwei Unterseiten ----------
-    def build_hear(self):
-        stats_w = self.stack.get_child_by_name("stats")
-        self.stack.remove(stats_w)
-        self.hear_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, transition_duration=90, vexpand=True)
-        self.hear_stack.add_named(stats_w, "analyse")
-        self.hear_stack.add_named(self.friends_page, "friends")
-        self.hear_btns = {}
-        bar = hbox(spacing=6)
-        bar.set_margin_top(6)
-        for key, name in (("analyse", "󰄨 hörverhalten"), ("friends", "󰡉 freunde")):
-            b = tui.Button(name, lambda k=key: self.hear_select(k))
-            self.hear_btns[key] = b
-            bar.append(b)
-        self.hear_sub = engine.setting("hear_sub") if engine.setting("hear_sub") in ("analyse", "friends") else "analyse"
-        self.hear_stack.set_visible_child_name(self.hear_sub)
-        for k, b in self.hear_btns.items():
-            (b.add_css_class if k == self.hear_sub else b.remove_css_class)("on")
-        wrap = vbox(bar, self.hear_stack, spacing=4)
-        self.stack.add_named(wrap, "stats")
-
-    def hear_select(self, key, force=False):
-        if key == getattr(self, "hear_sub", None) and not force:
-            return
-        self.hear_sub = key
-        engine.set_setting("hear_sub", key)
-        self.hear_stack.set_visible_child_name(key)
-        for k, b in self.hear_btns.items():
-            (b.add_css_class if k == key else b.remove_css_class)("on")
-        if self.current_tab() == "stats":
-            if key == "friends":
-                self.friends_shown()
-            else:
-                self.an_shown()
 
     # ---------- Fernseher-Modus ----------
     def build_tv(self):
@@ -963,11 +994,21 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         acts = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=8, row_spacing=6,
                            max_children_per_line=6, homogeneous=False, halign=Gtk.Align.START)
         acts.add_css_class("opts")
-        for w in (self.like_btn, self.dislike_btn, self.pl_btn, self.radio_btn, self.web_btn):
+        self.lyr_btn = tui.Button("󰍰 lyrics", lambda: self.show_tab("lyrics"), tooltip="Liedtext mitlesen")
+        self.vis_btn = tui.Button("󱑽 visuals", lambda: self.show_tab("visuals"), tooltip="Visualisierung zur Musik (Vollbild: f)")
+        for w in (self.radio_btn, self.web_btn, self.lyr_btn, self.vis_btn):
             acts.append(w)
+        # Zeile 1: gefällt mir · gefällt mir nicht · playlist – nur als Symbol; Zeile 2: der Rest
+        self.pl_btn.set_label("󰐒")
+        for w in (self.like_btn, self.dislike_btn, self.pl_btn):
+            w.add_css_class("iconact")
+        self.np_icons = hbox(self.like_btn, self.dislike_btn, self.pl_btn, spacing=8)
+        self.np_icons.set_halign(Gtk.Align.START)
+        self.np_icons.set_margin_top(4)
+        acts.set_margin_bottom(2)
         self.np_gap = label("")
         self.np_acts = acts
-        side = vbox(self.title, self.artist, self.album, self.np_gap, self.info, acts, spacing=4, hexpand=True)
+        side = vbox(self.title, self.artist, self.album, self.np_gap, self.info, self.np_icons, acts, spacing=6, hexpand=True)
         self.np_side = side
         self.np_box = hbox(self.cover, side, spacing=18)
         self.np_panel = tui.Panel("󰝚 läuft", self.np_box)
@@ -1019,6 +1060,10 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
 
         self.upnext = vbox(spacing=0)
         self.upnext_panel = tui.Panel("als nächstes", self.upnext)
+        self.upnext_all = tui.Button("󰲸 ganze warteschlange ›", lambda: self.show_tab("queue"), tooltip="Seite „warteschlange“ öffnen (2)")
+        self.upnext_all.set_halign(Gtk.Align.END)
+        self.upnext_all.set_margin_top(4)
+        self.upnext_panel.body.append(self.upnext_all)
         self.upnext_panel.set_vexpand(True)   # Kasten reicht bis zum Spektrum, kein loser Leerraum
         page.append(self.upnext_panel)
         self.now_page = page
@@ -1041,13 +1086,14 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         t = self.p.current
         narrow = self.tier >= 2
         liked = bool(t and t.get("liked"))
-        self.like_btn.set_label(("󰋑" if liked else "󰋕") + ("" if narrow else " gefällt mir"))
+        self.like_btn.set_label("󰋑" if liked else "󰋕")
         dis = bool(t and engine.is_disliked(t.get("videoId")))
-        self.dislike_btn.set_label(("󰔑" if dis else "󰔒") + ("" if narrow else " gefällt mir nicht"))
+        self.dislike_btn.set_label("󰔑" if dis else "󰔒")
         (self.dislike_btn.add_css_class if dis else self.dislike_btn.remove_css_class)("on")
         self.radio_btn.set_label("󰐹" if narrow else "󰐹 radio")
         self.web_btn.set_label("↗" if narrow else "↗ browser")
-        self.pl_btn.set_label("󰐒" if narrow else "󰐒 playlist")
+        self.lyr_btn.set_label("󰍰" if narrow else "󰍰 lyrics")
+        self.vis_btn.set_label("󱑽" if narrow else "󱑽 visuals")
         self.shuffle_btn.set_label("󰒝" if narrow else "󰒝 mischen")
         if t is not None:
             self.np_chip_lbl.set_label(f"{t['title']} · {t['artist']}")
@@ -1157,7 +1203,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         t = self.p.current
         self.cover.show(t["thumb"] if t else None)
         self.title.set_label(t["title"] if t else "nichts läuft")
-        self.artist.set_label(t["artist"] if t else "⁶suchen")
+        self.artist.set_label(t["artist"] if t else "⁴suchen")
         self.album.set_label(t["album"] if t else "")
         self.update_track_labels()
         if hasattr(self, "visuals"):
@@ -1265,7 +1311,11 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
     def _fit_flow(flow, fallback):
         """Knopfreihen (FlowBox) nebeneinander halten, solange sie passen. GTK 4.14 (Ubuntu 24.04) stapelt sie
         sonst untereinander, und sie ragen aus dem Kasten heraus."""
-        width = flow.get_parent().get_width() or fallback
+        if Gtk.get_minor_version() >= 16:           # ab GTK 4.16 bricht die FlowBox von selbst richtig um
+            if flow.get_min_children_per_line() != 1:
+                flow.set_min_children_per_line(1)
+            return
+        width = fallback
         spacing = flow.get_column_spacing()
         n = used = 0
         c = flow.get_first_child()
@@ -1297,8 +1347,10 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.cover.set_valign(Gtk.Align.CENTER)
 
         inner = W - 28                                   # Inhalt ohne Fensterränder
-        for flow in (self.np_acts, self.ctl_opts):
-            self._fit_flow(flow, inner - 60)
+        # Breite je Knopfreihe aus dem FENSTER (nicht aus dem Elternteil – der war selbst von der Reihe aufgebläht)
+        cw = self.cover.measure(Gtk.Orientation.HORIZONTAL, -1)[1] + 18
+        self._fit_flow(self.np_acts, inner - 26 - cw)
+        self._fit_flow(self.ctl_opts, inner - 26 - 56)
         avail = H - self.topbar.get_height() - self.statusbar.get_height() - 6 - 8 - 4   # Spektrum-Abstand, Seitenrand, Luft
         now = self.current_tab() == "now"
         if now:
@@ -1317,6 +1369,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
                 core = self._h(self.np_panel, inner) + self._h(self.ctl_panel, inner) + 10 + 8
                 if self.src_panel.get_visible():
                     core += self._h(self.src_panel, inner) + 10
+                core += self._h(self.jam_panel, inner) + 10
                 if core + self.SPEC_MIN <= avail:
                     break
             left = max(0, avail - core - self.SPEC_MIN)
@@ -1324,7 +1377,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
             upcoming = max(0, len(self.p.queue) - self.p.index - 1) if self.p.index >= 0 else 0
             first = self.upnext.get_first_child()
             row_h = max(20, self._h(first, inner - 40)) if first else 28   # echte Zeilenhöhe messen
-            chrome = 22 + 12 + 10 + 4                        # Kasten-Kopf/-Boden/Abstand
+            chrome = 22 + 12 + 10 + 4 + 36                        # Kasten-Kopf/-Boden/Abstand
             spec_extra = min(self.SPEC_MAX - self.SPEC_MIN, int(left * 0.15))
             fit = max(0, int((left - spec_extra - chrome) // row_h)) if left - spec_extra >= chrome + row_h else 0
             fit = min(fit, 40)
@@ -1386,7 +1439,9 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
             self.load_lyrics()
             GLib.timeout_add(60, lambda: self.sync_lyrics(jump=True) and False)
         if tab == "stats":
-            self.hear_select(self.hear_sub, force=True)
+            self.an_shown()
+        if tab == "friends":
+            self.friends_shown()
         if tab == "search":
             GLib.idle_add(lambda: self.query.grab_focus() and False)
 
@@ -1396,12 +1451,15 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
             # Alt+1…6 wechselt den Tab immer – auch während man im Suchfeld tippt
             i = {Gdk.KEY_1: 0, Gdk.KEY_2: 1, Gdk.KEY_3: 2, Gdk.KEY_4: 3, Gdk.KEY_5: 4, Gdk.KEY_6: 5,
                  Gdk.KEY_7: 6, Gdk.KEY_8: 7, Gdk.KEY_9: 8}.get(kv)
-            tabs = [t for t, _n, _i in self.TABS if t != "settings"]
+            tabs = [t for t, _n, _i in self.TABS if t not in self.HIDDEN_TABS]
             if i is not None and i < len(tabs):
                 if isinstance(self.get_focus(), (Gtk.Text, Gtk.Entry)) and tabs[i] != "search":
                     self.set_focus(None)
                 self.show_tab(tabs[i])
                 return True
+        if (Gdk.KEY_5 <= kv <= Gdk.KEY_9 and not state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK)
+                and not isinstance(self.get_focus(), (Gtk.Text, Gtk.Entry))):
+            return True          # 5–9: kein Reiter mehr dahinter (versteckte Seiten)
         if self.tv_on and (kv == Gdk.KEY_Escape or Gdk.KEY_1 <= kv <= Gdk.KEY_9):
             self.tv_mode(False)
             return kv == Gdk.KEY_Escape
@@ -1418,7 +1476,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         if isinstance(focus, (Gtk.Text, Gtk.Entry)) or state & (Gdk.ModifierType.CONTROL_MASK |
                                                                  Gdk.ModifierType.ALT_MASK):
             return False
-        if self.current_tab() == "stats" and self.hear_sub == "analyse" and self.an_key(kv):
+        if self.current_tab() == "stats" and self.an_key(kv):
             return True
         if kv == Gdk.KEY_space:
             self.p.toggle()

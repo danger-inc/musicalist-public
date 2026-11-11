@@ -38,7 +38,21 @@ start() {
     fi
     # MUSICALIST_FOREGROUND=1: im Vordergrund bleiben (systemd-Dienst, Ausgabe ins Journal)
     [[ -n $MUSICALIST_FOREGROUND ]] && XDG_RUNTIME_DIR=$run exec "$py" "$dir/musicd.py" "$@"
-    XDG_RUNTIME_DIR=$run setsid -f "$py" "$dir/musicd.py" "$@" >"$run/rice-music.log" 2>&1 </dev/null
+    rm -f "$run/rice-music.pid" "$run/rice-music.spawn"
+    XDG_RUNTIME_DIR=$run setsid -f sh -c 'echo $$ > "$1/rice-music.spawn"; shift; exec "$@"' sh "$run" "$py" "$dir/musicd.py" "$@" >"$run/rice-music.log" 2>&1 </dev/null
+    # Rückmeldung: kommt der Hintergrundprozess nicht hoch, steht der Grund hier (statt nur im Logfile)
+    local i sp
+    for i in $(seq 1 60); do
+        [[ -s $run/rice-music.pid ]] && return 0
+        # Prozess schon wieder weg (Absturz beim Import o. ä.)? Dann nicht erst bis zum Ende warten
+        { read -r sp < "$run/rice-music.spawn"; } 2>/dev/null
+        [[ -n $sp ]] && ! kill -0 "$sp" 2>/dev/null && break
+        sleep 0.25
+    done
+    echo "musicalist startet nicht – letzte Meldungen aus $run/rice-music.log:" >&2
+    tail -n 15 "$run/rice-music.log" >&2 2>/dev/null
+    command -v notify-send >/dev/null && notify-send musicalist "Startet nicht – Details: $run/rice-music.log"
+    return 1
 }
 { read -r pid < "$run/rice-music.pid"; } 2>/dev/null
 running() { [[ -n $pid && -p $fifo ]] && kill -0 "$pid" 2>/dev/null; }

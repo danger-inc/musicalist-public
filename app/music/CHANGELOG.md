@@ -1,5 +1,38 @@
 # musicalist – Änderungen
 
+## 1.49.0 (2026-11-11)
+- **Konto ist Pflicht:** Beim Start (nach dem Nutzernamen) fragt ein Fenster nach Nutzername und Passwort – neu anlegen oder anmelden. Nur wenn der Server nicht erreichbar ist, gibt es „später (offline)“; das Fenster kommt dann beim nächsten Start wieder.
+- **Alles über den eigenen Server:** Freunde, Chats, Nachrichten und Marmelade laufen mit Konto über den Server. Geht er einmal nicht (Fehler, überlastet, offline), nimmt musicalist automatisch ntfy.sh – gleiches Protokoll, nichts geht verloren.
+- Nach dem Anmelden meldet sich der Nutzername sofort auf dem Server an (damit Freunde dich finden).
+- **Chats lokal nur ein paar Tage:** Nachrichten, die älter als 14 Tage sind und auf dem Server liegen, werden auf diesem Rechner gelöscht (Einstellung `chat_keep_days`); auf dem Server bleiben sie, ein neues Gerät holt sie beim Anmelden.
+- Der Schalter „über den eigenen Server“ entfällt (immer an mit Konto).
+- **Installer:** legt die Python-Umgebung immer mit dem System-Python an (pyenv/conda-Python hat kein PyGObject → „gi fehlt“) und sagt klar, wenn das System-Python kein gi hat.
+- **Start mit Rückmeldung:** `musicalist` meldet in der Konsole (und per Benachrichtigung), wenn der Hintergrundprozess nicht hochkommt, und zeigt die letzten Zeilen aus rice-music.log.
+
+## 1.48.1 (2026-11-11)
+- **Fernseher-Modus:** Rechtsklick auf das Titelbild öffnet die Rastereinstellungen, der Raster-Knopf behält sein Symbol (nur der Schalter wechselt), 2-Finger-Zurück beendet den Modus und führt auf die Seite davor.
+
+## 1.48.0 (2026-11-11)
+- **Konto & Server:** Unter „mein profil“ (Freunde → mein profil, ganz unten) gibt es jetzt „konto & server“ – gleich wie in der Handy-App. Nutzername + Passwort (mind. 10 Zeichen), neu anlegen oder auf einem neuen Rechner anmelden. Das Passwort wird nur beim Anmelden gesendet, danach gilt eine Sitzung.
+- **Abgleich mit Handy und anderen PCs** (beim Start, alle 10 min, bei Änderungen an den Freunden und auf „jetzt abgleichen“): Freunde und Identität, Einstellungen des PCs, Hörprotokoll und Chatverläufe. Neuer Rechner: anmelden stellt alles wieder her.
+- **Nachrichten über den Server** (Schalter im Kasten, Standard aus – bis alle Freunde umgestiegen sind, läuft es weiter über ntfy.sh).
+- Passwort ändern, Konto löschen und Abmelden im selben Kasten; eigene Server-Adresse einstellbar.
+
+## 1.47.1 (2026-11-11)
+- **„jetzt“ überarbeitet:** gefällt mir · gefällt mir nicht · playlist stehen als große Symbole auf einer eigenen Zeile; darunter radio, browser, lyrics und visuals.
+- **Halbes Fenster:** Seite „jetzt“ passt jetzt komplett hinein – kein seitliches Wischen mehr nötig (die Knopfreihen blähten sich über das Fenster hinaus auf). Dadurch geht auch 2-Finger-Zurück dort wieder.
+- **Raster-Knopf** behält sein Symbol (nur der Schalter wechselt), nichts rutscht mehr nach unten. Rechtsklick auf das Titelbild öffnet die Rastereinstellungen.
+- **2-Finger-Zurück** geht immer, auch im Visuals-Vollbild (dann zurück ins Fenster), und stellt die Scrollposition der vorigen Seite wieder her.
+- Schnellauswahl: Spaltenzahl folgt der Fensterbreite (blähte sich vorher selbst auf).
+
+## 1.47.0 (2026-11-11)
+- **Reiter neu geordnet:** ¹ jetzt · ² warteschlange · ³ bibliothek · ⁴ suchen (ganz rechts). Lyrics und Visuals haben keinen Reiter mehr, sondern Knöpfe im Kasten „läuft“; auf diesen Seiten führt der „läuft“-Chip oben zurück. Hörverhalten steht in der Bibliothek, Freunde oben rechts neben dem Konto (󰡉). Tasten 1–4.
+- **Stift (anpassen)** sitzt jetzt ganz rechts in der Knopfleiste unter „steuerung“, nicht mehr in der Kopfzeile.
+- **Marmelade** wohnt auf Seite „jetzt“ (unter „steuerung“), nicht mehr in der Warteschlange. „als nächstes“ hat einen Knopf zur ganzen Warteschlange.
+- **Schnellauswahl:** viel schärfere Raster (Standard 40 × 40 statt 22 × 22). Über 󰕮 im Kasten einstellbar: Anzahl (in Einserschritten, 1–50), Größe der Kästchen (48–200 px) und Rasterfeinheit (8–64). Kleine Kästchen zeigen Titel und Künstler darunter.
+- **Konto** in der Bibliothek trägt „› mein profil“ im Titel und hat eine eigene Zeile zum Öffnen.
+- **Freunde:** „freund hinzufügen“ steht ganz oben; jeder Freund hat ein ✕ (zweistufig: „entfernen?“ bestätigen).
+
 ## 1.46.1 (2026-11-10)
 - **Öffentliche Ausgabe:** Musik spielt nur noch, wenn das angemeldete Konto YouTube Premium (oder Music Premium) hat. Geprüft wird über das Premium-Logo auf youtube.com für deine Sitzung (wie yt-dlp); ist das nicht feststellbar, wird nicht gespielt. Die volle Ausgabe ist nicht betroffen.
 

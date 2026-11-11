@@ -150,6 +150,7 @@ class FriendsMixin:
                 dlg.destroy()
                 self.say(f"nutzername: {f.name}")
                 self.fill_friends()
+                GLib.timeout_add(400, self.ensure_account)
                 if getattr(self, "fr_name_lbl", None) is not None:
                     self.fr_name_lbl.set_label(f.name)
                 for fn in ("update_peers", "update_handy"):           # Geräteliste zeigt „name (gerät)“
@@ -211,10 +212,77 @@ class FriendsMixin:
         f = self.fr
         if f is not None and not f.named and self.get_visible():
             self.ask_username(first=True)
+        else:
+            self.ensure_account()
         return False
 
+    def ensure_account(self):
+        """Pflicht: ohne Konto bei musicalist-server geht es nicht weiter (Fenster bleibt, bis angelegt/angemeldet).
+        Nur wenn der Server nicht erreichbar ist, gibt es „später“ – dann kommt das Fenster beim nächsten Start wieder."""
+        ac = getattr(self.p, "account", None)
+        if ac is not None and not ac.on and self.get_visible() and not getattr(self, "_acct_dlg", None) and not getattr(self, "_name_dlg", None):
+            self.ask_account()
+        return False
+
+    def ask_account(self):
+        ac = self.p.account
+        dlg = Gtk.Window(title="konto", modal=True, transient_for=self if isinstance(self, Gtk.Window) else None, resizable=False)
+        dlg.set_deletable(False)
+        dlg.set_default_size(420, 10)
+        box = vbox(spacing=8)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{m}")(16)
+        box.append(label("󰒋 konto bei musicalist", "accent"))
+        box.append(label("jede·r braucht ein konto. damit laufen freunde, chats und marmelade über den server, und nichts geht verloren, "
+                         "wenn du den rechner oder das handy wechselst. nutzername und passwort (mindestens 10 zeichen) – vergisst du es, "
+                         "setzt der server-betreiber das passwort zurück.", "dim", wrap=True))
+        nm = tui.Entry("nutzername", text=(getattr(self.fr, "uname", "") if self.fr is not None else "") or "")
+        pw = tui.Entry("passwort", password=True)
+        status = label("", "dim", wrap=True)
+        create = tui.Button("󰐕 konto erstellen")
+        login = tui.Button("󰍂 ich habe schon eins")
+        later = tui.Button("später (offline)")
+        later.set_visible(False)
+        busy = {"on": False}
+
+        def go(make):
+            if busy["on"]:
+                return
+            busy["on"] = True
+            status.set_label("einen moment …")
+            n, p = nm.get_text(), pw.get_text()
+
+            def work():
+                return (ac.create(n, p) or "konto angelegt – deine daten sind gesichert") if make else ac.login(n, p)
+
+            def done(res):
+                busy["on"] = False
+                if isinstance(res, Exception):
+                    status.set_label(str(res))
+                    later.set_visible(str(res).startswith("server nicht erreichbar"))
+                    return
+                self._acct_dlg = None
+                dlg.destroy()
+                self.say(res if isinstance(res, str) else "konto angelegt")
+                self.fill_friends()
+            tui.background(work, done=done)
+        create.connect("clicked", lambda *_: go(True))
+        login.connect("clicked", lambda *_: go(False))
+        pw.connect("activate", lambda *_: go(True))
+        later.connect("clicked", lambda *_: (setattr(self, "_acct_dlg", None), dlg.destroy()))
+        box.append(nm)
+        box.append(pw)
+        box.append(hbox(create, login, later, spacing=8))
+        box.append(status)
+        dlg.set_child(box)
+        dlg.connect("close-request", lambda *_: True)           # nicht schließbar
+        dlg.connect("destroy", lambda *_: setattr(self, "_acct_dlg", None))
+        self._acct_dlg = dlg
+        dlg.present()
+        nm.grab_focus()
+
     def friends_visible(self):
-        return self.current_tab() == "stats" and getattr(self, "hear_sub", "analyse") == "friends"
+        return self.current_tab() == "friends"
 
     def _fr_changed(self):
         if self.friends_visible():
@@ -226,8 +294,7 @@ class FriendsMixin:
         return getattr(self.p, "friends", None)
 
     def open_friends(self):
-        self.show_tab("stats")
-        self.hear_select("friends")
+        self.show_tab("friends")
 
     def friends_shown(self):
         """Tab „freunde“ wurde geöffnet: Stand holen, dann alle 25 s auffrischen, solange er offen ist."""
@@ -269,8 +336,7 @@ class FriendsMixin:
 
     def open_profile(self):
         """Eigenes Profil (aus Bibliothek-Konto, Kontomenü oder Freunde-Liste)."""
-        self.show_tab("stats")
-        self.hear_select("friends")
+        self.show_tab("friends")
         self._fr_goto(("me", "-"))
 
     def _fr_goto(self, view, note=True):
@@ -319,6 +385,28 @@ class FriendsMixin:
                                                          tooltip="Wochen-, Monats- und Jahresbild")] if rc is not None else []),
                    tui.Button("󰑐", self.refresh_friends, tooltip="neu abfragen"), spacing=8)
         box.append(top)
+        # --- hinzufügen: per Nutzername ---
+        add = vbox(spacing=6)
+        add.append(label("󰀓 freund hinzufügen", "accent"))
+        e = tui.Entry("nutzername deines freundes")
+
+        def go(*_):
+            txt = e.get_text()
+
+            def done(res):
+                if isinstance(res, Exception):
+                    self.say(str(res), error=True)
+                else:
+                    self.say(f"anfrage an {res} geschickt – sobald die person annimmt, seid ihr befreundet")
+                    e.set_text("")
+                self.fill_friends()
+            tui.background(f.request, txt, done=done)
+        e.connect("activate", go)
+        add.append(hbox(e, tui.Button("anfrage senden", go), spacing=8))
+        for x in f.friends_sent:
+            add.append(hbox(label(f"󰔛 an {x['name']} geschickt – wartet auf bestätigung", "dim", hexpand=True, ellipsize=True),
+                            tui.Button("✕", lambda u=x["uname"]: (f.cancel_sent(u), self.fill_friends()), tooltip="Anfrage zurückziehen"), spacing=8))
+        box.append(add)
         new = rc.unseen[0] if rc is not None and rc.unseen else None
         if new is not None:               # neues Rückblick-Bild: Hinweis ganz oben
             kinds = {"w": "wochenrückblick", "m": "monatsrückblick", "y": "jahresrückblick"}
@@ -370,31 +458,11 @@ class FriendsMixin:
                 line.append(tui.Button("ablehnen", lambda r=r: (f.decline(r), self.fill_friends()), danger=True))
                 rb.append(line)
             box.append(rb)
-        # --- hinzufügen: per Nutzername ---
-        add = vbox(spacing=6)
-        add.append(label("freund hinzufügen", "accent"))
-        e = tui.Entry("nutzername deines freundes")
-
-        def go(*_):
-            txt = e.get_text()
-
-            def done(res):
-                if isinstance(res, Exception):
-                    self.say(str(res), error=True)
-                else:
-                    self.say(f"anfrage an {res} geschickt – sobald die person annimmt, seid ihr befreundet")
-                    e.set_text("")
-                self.fill_friends()
-            tui.background(f.request, txt, done=done)
-        e.connect("activate", go)
-        add.append(hbox(e, tui.Button("anfrage senden", go), spacing=8))
-        for x in f.friends_sent:
-            add.append(hbox(label(f"󰔛 an {x['name']} geschickt – wartet auf bestätigung", "dim", hexpand=True, ellipsize=True),
-                            tui.Button("✕", lambda u=x["uname"]: (f.cancel_sent(u), self.fill_friends()), tooltip="Anfrage zurückziehen"), spacing=8))
-        box.append(add)
         # --- Freunde ---
         if not f.friends:
-            box.append(label("noch niemand – füge oben einen code hinzu.", "dim"))
+            box.append(label("noch niemand – oben einen nutzernamen eintragen und „anfrage senden“.", "dim"))
+        else:
+            box.append(label(f"󰡉 deine freunde · {len(f.friends)}", "accent"))
         for x in f.friends:
             box.append(self._friend_row(x))
         if f.recs:
@@ -461,6 +529,27 @@ class FriendsMixin:
         head.set_child(inner)
         head.connect("clicked", lambda *_: self._fr_goto(("chat", x["secret"])))
         row.append(head)
+        rm = tui.Button("✕", None, tooltip=f"{x['name']} als freund entfernen", danger=True)
+        st = {"armed": False, "id": 0}
+
+        def disarm():
+            st["armed"], st["id"] = False, 0
+            rm.set_label("✕")
+            return False
+
+        def click(*_):
+            if st["armed"]:
+                if st["id"]:
+                    GLib.source_remove(st["id"])
+                f.remove(x["secret"])
+                self.say(f"{x['name']} ist kein freund mehr")
+                self.fill_friends()
+                return
+            st["armed"] = True
+            rm.set_label("entfernen?")
+            st["id"] = GLib.timeout_add(3000, disarm)
+        rm.connect("clicked", click)
+        row.append(rm)
         return row
 
     @staticmethod
@@ -929,7 +1018,87 @@ class FriendsMixin:
         paint_inc()
         sb.append(inc)
         sb.append(state)
+        sb.append(self._acct_panel())
         return sb
+
+    # ---------- Konto bei musicalist-server ----------
+    def _acct_panel(self):
+        ac = getattr(self.p, "account", None)
+        box = vbox(spacing=6)
+        box.set_margin_top(14)
+        if ac is None:
+            return box
+        self._acct_box = box
+        if not getattr(self, "_acct_hooked", False):
+            self._acct_hooked = True
+            ac.listeners.append(lambda: GLib.idle_add(lambda: (self._acct_fill() if self._acct_box.get_mapped() else None, False)[1]))
+        self._acct_form = getattr(self, "_acct_form", None)
+        self._acct_fill()
+        return box
+
+    def _acct_fill(self):
+        box, ac = getattr(self, "_acct_box", None), self.p.account
+        if box is None:
+            return
+        tui.clear(box)
+        box.append(label("󰀄 konto & server", "accent"))
+        info = label("", "dim", wrap=True)
+
+        def say(msg, err=False):
+            info.set_label(msg)
+            (info.add_css_class if err else info.remove_css_class)("err")
+
+        def run(fn, ok_msg=None, *args):
+            def done(res):
+                if isinstance(res, Exception):
+                    say(str(res), True)
+                else:
+                    say(res if isinstance(res, str) and res else (ok_msg or ""))
+                self._acct_fill()
+            say("einen moment …")
+            tui.background(fn, *args, done=done)
+
+        if ac.on:
+            box.append(label(f"● angemeldet als {ac.name}", "accent"))
+            box.append(label("gesichert und zwischen deinen geräten abgeglichen werden: freunde, einstellungen, hörprotokoll, chats. "
+                             "das passwort steht nie auf diesem rechner – nur eine sitzung.", "dim", wrap=True))
+            if ac.busy:
+                box.append(label("gleicht ab …", "dim"))
+            elif ac.last_result:
+                box.append(label("letzter abgleich: " + ac.last_result, "dim", wrap=True))
+            box.append(hbox(tui.Button("󰑐 jetzt abgleichen", lambda: run(lambda: (ac.sync(force=True) or {}).get("error") or "abgleich fertig")),
+                            tui.Button("abmelden", lambda: run(lambda: (ac.logout(), "abgemeldet – das konto bleibt auf dem server")[1])), spacing=8))
+            box.append(label("nachrichten an freunde und marmelade laufen über den server – geht er einmal nicht, nimmt musicalist automatisch ntfy.sh.",
+                             "dim", wrap=True))
+            if getattr(self, "_acct_form", None) == "pw":
+                old, new = tui.Entry("altes passwort", password=True), tui.Entry("neues passwort (mind. 10 zeichen)", password=True)
+                box.append(old)
+                box.append(new)
+                box.append(hbox(tui.Button("ändern", lambda: run(lambda: (ac.change_password(old.get_text(), new.get_text()),
+                                                                          "passwort geändert – die anderen geräte sind abgemeldet")[1])),
+                                tui.Button("abbrechen", lambda: (setattr(self, "_acct_form", None), self._acct_fill())), spacing=8))
+            elif getattr(self, "_acct_form", None) == "del":
+                pw = tui.Entry("passwort zur bestätigung", password=True)
+                box.append(label("das löscht das konto und alle gesicherten daten auf dem server (hier bleibt alles).", "err", wrap=True))
+                box.append(pw)
+                box.append(hbox(tui.Button("endgültig löschen", lambda: run(lambda: (ac.delete_from_server(pw.get_text()), "konto gelöscht")[1]), danger=True),
+                                tui.Button("abbrechen", lambda: (setattr(self, "_acct_form", None), self._acct_fill())), spacing=8))
+            else:
+                box.append(hbox(tui.Button("passwort ändern", lambda: (setattr(self, "_acct_form", "pw"), self._acct_fill())),
+                                tui.Button("konto löschen …", lambda: (setattr(self, "_acct_form", "del"), self._acct_fill()), danger=True), spacing=8))
+        else:
+            box.append(label("kein konto. mit einem konto bleiben freunde, chats und hörprotokoll beim gerätewechsel erhalten und "
+                             "sind auf pc und handy gleich.", "dim", wrap=True))
+            nm, pw = tui.Entry("nutzername"), tui.Entry("passwort (mind. 10 zeichen)", password=True)
+            box.append(nm)
+            box.append(pw)
+            box.append(hbox(tui.Button("neu anlegen", lambda: run(lambda: (ac.create(nm.get_text(), pw.get_text()), "konto angelegt")[1])),
+                            tui.Button("ich habe schon eins – anmelden", lambda: run(lambda: ac.login(nm.get_text(), pw.get_text()))), spacing=8))
+        srv = tui.Entry("server-adresse", text=ac.st.get("server") or "")
+        srv.set_placeholder_text("server-adresse (leer = standard)")
+        box.append(label("server", "dim"))
+        box.append(hbox(srv, tui.Button("speichern", lambda: (ac.set_server(srv.get_text()), say("gespeichert"))), spacing=8))
+        box.append(info)
 
     def _top_list(self):
         """Wochen-Topliste aus den geteilten Hörprofilen (ich + Freunde). Rubrik per Dropdown wählen: in der Auswahl steht je

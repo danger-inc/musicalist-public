@@ -347,7 +347,7 @@ class StatsMixin:
                 return                           # schon gemeldet, noch nicht angesehen
             self.an_pending = (art, key)
             what = {"w": "wochen", "m": "monats", "y": "jahres"}[art]
-            self.say(f"󰄨 dein {what}rückblick ist da ({title}) – tab 7 „analyse“", seconds=12)
+            self.say(f"󰄨 dein {what}rückblick ist da ({title}) – bibliothek → hörverhalten", seconds=12)
         tui.background(work, done=done)
         return False
 

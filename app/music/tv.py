@@ -141,6 +141,7 @@ class TvPage(Gtk.Box):
                            "Alles zu diesem Titel")
         self.pixel_btn = bx("󱗼", lambda: set_pixel(not pixel_on()), "Titelbilder: Raster / Foto – Rechtsklick: einstellen")
         win.attach_pixel_menu(self.pixel_btn)
+        win.attach_pixel_menu(self.cover)          # Rechtsklick auf das Titelbild = Rastereinstellungen
         self.sleep_btn = bx("󰒲", lambda: win.sleep_menu(self.sleep_btn), "Sleep-Timer")
         self.sound_btn = bx("󰓃", lambda: win.sound_menu(self.sound_btn), "Klang: Equalizer und Überblendung")
         self.auto_btn = bx("󰑐", self._toggle_autoplay, "Autoplay: am Ende ähnliche Titel weiterspielen")
@@ -159,7 +160,6 @@ class TvPage(Gtk.Box):
         }
 
         def sync_pix():
-            self.pixel_btn.set_label("󱗼" if pixel_on() else "󰋩")
             (self.pixel_btn.add_css_class if pixel_on() else self.pixel_btn.remove_css_class)("on")
         PIXEL_LISTENERS.append(sync_pix)
         sync_pix()
@@ -591,7 +591,7 @@ class TvPage(Gtk.Box):
             if key != self._lyr_key or force:
                 self._lyr_key = key
                 self.lyr_msg.add_css_class("msg")
-                self._show_msg("songtext ohne zeitstempel – zum mitlesen im tab ⁴ lyrics")
+                self._show_msg("songtext ohne zeitstempel – zum mitlesen unter „läuft“ → lyrics")
             return
         cur = w.current_lyric()
         if cur is None:

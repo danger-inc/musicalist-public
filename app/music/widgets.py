@@ -156,7 +156,7 @@ class DotThumb(Gtk.DrawingArea):
 
     def __init__(self, side=86):
         super().__init__(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
-        self.side, self.pb, self._g = side, None, None
+        self.side, self.pb, self._g, self.res = side, None, None, None
         self.set_content_width(side)
         self.set_content_height(side)
         self.set_draw_func(self._draw)
@@ -183,7 +183,7 @@ class DotThumb(Gtk.DrawingArea):
             draw_photo(cr, self.pb, 0, 0, side)
             return
         c = pixelart.cfg()
-        res = min(c["res"], 44) if pixelart.custom() else self.N
+        res = self.res or (min(c["res"], 44) if pixelart.custom() else self.N)
         k = (pixelart.key(c), res)
         if self._g is None or self._g[0] != k:
             self._g = (k, pixelart.grid(self.pb, res, c))

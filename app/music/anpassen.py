@@ -14,7 +14,7 @@ CTL_NAMES = {"shuffle": "󰒝 mischen", "repeat": "󰑗 wiederholen", "sleep": "
              "album": "󰀥 album", "recommend": "󰡉 an freunde empfehlen", "menu": "⋮ titel-menü", "pixel": "󱗼 raster / foto"}
 LIB_DEFAULT = ["quick", "konto", "likes", "coll", "local", "stats"]
 LIB_NAMES = {"quick": "󰝚 schnellauswahl", "konto": "󰀄 konto", "likes": "󰋑 lieblingssongs (lokal)",
-             "coll": "󰲸 sammlung (playlists …)", "local": "󰉋 lokale musik", "stats": "󰄨 rückblick"}
+             "coll": "󰲸 sammlung (playlists …)", "local": "󰉋 lokale musik", "stats": "󰄨 hörverhalten"}
 
 
 def _order(key, default):
@@ -52,7 +52,7 @@ class AnpassenMixin:
         self._ctl_widgets = {
             "shuffle": self.shuffle_btn, "repeat": self.repeat_btn, "sleep": self.sleep_btn, "mixer": self.sound_btn,
             "autoplay": self.auto_chk, "volume": self._vol_box,
-            "lyrics": tui.Button("󰍰 lyrics", lambda: self.show_tab("lyrics"), tooltip="Liedtext (4)"),
+            "lyrics": tui.Button("󰍰 lyrics", lambda: self.show_tab("lyrics"), tooltip="Liedtext mitlesen"),
             "artist": tui.Button("󰠃 künstler", lambda: cur() and self.open_artist(cur()), tooltip="Künstlerseite"),
             "album": tui.Button("󰀥 album", album, tooltip="Album öffnen"),
             "recommend": tui.Button("󰡉 empfehlen", recommend, tooltip="An alle Freunde empfehlen"),
@@ -67,7 +67,7 @@ class AnpassenMixin:
     def attach_pixel_menu(self, btn):
         """Rechtsklick (oder langes Drücken) auf einen Raster-Knopf: Raster einstellen wie in der Handy-App."""
         rc = Gtk.GestureClick(button=3)
-        rc.connect("pressed", lambda *_: self.pixel_menu(btn))
+        rc.connect("pressed", lambda g, *_: (g.set_state(Gtk.EventSequenceState.CLAIMED), self.pixel_menu(btn)))
         btn.add_controller(rc)
         lp = Gtk.GestureLongPress()
         lp.connect("pressed", lambda *_: self.pixel_menu(btn))
@@ -187,7 +187,7 @@ class AnpassenMixin:
 
     def sync_pixel_btn(self):
         (self.pixel_btn.add_css_class if pixel_on() else self.pixel_btn.remove_css_class)("on")
-        self.pixel_btn.set_label("󱗼" if pixel_on() else "󰋩")
+        self.pixel_btn.set_tooltip_text("Titelbilder als Raster – an: Punktraster, aus: echtes Foto (überall); Rechtsklick: einstellen")
 
     def apply_ctl_bar(self):
         opts = self.ctl_opts
@@ -203,7 +203,12 @@ class AnpassenMixin:
             engine.set_setting("ctl_bar", stored)
         bar = [x for x in (stored or CTL_DEFAULT) if x in self._ctl_widgets]
         for k in bar:
+            self._ctl_widgets[k].set_halign(Gtk.Align.START)     # nicht auf die Zeilenbreite auseinanderziehen
             opts.append(self._ctl_widgets[k])
+            fc = self._ctl_widgets[k].get_parent()
+            if fc is not None:
+                fc.set_halign(Gtk.Align.START)
+                fc.set_hexpand(False)
 
     # ---------- Bibliothek: Reihenfolge ----------
     def apply_lib_order(self):
@@ -222,9 +227,10 @@ class AnpassenMixin:
         self.quick_grid = vbox(spacing=4)
         self._quick_cols = 0
         GLib.timeout_add(700, self._quick_resize)
-        self.quick_n_lbl = label("", "dim")
         self.quick_busy = label("", "dim", hexpand=True, ellipsize=True)
-        head = hbox(self.quick_busy, tui.Button("󰕮", self.quick_cycle, tooltip="Wie viele Titel (10 … 50)"), tui.Button("󰑐 neu", self.quick_load, tooltip="Neu mischen lassen"),
+        self.quick_set_btn = tui.Button("󰕮", lambda: self.quick_menu(self.quick_set_btn),
+                                        tooltip="Anzahl, Größe und Rasterfeinheit der Schnellauswahl einstellen")
+        head = hbox(self.quick_busy, self.quick_set_btn, tui.Button("󰑐 neu", self.quick_load, tooltip="Neu mischen lassen"),
                     spacing=6)
         self.quick_panel.body.append(head)
         self.quick_panel.body.append(self.quick_grid)
@@ -233,14 +239,60 @@ class AnpassenMixin:
         self.quick_load()
 
     def quick_n(self):
-        return int(engine.setting("quick_n") or 25)
+        return max(1, min(50, int(engine.setting("quick_n") or 25)))
 
-    def quick_cycle(self):
-        n = self.quick_n()
-        n = 10 if n >= 50 else n + 5
-        engine.set_setting("quick_n", n)
-        self.say(f"schnellauswahl: {n} titel")
-        self.quick_fill()
+    def quick_side(self):
+        return max(48, min(200, int(engine.setting("quick_side") or 100)))
+
+    def quick_res(self):
+        return max(8, min(64, int(engine.setting("quick_res") or 40)))
+
+    def quick_names(self):
+        """Titel und Künstler unter den Kästchen – sobald sie klein genug sind (sonst reicht das Bild)."""
+        return self.quick_side() <= 110
+
+    def quick_menu(self, anchor):
+        pop = self.songs._popover(anchor)
+        pop.set_position(Gtk.PositionType.BOTTOM)
+        holder = vbox(spacing=6)
+        for m in ("set_margin_top", "set_margin_bottom", "set_margin_start", "set_margin_end"):
+            getattr(holder, m)(10)
+        pop.set_child(Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, min_content_width=320, max_content_width=360,
+                                         propagate_natural_height=True, propagate_natural_width=True, child=holder))
+        holder.append(label("󰝚  schnellauswahl", "kp-head"))
+        timer = {"id": 0}
+
+        def apply():
+            timer["id"] = 0
+            self.quick_fill()
+            return False
+
+        def slider(name, key, lo, hi, cur, fmt, rebuild_pics=False):
+            val = label(fmt(cur), "accent", xalign=1)
+
+            def on(v):
+                x = int(round(lo + v / 1000 * (hi - lo)))
+                engine.set_setting(key, x)
+                val.set_label(fmt(x))
+                if timer["id"]:
+                    GLib.source_remove(timer["id"])
+                timer["id"] = GLib.timeout_add(120, apply)
+            m = tui.Meter(1000, on, mark=False)
+            m.set_value(int((cur - lo) / (hi - lo) * 1000))
+            holder.append(hbox(label(name, hexpand=True), val))
+            holder.append(m)
+            # feine Schritte: − / + um genau eins
+            step = lambda d: (on(max(0, min(1000, (round(lo + m.value / 1000 * (hi - lo)) + d - lo) / (hi - lo) * 1000))),
+                              m.set_value(int((int(engine.setting(key)) - lo) / (hi - lo) * 1000)))
+            holder.append(hbox(tui.Button("−", lambda: step(-1)), tui.Button("+", lambda: step(1)), spacing=6))
+        slider("anzahl", "quick_n", 1, 50, self.quick_n(), lambda v: f"{v} titel")
+        slider("größe der kästchen", "quick_side", 48, 200, self.quick_side(), lambda v: f"{v} px")
+        slider("raster (punkte je seite)", "quick_res", 8, 64, self.quick_res(), lambda v: f"{v} × {v}")
+        holder.append(label("kleine kästchen zeigen titel und künstler darunter (ab 110 px aus).", "dim", wrap=True))
+        holder.append(tui.Button("zurücksetzen", lambda: (engine.set_setting("quick_n", None), engine.set_setting("quick_side", None),
+                                                          engine.set_setting("quick_res", None), pop.popdown(), self.quick_fill()),
+                                 danger=True))
+        pop.popup()
 
     def quick_load(self):
         self.quick_busy.set_label("lädt …")
@@ -248,13 +300,11 @@ class AnpassenMixin:
         def work():
             tr = self.p.music.quick_picks()
             pics = {}
-            flip = ink_darker()
             for t in tr[:50]:
                 url = big_thumb(t.get("thumb"), 226)
                 if url:
                     try:
-                        pb = fetch_pixbuf(url)
-                        pics[t["videoId"]] = (pb, dither(pb, DotThumb.N, DotThumb.N, flip))
+                        pics[t["videoId"]] = (fetch_pixbuf(url), None)
                     except Exception:  # noqa: BLE001
                         pass
             return tr, pics
@@ -269,7 +319,7 @@ class AnpassenMixin:
         tui.background(work, done=done)
 
     def _quick_resize(self):
-        """Spaltenzahl folgt der Fensterbreite (Titelbilder 94 px)."""
+        """Spaltenzahl folgt der Fensterbreite und der Kästchengröße."""
         if self.quick_panel.get_mapped():
             cols = self._quick_cols_now()
             if cols != self._quick_cols and self.quick_tracks:
@@ -277,41 +327,57 @@ class AnpassenMixin:
         return True
 
     def _quick_cols_now(self):
-        w = self.quick_panel.get_width() or self.get_width() or 800
-        return max(3, (w - 40) // 98)
+        w = (self.get_width() - 30) if self.get_width() > 30 else 800       # Fensterbreite, nicht Kastenbreite (der blähte sich selbst auf)
+        return max(1, (w - 40) // (self.quick_side() + 12))
 
     def quick_fill(self):
         grid = self.quick_grid
         tui.clear(grid)
         cols = self._quick_cols = self._quick_cols_now()
+        side, res, names = self.quick_side(), self.quick_res(), self.quick_names()
         row = None
         tr = self.quick_tracks[:self.quick_n()]
         for i, t in enumerate(tr):
-            pb, dots = getattr(self, "_quick_pics", {}).get(t["videoId"], (None, None))
-            pic = DotThumb(86)
-            pic.set_data(pb, dots)
+            pb, _x = getattr(self, "_quick_pics", {}).get(t["videoId"], (None, None))
+            pic = DotThumb(side)
+            pic.res = res
+            pic.set_data(pb)
             b = Gtk.Button(child=pic, focus_on_click=False, halign=Gtk.Align.START, hexpand=False)
             b.add_css_class("qtile")
-            b.set_size_request(94, 94)
+            b.set_size_request(side + 8, side + 8)
             b.set_tooltip_text(f"{t['title']} · {t['artist']}")
             b.connect("clicked", lambda _b, i=i, tr=tr: self.p.play_tracks(tr, start=i, src=("start", "schnellauswahl")))
             rc = Gtk.GestureClick(button=3)
             rc.connect("pressed", lambda g, n, x, y, b=b, t=t: self.songs.menu(b, x, y, t))
             b.add_controller(rc)
+            cell = vbox(b, spacing=2)
+            cell.set_halign(Gtk.Align.START)
+            if names:
+                for txt, cls in ((t["title"], ""), (t["artist"], "dim")):
+                    l = label(txt, *([cls] if cls else []), ellipsize=True, xalign=0)
+                    l.set_max_width_chars(max(6, side // 8))
+                    l.set_size_request(side + 8, -1)
+                    cell.append(l)
             if i % cols == 0:
                 row = hbox(spacing=4)
                 row.set_halign(Gtk.Align.START)
                 grid.append(row)
-            row.append(b)
+            row.append(cell)
 
     # ---------- Anpassen-Popover ----------
     def build_customize(self):
         btn = tui.Button("󰏫", self.customize_menu, tooltip="Anpassen: Leiste unter „steuerung“, Bibliothek, Schnellauswahl")
-        btn.set_margin_start(2)
-        btn.set_margin_end(10)                       # Abstand zu ¹ jetzt
-        top = self.tab_btns[0][1].get_parent()
-        top.insert_child_after(btn, top.get_first_child())
+        btn.set_valign(Gtk.Align.START)
         self.cust_btn = btn
+        # Stift ganz rechts in der Leiste (nicht mehr in der Kopfzeile)
+        box = self.ctl_opts.get_parent()
+        opts = self.ctl_opts
+        nxt = opts.get_prev_sibling()
+        box.remove(opts)
+        opts.set_hexpand(False)
+        row = hbox(opts, label("", hexpand=True), btn, spacing=8)
+        box.insert_child_after(row, nxt)
+        self.ctl_opts_row = row
 
     def customize_menu(self, anchor=None):
         anchor = anchor if isinstance(anchor, Gtk.Widget) else self.cust_btn
@@ -362,10 +428,10 @@ class AnpassenMixin:
                 holder.append(hbox(label(LIB_NAMES[k], hexpand=True),
                                    tui.Button("↑", lambda k=k: move("lib_order", LIB_DEFAULT, k, -1, False)),
                                    tui.Button("↓", lambda k=k: move("lib_order", LIB_DEFAULT, k, 1, False)), spacing=6))
-            holder.append(label("schnellauswahl", "kp-sub"))
+            holder.append(label("schnellauswahl (mehr: 󰕮 im kasten)", "kp-sub"))
             holder.append(hbox(label(f"{self.quick_n()} titel", hexpand=True),
-                               tui.Button("−", lambda: (engine.set_setting("quick_n", max(5, self.quick_n() - 5)), self.quick_fill(), fill())),
-                               tui.Button("+", lambda: (engine.set_setting("quick_n", min(50, self.quick_n() + 5)), self.quick_fill(), fill())),
+                               tui.Button("−", lambda: (engine.set_setting("quick_n", max(1, self.quick_n() - 1)), self.quick_fill(), fill())),
+                               tui.Button("+", lambda: (engine.set_setting("quick_n", min(50, self.quick_n() + 1)), self.quick_fill(), fill())),
                                spacing=6))
             holder.append(hbox(tui.Button("󰓃 klang / mixer öffnen", lambda: (pop.popdown(), self.sound_menu())),
                                tui.Button("zurücksetzen", lambda: (engine.set_setting("ctl_bar", None), engine.set_setting("lib_order", None),

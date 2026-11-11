@@ -18,7 +18,7 @@ class LibraryMixin:
         home = vbox(spacing=8)
         self.lib_home_box = home
         home.set_margin_top(6)
-        self.login_panel = tui.Panel("󰀄 konto")
+        self.login_panel = tui.Panel("󰀄 konto  ›  mein profil")
         self.login_body = vbox(spacing=8)
         self.login_body.add_css_class("loginbox")
         self.login_panel.body.append(self.login_body)
@@ -29,6 +29,8 @@ class LibraryMixin:
             gc = Gtk.GestureClick()
             gc.connect("released", lambda *_: self.open_profile() if self.fr is not None else None)
             self.login_panel.add_controller(gc)
+            if self.fr is not None:
+                self.login_panel.body.append(coll_row("󰀄", "mein profil und konto", "öffnen ›", self.open_profile))
         self.coll_panel = tui.Panel("sammlung")
         self.coll = vbox(spacing=0)
         self.coll_panel.body.append(self.coll)
@@ -38,8 +40,8 @@ class LibraryMixin:
         self.local_panel.body.append(self.local_box)
         self.local_panel.set_visible(False)
         home.append(self.local_panel)
-        self.stat_panel = tui.Panel("󰄨 rückblick")
-        self.stat_panel.body.append(coll_row("󰄨", "was ich gehört habe – woche, monat, jahr", "tab 7",
+        self.stat_panel = tui.Panel("󰄨 hörverhalten")
+        self.stat_panel.body.append(coll_row("󰄨", "hörverhalten und rückblick – woche, monat, jahr", "öffnen ›",
                                              lambda: self.show_tab("stats")))
         home.append(self.stat_panel)
         self.ll_panel = tui.Panel("󰋑 lieblingssongs")

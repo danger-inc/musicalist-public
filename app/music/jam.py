@@ -14,6 +14,7 @@ import base64, hashlib, json, os, secrets, socket, threading, time, urllib.parse
 from gi.repository import GLib
 
 import engine
+from friends import relay_open
 
 PORT = 37530
 TYPE = "_musicalist-jam._tcp.local."
@@ -49,7 +50,7 @@ def _open(code, msg):
 def _publish(code, obj):
     req = urllib.request.Request(f"{RELAY}/{_topic(code)}", data=_seal(code, obj).encode(), method="POST",
                                  headers={"Content-Type": "text/plain"})
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with relay_open(req, timeout=10) as r:
         r.read()
 
 
@@ -801,7 +802,7 @@ def _listen(jam, code, on_msg):
             try:
                 jam.net_status = "verbindet …"
                 jam._notify()
-                with urllib.request.urlopen(f"{RELAY}/{_topic(code)}/json?since={since}", timeout=90) as r:
+                with relay_open(f"{RELAY}/{_topic(code)}/json?since={since}", timeout=90) as r:
                     jam.net_status = "verbunden"
                     jam._notify()
                     for line in r:
@@ -883,7 +884,7 @@ def _join_net(self, code, name):
         raise RuntimeError("der code hat 6 zeichen")
     self._net_stop()
     last = None
-    with urllib.request.urlopen(f"{RELAY}/{_topic(code)}/json?poll=1&since=2m", timeout=10) as r:
+    with relay_open(f"{RELAY}/{_topic(code)}/json?poll=1&since=2m", timeout=10) as r:
         for line in r.read().decode().splitlines():
             try:
                 e = json.loads(line)
