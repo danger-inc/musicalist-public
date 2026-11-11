@@ -470,7 +470,8 @@ class Jam:
     def is_ultra(self, key):
         """Ultra: alle Rechte des Gastgebers fürs Abspielen – zusätzlich zu den Rechten auch Titel sofort spielen und in der
         Warteschlange anspringen. Gilt nur für diese Marmelade (wird nicht gemerkt)."""
-        return bool((self.guests.get(key) or {}).get("ultra"))
+        # eigene Geräte (gekoppelt / gleiches Konto) haben immer alle Rechte
+        return bool((self.guests.get(key) or {}).get("ultra")) or (len(str(key)) >= 8 and key in self.paired_ids())
 
     def set_ultra(self, key, on):
         g = self.guests.get(key)
@@ -538,7 +539,7 @@ class Jam:
         Kennung vid in der Warteschlange anspringen) nur für Ultra-Gäste."""
         def run():
             p = self.p
-            if op in ("play", "jump", "volume", "move") and not ultra:
+            if op in ("play", "jump", "volume", "move", "radio", "shuffle") and not ultra:
                 return False
             if op == "volume":
                 try:
@@ -582,6 +583,14 @@ class Jam:
                     p.seek(int(vid) / 1000)
                 except (TypeError, ValueError):
                     return False
+            elif op == "radio":                 # Ultra: Radio zum Titel t (sonst zum laufenden) beim Gastgeber
+                try:
+                    tr = from_proto(t) if t else None
+                except (KeyError, TypeError):
+                    return False
+                p.start_radio(tr)
+            elif op == "shuffle":               # Ultra: Warteschlange des Gastgebers mischen
+                p.shuffle_queue()
             elif op == "remove":
                 i = next((k for k in range(p.index + 1, len(p.queue)) if p.queue[k].get("videoId") == vid), None)
                 if i is None:
@@ -594,7 +603,8 @@ class Jam:
             self._event(f"{name}: " + {"next": "übersprungen", "prev": "zurück", "toggle": "pause/weiter",
                                          "remove": "titel entfernt", "play": "titel sofort gespielt",
                                          "jump": "titel angesprungen", "volume": "lautstärke geändert",
-                                         "move": "reihenfolge geändert"}.get(op, op))
+                                         "move": "reihenfolge geändert", "radio": "radio gestartet",
+                                         "shuffle": "warteschlange gemischt"}.get(op, op))
             self._kick = True
 
     def state(self):

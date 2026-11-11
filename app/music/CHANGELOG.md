@@ -1,5 +1,9 @@
 # musicalist – Änderungen
 
+## 2.1.1 (2026-11-12)
+- **Eigene Geräte haben in der Marmelade alle Rechte (Ultra):** Ein gekoppeltes Handy (oder ein weiteres Gerät mit demselben Konto) kann in deiner Marmelade Titel per Klick sofort spielen, die Reihenfolge ändern und die Lautstärke steuern – ohne dass du es erst freigeben musst.
+- **Radio und Zufall aus der Ferne:** Gäste mit Ultra (auch eigene Geräte) können beim Gastgeber ein Radio starten und die Warteschlange mischen.
+
 ## 2.1.0 (2026-11-12)
 - **Chat-Zustand gleicht sich zwischen deinen Geräten ab:** Was du auf einem Gerät gelesen hast, gilt auch auf dem anderen als gelesen (kein Zähler mehr für schon Gelesenes). Lesebestätigungen („gelesen“ unter deinen Nachrichten) erscheinen auf allen deinen Geräten, und eine Nachricht, die du innerhalb von 5 Minuten zurücknimmst, verschwindet auch auf den anderen (und kommt bei einem neuen Gerät nicht zurück).
 
