@@ -110,6 +110,13 @@ class FriendsMixin:
         self.fr_head.body.append(self.fr_body)
         page.append(self.fr_head)
         self.friends_page = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.EXTERNAL, child=page, vexpand=True)
+        # feste Kopfzeile (im Chat: zurück + was der Freund hört) – bleibt oben stehen, während der Verlauf scrollt
+        self.fr_pin = tui.Panel("󰡉 freunde")
+        self.fr_pin.set_margin_top(6)
+        self.fr_pin.set_visible(False)
+        self.friends_root = vbox(spacing=0)
+        self.friends_root.append(self.fr_pin)
+        self.friends_root.append(self.friends_page)
         self._fr_timer = 0
         f = self.fr
         if f is not None:
@@ -365,6 +372,9 @@ class FriendsMixin:
         box = self.fr_body
         self._detach_entry()
         tui.clear(box)
+        tui.clear(self.fr_pin.body)
+        self.fr_pin.set_visible(False)
+        self.fr_head.head.set_visible(True)
         if f is None:
             box.append(label("freunde nicht verfügbar", "dim"))
             return
@@ -564,7 +574,10 @@ class FriendsMixin:
         f = self.fr
         box = self.fr_body
         sec = x["secret"]
-        box.append(hbox(tui.Button("‹ freunde", lambda: self._fr_goto(None)), label("", hexpand=True),
+        pin = self.fr_pin.body                       # fester Kopf oberhalb des scrollenden Verlaufs
+        self.fr_pin.set_visible(True)
+        self.fr_head.head.set_visible(False)
+        pin.append(hbox(tui.Button("‹ freunde", lambda: self._fr_goto(None)), label("", hexpand=True),
                         tui.Button("󰑐", self.refresh_friends, tooltip="neu abfragen"), spacing=8))
         # Kopf: Name + aktuelles Lied mit Bild, Klick → Profil
         txt, live = self._now_text(x, f)
@@ -587,7 +600,7 @@ class FriendsMixin:
         col.set_hexpand(True)
         head.set_child(hbox(tile, col, spacing=12))
         head.connect("clicked", lambda *_: self._fr_goto(("profile", sec)))
-        box.append(head)
+        pin.append(head)
         # Verlauf (Telegram-Stil: Uhrzeit in der Blase, gleiche Person eng beieinander, Tagestrenner)
         msgs = vbox(spacing=0)
         ms = f.messages(sec)[-80:]
@@ -829,24 +842,39 @@ class FriendsMixin:
         box.append(big)
         box.append(label("hörzeit" + (f" · {pf['n']} titel · {pf.get('ar')} künstler" if "n" in pf else ""), wrap=True))
 
-        def bars(title, rows, unit):
+        # Themen als Blöcke: bei genug Breite zwei nebeneinander (Balken nur halb so lang), im halben Bildschirm untereinander
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, min_children_per_line=1, max_children_per_line=2, homogeneous=True,
+                           column_spacing=28, row_spacing=12, hexpand=True, valign=Gtk.Align.START, activate_on_single_click=False)
+
+        def block(title, rows, unit):
             if not rows:
                 return
-            box.append(label(title, "dim"))
+            b = vbox(spacing=3)
+            b.set_size_request(300, -1)          # schmaler als 2×300 px → ein Thema je Zeile
+            b.append(label(title, "dim"))
             top = max(v for _n, v in rows) or 1
             for n, v in rows:
-                line = hbox(label(n, hexpand=True, ellipsize=True), label(unit(v), "dim"), spacing=8)
-                box.append(line)
-                box.append(self._bar(v / top))
-        bars("top künstler", [(a["n"], a["m"]) for a in pf.get("art") or []],
-             lambda m: f"{m // 60}h {m % 60}min" if m >= 60 else f"{m}min")
-        bars("top titel", [(f"{t['t']} – {t['a']}", t["n"]) for t in pf.get("trk") or []], lambda n: f"{n}×")
+                b.append(hbox(label(n, hexpand=True, ellipsize=True), label(unit(v), "dim"), spacing=8))
+                b.append(self._bar(v / top))
+            flow.append(b)
+        block("top künstler", [(a["n"], a["m"]) for a in pf.get("art") or []],
+              lambda m: f"{m // 60}h {m % 60}min" if m >= 60 else f"{m}min")
+        block("top titel", [(f"{t['t']} – {t['a']}", t["n"]) for t in pf.get("trk") or []], lambda n: f"{n}×")
+        meters = vbox(spacing=3)
+        meters.set_size_request(300, -1)
+        meters.append(label("so hörst du", "dim"))
+        have = False
         for key, name in (("sk", "übersprungen"), ("dv", "vielfalt"), ("t1", "beim lieblingskünstler"), ("rs", "wiederholt (3×+)"),
                           ("cr", "bis zum ende gehört")):
             if key in pf:
                 v = max(0, min(100, int(pf[key])))
-                box.append(hbox(label(name, hexpand=True), label(f"{v} %", "accent"), spacing=8))
-                box.append(self._bar(v / 100))
+                meters.append(hbox(label(name, hexpand=True), label(f"{v} %", "accent"), spacing=8))
+                meters.append(self._bar(v / 100))
+                have = True
+        if have:
+            flow.append(meters)
+        if flow.get_first_child() is not None:
+            box.append(flow)
         chips = []
         if "pk" in pf:
             chips.append(f"{pf['pk']} uhr · lieblingsstunde")

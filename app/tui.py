@@ -997,7 +997,7 @@ class TuiWindow(Gtk.ApplicationWindow):
 
     def _key(self, _c, kv, _code, state):
         focus = self.get_focus()
-        in_entry = isinstance(focus, Gtk.Text) or isinstance(focus, Gtk.Entry)
+        in_entry = isinstance(focus, (Gtk.Text, Gtk.Entry, Gtk.TextView))      # auch mehrzeilige Felder (Chat): Tastenkürzel nicht auslösen
         if kv == Gdk.KEY_Escape:
             if in_entry:
                 self.set_focus(None)

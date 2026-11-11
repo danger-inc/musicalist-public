@@ -157,6 +157,7 @@ class DotThumb(Gtk.DrawingArea):
     def __init__(self, side=86):
         super().__init__(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
         self.side, self.pb, self._g, self.res = side, None, None, None
+        self._surf = self._surf_key = None
         self.set_content_width(side)
         self.set_content_height(side)
         self.set_draw_func(self._draw)
@@ -164,20 +165,44 @@ class DotThumb(Gtk.DrawingArea):
         self.connect("destroy", lambda *_: PIXEL_LISTENERS.remove(self.queue_draw) if self.queue_draw in PIXEL_LISTENERS else None)
 
     def set_data(self, pb, _unused=None):
-        self.pb, self._g = pb, None
+        self.pb, self._g, self._surf = pb, None, None
         self.queue_draw()
+
+    def _paint_cached(self, cr, side, key, render):
+        """Kachel einmal in ein Bild rendern und danach nur noch das Bild malen (das Punktraster in Python kostete je Neuzeichnen
+        ~4 ms je Kachel → 25 Kacheln ~100 ms → Ruckeln in der Bibliothek). Neu gerendert wird nur bei geänderten Einstellungen/Farben/Größe."""
+        import cairo
+        sf = max(1, self.get_scale_factor())
+        full = (key, side, sf)
+        if getattr(self, "_surf", None) is None or self._surf_key != full:
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, max(1, int(side * sf)), max(1, int(side * sf)))
+            surf.set_device_scale(sf, sf)
+            render(cairo.Context(surf))
+            self._surf, self._surf_key = surf, full
+        cr.set_source_surface(self._surf, 0, 0)
+        cr.paint()
+
+    @staticmethod
+    def _colkey():
+        c = tui.colors()
+        return tuple((round(x.red, 3), round(x.green, 3), round(x.blue, 3)) if x is not None else None
+                     for x in (c.get("primary"), c.get("foreground"), c.get("background")))
 
     def _draw(self, _a, cr, width, height):
         side = min(width, height)
         if self.pb is None:
-            c = tui.colors()
-            p, fg = c.get("primary"), c.get("foreground")
-            n = self.N
-            for y in range(n):
-                for x in range(n):
-                    cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.10)
-                    cr.arc((x + 0.5) * side / n, (y + 0.5) * side / n, side / n * 0.36, 0, 6.2832)
-                    cr.fill()
+            ck = self._colkey()
+
+            def ph(c2):
+                c = tui.colors()
+                fg = c.get("foreground")
+                n = self.N
+                for y in range(n):
+                    for x in range(n):
+                        c2.set_source_rgba(fg.red, fg.green, fg.blue, 0.10)
+                        c2.arc((x + 0.5) * side / n, (y + 0.5) * side / n, side / n * 0.36, 0, 6.2832)
+                        c2.fill()
+            self._paint_cached(cr, side, ("ph", ck), ph)
             return
         if not pixel_on():
             draw_photo(cr, self.pb, 0, 0, side)
@@ -187,7 +212,9 @@ class DotThumb(Gtk.DrawingArea):
         k = (pixelart.key(c), res)
         if self._g is None or self._g[0] != k:
             self._g = (k, pixelart.grid(self.pb, res, c))
-        pixelart.draw(cr, self._g[1], side, c, flip=ink_darker())
+        flip = ink_darker()
+        g = self._g[1]
+        self._paint_cached(cr, side, (k, flip, self._colkey(), id(self.pb)), lambda c2: pixelart.draw(c2, g, side, c, flip=flip))
 
 
 class Cover(Gtk.Box):

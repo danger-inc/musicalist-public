@@ -1,5 +1,16 @@
 # musicalist – Änderungen
 
+## 2.0.0 (2026-11-12)
+- **Chats zwischen deinen Geräten:** Nachrichten und Chat-Verläufe gleichen sich zwischen PC und Handy jetzt innerhalb weniger Minuten ab (vorher bis zu 10 Minuten), auch ohne dass du etwas tun musst.
+- **Nachrichten kommen immer an:** Hat jemand PC und Handy mit zwei verschiedenen Codes, wurden Nachrichten vom anderen Gerät stillschweigend verworfen. Jetzt ordnet musicalist sie dem richtigen Freund zu (über die Kennungen aller Geräte, notfalls über den Namen) und merkt sich das zweite Gerät.
+- **Gekoppelt = gleiches Konto:** Handy und beliebig viele Rechner mit demselben Konto erkennen sich automatisch (kein paarweises Koppeln nötig). Sie vertrauen sich in der Marmelade, melden deinen Status an alle deine Codes und tauchen nicht mehr als „Freund“ auf.
+- **Marmelade mit gekoppelten Geräten:** Startet dein gekoppeltes Handy eine Marmelade, erscheint im Marmelade-Panel „mitmachen“ – der Rechner spielt dann mit (mit allen Rechten) und kann so das Ausgabegerät sein. Umgekehrt fragt das Handy, wenn du hier eine startest.
+- **Suche kennt dich:** Lieder, die du schon gehört oder neulich aus der Suche gespielt hast, stehen vorne in der Titel-Liste und haben ein kleines Symbol davor (󰍉 neulich gesucht, 󰋚 schon gehört). Auch beim besten Treffer zählen sie stärker.
+- **Bibliothek ruckelt nicht mehr:** Die Kacheln der Schnellauswahl werden nur noch einmal gezeichnet und danach als Bild wiederverwendet.
+- **Wöchentliche Statistik:** Mit dem Abgleich lädt musicalist pro abgeschlossener Woche eine Zusammenfassung (meistgehörte Titel und Künstler·innen mit Zählern) auf den Server. Daraus entstehen Auswertungen über alle Nutzenden.
+- **Bedienung:** Tabs wechselst du nur noch mit Alt + Zahl. Im Chat lösen Tippen und Leertaste keine Tastenkürzel mehr aus, der Kopf mit „was der Freund hört“ bleibt oben stehen, im Kino-Modus sind die Knöpfe im Glas-Modus durchsichtig, und die Profil-Zusammenfassung zeigt zwei Themen nebeneinander.
+- Weniger Datenverkehr: Status-Meldungen werden auf dem Server auf die neuesten gekürzt.
+
 ## 1.49.0 (2026-11-11)
 - **Konto ist Pflicht:** Beim Start (nach dem Nutzernamen) fragt ein Fenster nach Nutzername und Passwort – neu anlegen oder anmelden. Nur wenn der Server nicht erreichbar ist, gibt es „später (offline)“; das Fenster kommt dann beim nächsten Start wieder.
 - **Alles über den eigenen Server:** Freunde, Chats, Nachrichten und Marmelade laufen mit Konto über den Server. Geht er einmal nicht (Fehler, überlastet, offline), nimmt musicalist automatisch ntfy.sh – gleiches Protokoll, nichts geht verloren.

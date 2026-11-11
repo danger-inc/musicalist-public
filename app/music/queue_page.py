@@ -84,6 +84,7 @@ class QueueMixin:
                 return "#%02x%02x%02x" % (int(v.red * 255), int(v.green * 255), int(v.blue * 255)) if v else fb
             j.colors = (hx("background", "#faf8ff"), hx("on_background", hx("foreground", "#1b1b21")), hx("primary", "#4c5c92"))
             j.listeners.append(self.update_jam)
+            j.watch()
         self.update_jam()
         GLib.timeout_add_seconds(3, self._jam_poll)
         return panel
@@ -106,6 +107,21 @@ class QueueMixin:
             return False
         jm = __import__("jam")
         collapsed = bool(engine.setting("jam_collapsed"))
+        if not j.hosting and j.joined is None:
+            for oname, o in list(j.offers.items()):            # gekoppeltes Gerät hat eine Marmelade gestartet → mitmachen
+                def take(oname=oname, o=o):
+                    self.say(f"tritt der marmelade von {o['who']} bei …")
+
+                    def done(res):
+                        if isinstance(res, Exception):
+                            self.say(f"beitreten ging nicht: {res}")
+                        else:
+                            self.say(f"󰀂 du spielst jetzt mit {res}")
+                        self.update_jam()
+                    tui.background(lambda: j.accept_offer(oname), done=done)
+                box.append(hbox(label("󰀂", "accent"), label(f"{o['who']} hat eine marmelade gestartet", hexpand=True, ellipsize=True),
+                                tui.Button("mitmachen", take),
+                                tui.Button("✕", lambda oname=oname: (j.offers.pop(oname, None), self.update_jam()), danger=True, tooltip="ignorieren")))
 
         def fold():
             engine.set_setting("jam_collapsed", not collapsed)

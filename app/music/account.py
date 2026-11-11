@@ -455,6 +455,80 @@ class Account:
             if changed:
                 engine.set_setting("friends_chat", d)
 
+    def _devices(self):
+        """Jedes Gerät legt „dev.<kennung>“ an (Marmelade-Kennung, Name, eigener Freundes-Code) und liest die der anderen:
+        „gekoppelt“ = gleiches Konto (Handy und beliebig viele Rechner sehen und vertrauen sich in der Marmelade, Status geht an alle Codes)."""
+        import jam as jm
+        fr = getattr(self.player, "friends", None)
+        if fr is None:
+            return 0
+        me = jm.device_id()
+        hid = "dev." + hashlib.sha256(me.encode()).hexdigest()[:16]
+        raw = json.dumps({"jd": me, "name": jm.host_name(), "kind": "pc", "sec": fr.secret}, sort_keys=True)
+        if self.st.get("dev_sent") != raw:
+            self._put_blob(hid, raw.encode())
+            self.st["dev_sent"] = raw
+        old = dict(engine.setting("acct_devs") or {})
+        now = {}
+        for b in self._call("GET", "/v1/blob", token=self.st["token"]) or []:
+            k = b.get("key", "")
+            if not k.startswith("dev.") or k == hid:
+                continue
+            c = old.get(k)
+            if c and c.get("ver") == b.get("version"):
+                now[k] = c
+                continue
+            ver, data = self._blob(k)
+            try:
+                o = json.loads(data) if data else None
+            except ValueError:
+                o = None
+            if not isinstance(o, dict) or len(str(o.get("jd") or "")) < 8 or o.get("jd") == me:
+                continue
+            now[k] = {"ver": ver, "jd": str(o["jd"]), "name": str(o.get("name") or "gerät")[:40], "sec": str(o.get("sec") or ""), "kind": str(o.get("kind") or "")}
+        engine.set_setting("acct_devs", now)
+        fr.devices_changed()
+        return len(now)
+
+    def _stats(self):
+        """Wöchentliche Statistik: für jede abgeschlossene Woche mit Hörprotokoll einmal einen Block „stats.w.<Jahr>-W<KW>“ auf den Server
+        (Top-Titel/-Künstler mit Zählern; daraus wertet der Betreiber über alle Nutzenden aus). PC und Handy rechnen aus demselben
+        abgeglichenen Hörprotokoll das Gleiche → gleicher Schlüssel, Überschreiben ist harmlos."""
+        import analyse
+        j = getattr(self.player, "journal", None)
+        rows = (j.load() if j is not None else None) or []
+        if not rows:
+            return 0
+        sent = dict(self.st.get("stats_sent") or {})
+        first = min(r["at"] for r in rows)
+        n = 0
+        for off in range(-1, -400, -1):
+            lo, hi, _t, _s = analyse.bounds("w", off)
+            if hi <= first:
+                break
+            period = "%d-W%02d" % analyse.day_key(lo).isocalendar()[:2]
+            old = sent.get(period)
+            if old and off < -2:
+                continue                                # ältere Wochen: einmal hochladen genügt (die letzten 2 werden bei Änderung erneuert)
+            r = analyse.analyse(rows, "w", off)
+            if r.get("empty"):
+                sent[period] = "e"
+                continue
+            doc = {"v": 1, "period": period, "secs": int(r["base"]["secs"]),
+                   "tracks": [{"id": t["id"], "t": t.get("t", ""), "a": t.get("a", ""), "n": int(t["plays"]), "s": int(t["secs"])} for t in r["tracks"][:100]],
+                   "artists": [{"n": a["name"], "s": int(a["secs"]), "p": int(a["plays"])} for a in r["artists"][:50]]}
+            raw = json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode()
+            h = hashlib.sha1(raw).hexdigest()[:12]
+            if old == h:
+                continue
+            self._put_blob("stats.w." + period, raw)
+            sent[period] = h
+            n += 1
+            if n >= 60:
+                break
+        self.st["stats_sent"] = sent
+        return n
+
     def sync(self, force=False):
         """Alles abgleichen (blockierend). Ohne force höchstens alle 2 Minuten. → Zahlen oder None."""
         if not self.on:
@@ -466,7 +540,7 @@ class Account:
             self._fire()
             res = {"settings": "", "jup": 0, "jdown": 0, "cup": 0, "cdown": 0, "error": ""}
             try:
-                for what, fn in (("identity", self._identity), ("settings", self._settings), ("journal", self._journal), ("chats", self._chats)):
+                for what, fn in (("identity", self._identity), ("settings", self._settings), ("journal", self._journal), ("devices", self._devices), ("stats", self._stats), ("chats", self._chats)):
                     try:
                         r = fn()
                         if what == "settings":
@@ -511,6 +585,21 @@ class Account:
                 engine.log(f"konto: {e!r}")
         threading.Thread(target=run, daemon=True).start()
 
+    def sync_soon(self, sec=15):
+        """Chat hat sich geändert → in ~15 s alles abgleichen (das andere gekoppelte Gerät sieht die Nachricht dann bald)."""
+        if not self.on or getattr(self, "_soon_sync", False):
+            return
+        self._soon_sync = True
+
+        def run():
+            time.sleep(sec)
+            self._soon_sync = False
+            try:
+                self.sync(force=True)
+            except Exception as e:  # noqa: BLE001
+                engine.log(f"konto: {e!r}")
+        threading.Thread(target=run, daemon=True).start()
+
     # ---------- Hintergrund ----------
     def start(self):
         if self._timer is not None:
@@ -524,7 +613,7 @@ class Account:
                         self.sync()
                     except Exception as e:  # noqa: BLE001
                         engine.log(f"konto: {e!r}")
-                time.sleep(600)
+                time.sleep(120)
         self._timer = threading.Thread(target=loop, daemon=True)
         self._timer.start()
 

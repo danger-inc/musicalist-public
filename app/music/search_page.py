@@ -239,7 +239,9 @@ class SearchMixin:
             self.say(f"suche: {engine.explain(res)}", error=True)
             self.all_box.set_visible(False)
             return
-        st = searchrank.stats(list(self.p.stats.rows)) if getattr(self.p, "stats", None) else ({}, {})
+        picks = dict(engine.setting("search_picks") or {})
+        st = searchrank.stats(list(self.p.stats.rows), picks) if getattr(self.p, "stats", None) else ({}, {}, picks)
+        self._rank_st = st
         cands = []                                   # (punkte, art, ergebnis)
         for kind, lst in res.items():
             for i, r in enumerate(lst):
@@ -266,7 +268,10 @@ class SearchMixin:
                 order.append(kind)
         titles = {"song": "󰝚 titel", "album": "󰀥 alben", "artist": "󰠃 künstler", "playlist": "󰲸 playlists", "podcast": "󰦖 podcasts"}
         for kind in order:
-            rows = [r for r in res.get(kind, []) if (r.get("videoId") or r.get("browseId")) != topid][:self.MAXROWS]
+            rows = [r for r in res.get(kind, []) if (r.get("videoId") or r.get("browseId")) != topid]
+            if kind == "song":              # bekannte Titel (gehört / neulich gesucht) zuerst, sonst Reihenfolge von YouTube
+                rows = sorted(rows, key=lambda r: -searchrank.favor("song", r.get("videoId"), st))
+            rows = rows[:self.MAXROWS]
             if not rows:
                 continue
             widgets = self._all_rows(kind, rows)
@@ -498,11 +503,23 @@ class SearchMixin:
         pls = [pl for pl in getattr(self, "lib_playlists", []) if pl["id"] != "LM" and hit(pl["title"])]
         return {"playlists": pls[:10], "tracks": tracks[:cap], "local": p.locallib.search(q)[:30]}
 
+    def _note_pick(self, t):
+        """Aus der Suche gespielt → merken („neulich gesucht“): Titel-ID → Zeit, die letzten 300."""
+        vid = t.get("videoId")
+        if not vid:
+            return
+        picks = dict(engine.setting("search_picks") or {})
+        picks[vid] = int(time.time())
+        if len(picks) > 300:
+            picks = dict(sorted(picks.items(), key=lambda kv: -kv[1])[:300])
+        engine.set_setting("search_picks", picks)
+
     def song_row(self, t, context):
-        return track_row(t, lambda: (self.p.play_now(t), self.p.start_radio(t) if self.p.autoplay else None),
+        st = getattr(self, "_rank_st", None)
+        return track_row(t, lambda: (self._note_pick(t), self.p.play_now(t), self.p.start_radio(t) if self.p.autoplay else None),
                          [("+", "An Warteschlange anhängen", lambda: (self.p.add(t), self.say(f"+ {t['title']}"))),
                           ("»", "Als nächstes spielen", lambda: (self.p.add(t, next_=True),
                                                                  self.say(f"» {t['title']}"))),
                           ("󰐒", "Zu Playlist hinzufügen", lambda b: self.songs.picker(b, [t]), True),
                           ("󰐹", "Radio zu diesem Titel", lambda: self.p.start_radio(t))],
-                         menus=self.songs)
+                         menus=self.songs, known=searchrank.mark(t.get("videoId"), st) if st else "")

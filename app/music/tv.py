@@ -47,6 +47,8 @@ def css(s):
 .tv button.bx.fill, .tv button.bx.on {{ background: @primary; border-color: @primary; }}
 .tv button.bx.fill label, .tv button.bx.on label {{ color: @on_primary; }}
 .tv button.bx:disabled {{ opacity: 0.45; }}
+window.glass .tv button.bx:not(:hover):not(.fill):not(.on) {{ background: alpha(@background, 0.3); }}      /* Glas-Modus: Knöpfe durchsichtig wie der Hintergrund */
+window.glass .tv button.bx:not(:hover):not(.fill):not(.on):disabled {{ background: transparent; }}
 .tv button.tbtn {{ font-size: {f(15)}; padding: {f(5)} {f(14)}; }}
 .tv button.tbtn label {{ font-size: {f(15)}; }}
 .tv .check label {{ font-size: {f(15)}; }}

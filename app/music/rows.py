@@ -29,7 +29,7 @@ def who_chip(name, extra=""):
     return lb
 
 
-def track_row(t, on_play, actions, menus=None, extra=None):
+def track_row(t, on_play, actions, menus=None, extra=None, known=""):
     """Zeile: ▶ titel  künstler  album  3:45  [+] [»] …  actions: [(glyph, tooltip, fn)].
     menus (songmenu.SongMenus): Rechtsklick-Menü + Vorwärmen beim Überfahren; extra() → weitere Menüeinträge."""
     row = Gtk.Box()
@@ -59,7 +59,10 @@ def track_row(t, on_play, actions, menus=None, extra=None):
     row.add_css_class("trk")
     src = t.get("_src") or ()
     who = who_chip(src[1]) if len(src) > 1 and src[0] == "jam" and src[1] else None
-    head.set_child(hbox(row.mark, row.title, who, off, spacing=10))
+    kn = label(known, "accent") if known else None          # Suche: Lupe = neulich gesucht, Uhr = schon gehört
+    if kn is not None:
+        kn.set_tooltip_text("neulich gesucht" if known == "󰍉" else "schon mal gehört")
+    head.set_child(hbox(row.mark, kn, row.title, who, off, spacing=10))
     head.connect("clicked", lambda *_: on_play())
     dur_btn = Gtk.Button(child=row.dur, focus_on_click=False, valign=Gtk.Align.FILL)
     dur_btn.add_css_class("rowhead")

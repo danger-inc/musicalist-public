@@ -162,7 +162,10 @@ def fid(sec):
 def _publish(sec, obj):
     from handy_sync import box
     body = base64.b64encode(box(_key(sec), json.dumps(obj, ensure_ascii=False).encode()))
-    req = urllib.request.Request(f"{RELAY}/{_topic(sec)}", data=body, method="POST", headers={"Content-Type": "text/plain"})
+    hdr = {"Content-Type": "text/plain"}
+    if isinstance(obj, dict) and obj.get("k") == "prof":
+        hdr["X-Tags"] = "prof"          # Status-Meldung: der Server behält je Thema nur die neuesten (Chats nie gekürzt); ntfy.sh ignoriert es
+    req = urllib.request.Request(f"{RELAY}/{_topic(sec)}", data=body, method="POST", headers=hdr)
     with relay_open(req, timeout=10) as r:
         r.read()
 
@@ -244,7 +247,19 @@ class Friends:
     @property
     def aliases(self):
         """Codes der eigenen gekoppelten Geräte (dev_id → Code): wer einen davon hat, sieht dieselbe Hörzeit."""
-        return [v for v in (engine.setting("friends_alias") or {}).values() if isinstance(v, str) and len(v) == 16 and v != self.secret]
+        out = [v for v in (engine.setting("friends_alias") or {}).values() if isinstance(v, str) and len(v) == 16 and v != self.secret]
+        for d in (engine.setting("acct_devs") or {}).values():          # alle weiteren Geräte des Kontos
+            s = d.get("sec") if isinstance(d, dict) else None
+            if isinstance(s, str) and len(s) == 16 and s != self.secret and s not in out:
+                out.append(s)
+        return out
+
+    def devices_changed(self):
+        """Nach dem Abgleich der Geräteliste: eigene Geräte-Codes gehören nicht in die Freundesliste."""
+        own = set(self.aliases)
+        if own and any(x["secret"] in own for x in self.friends):
+            self.friends = [x for x in self.friends if x["secret"] not in own]
+            self._save()
 
     @property
     def inc_until(self):
@@ -696,6 +711,9 @@ class Friends:
             l.sort(key=lambda x: x.get("at") or 0)
             d[sec] = l[-self.CHAT_MAX:]
             engine.set_setting("friends_chat", d)
+        a = getattr(getattr(self, "p", None), "account", None)
+        if a is not None:
+            a.sync_soon()                               # Konto: Chat bald abgleichen (andere gekoppelte Geräte)
         return True
 
     def unread(self, sec):
@@ -732,7 +750,7 @@ class Friends:
             return
         rc[sec] = last["at"]
         engine.set_setting("friends_rcpt", rc)
-        msg = {"k": "read", "from": self.name, "fid": fid(self.secret), "mid": str(last["mid"])[1:], "ts": int(time.time() * 1000)}
+        msg = {"k": "read", "from": self.name, "fid": fid(self.secret), "fids": self._my_fids(), "mid": str(last["mid"])[1:], "ts": int(time.time() * 1000)}
 
         def run():
             try:
@@ -758,13 +776,32 @@ class Friends:
                 engine.set_setting("friends_chat", d)
             return ch
 
-    def friend_by(self, fx_id, name):
+    def _my_fids(self):
+        return [fid(self.secret)] + [fid(a) for a in self.aliases]
+
+    def friend_by(self, fx_id, name, fids=()):
+        """Absender einem Freund zuordnen. Ein Mensch mit zwei Geräten (PC+Handy) hat zwei Codes → zwei Kennungen: erst die Kennung
+        (auch die Liste „fids“ aller Geräte des Absenders), dann gemerkte Zweitkennungen, zuletzt der Name (nur wenn eindeutig) –
+        dann wird die neue Kennung als weiteres Gerät dieses Freundes gemerkt."""
+        ids = [x for x in ([fx_id] + [str(x) for x in (fids or []) if isinstance(x, str)]) if x]
         for f in self.friends:
-            if fid(f["secret"]) == fx_id:
+            if fid(f["secret"]) in ids:
                 return f
-        for f in self.friends:       # ältere Versionen/zweites Gerät: über den Namen
-            if not fx_id and f.get("name") == name:
-                return f
+        memo = engine.setting("friends_fidalias") or {}
+        for x in ids:
+            sec = memo.get(x)
+            for f in self.friends:
+                if sec and f["secret"] == sec:
+                    return f
+        nm = (name or "").strip().casefold()
+        cand = [f for f in self.friends if (f.get("name") or "").strip().casefold() == nm] if nm else []
+        if len(cand) == 1 and (ids or not fx_id):
+            if ids:
+                memo = dict(memo)
+                for x in ids:
+                    memo[x] = cand[0]["secret"]
+                engine.set_setting("friends_fidalias", memo)
+            return cand[0]
         return None
 
     def send_msg(self, f, text="", t=None, alb=None):
@@ -776,7 +813,7 @@ class Friends:
             return False
         now = int(time.time() * 1000)
         mid = secrets.token_hex(6)
-        msg = {"k": "rec" if (t is not None or alb is not None) else "msg", "from": self.name, "fid": fid(self.secret), "ts": now // 1000, "mid": mid}
+        msg = {"k": "rec" if (t is not None or alb is not None) else "msg", "from": self.name, "fid": fid(self.secret), "fids": self._my_fids(), "ts": now // 1000, "mid": mid}
         if text:
             msg["x"] = text
         item = {"mid": mid, "me": True, "at": now}
@@ -823,7 +860,7 @@ class Friends:
             d = dict(self._chats())
             d[f["secret"]] = [x for x in d.get(f["secret"]) or [] if x.get("mid") != mid]
             engine.set_setting("friends_chat", d)
-        msg = {"k": "del", "from": self.name, "fid": fid(self.secret), "mid": mid, "ts": int(time.time())}
+        msg = {"k": "del", "from": self.name, "fid": fid(self.secret), "fids": self._my_fids(), "mid": mid, "ts": int(time.time())}
 
         def run():
             try:
@@ -877,13 +914,13 @@ class Friends:
                         continue
                     if m and m.get("k") == "read" and m.get("mid"):
                         seen.append(e.get("id"))
-                        who = self.friend_by(str(m.get("fid") or ""), str(m.get("from") or ""))
+                        who = self.friend_by(str(m.get("fid") or ""), str(m.get("from") or ""), m.get("fids"))
                         if who is not None and self._got_receipt(who["secret"], str(m["mid"]), int(m.get("ts") or e.get("time", 0) * 1000)):
                             chat_new += 1
                         continue
                     if m and m.get("k") == "del" and m.get("mid"):
                         seen.append(e.get("id"))
-                        who = self.friend_by(str(m.get("fid") or ""), str(m.get("from") or ""))
+                        who = self.friend_by(str(m.get("fid") or ""), str(m.get("from") or ""), m.get("fids"))
                         if who is not None:
                             with self._chat_lock:
                                 d = dict(self._chats())
@@ -895,7 +932,7 @@ class Friends:
                                     chat_new += 1
                         continue
                     if m and m.get("k") in ("msg", "rec") and m.get("fid") and (m.get("x") or isinstance(m.get("t"), dict)):
-                        who = self.friend_by(str(m.get("fid")), str(m.get("from") or ""))
+                        who = self.friend_by(str(m.get("fid")), str(m.get("from") or ""), m.get("fids"))
                         if who is not None:                              # neue Nachricht → in den Chat mit diesem Freund
                             seen.append(e.get("id"))
                             item = {"mid": ("m" + str(m["mid"])) if m.get("mid") else "n" + str(e.get("id")), "me": False, "at": int(e.get("time") or 0) * 1000}

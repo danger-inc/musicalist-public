@@ -119,6 +119,7 @@ button.npchip:hover { border-color: alpha(@primary, 0.55); background-color: alp
 button.npchip .accent { color: @primary; }
 button.ibtn, menubutton.ibtn > button { min-width: 0; min-height: 0; padding: 1px 7px; }
 menubutton.ibtn { padding: 0; }
+button.ibtn.ibtn-wide { padding: 1px 12px; min-width: 30px; }
 menubutton.ibtn > button { background: none; border: none; box-shadow: none; color: inherit; }
 popover.kpop > contents { padding: 6px 4px; min-width: 250px; }
 popover.kpop .kp-head { color: @primary; font-size: 13px; margin: 2px 10px 0 10px; }
@@ -434,7 +435,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.tv_on, self._tv_cookie = False, 0
         self.build_tv()
         self.build_stats()
-        self.add_page("friends", self.friends_page, scroll=False)
+        self.add_page("friends", self.friends_root, scroll=False)
         self.now_page.insert_child_after(self.jam_panel, self.ctl_panel)
         self.build_settings()
         self.spec = Spectrum(rows=2, cell=9, height=34)
@@ -518,6 +519,11 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.acct_pop = pop
         self.friends_btn = tui.Button("󰡉", lambda: self.open_friends(), tooltip="freunde – hinzufügen, entfernen, chat, empfehlungen")
         self.friends_btn.add_css_class("ibtn")
+        self.friends_btn.add_css_class("ibtn-wide")
+        # das Symbol ist breiter als seine Zelle (6 px zu breit) und saß deshalb rechts außermittig: Zeichenabstand verteilt den Rest gleichmäßig
+        lbl = Gtk.Label(use_markup=True, halign=Gtk.Align.CENTER)
+        lbl.set_markup("<span letter_spacing='6144'>󰡉</span>")
+        self.friends_btn.set_child(lbl)
         self.header_extra.append(self.friends_btn)
         self.header_extra.append(self.acct_btn)
         self.tv_btn = tui.Button("󰔂", lambda: self.tv_mode(not self.tv_on), tooltip="fernseher-modus (t)")
@@ -528,11 +534,11 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.header_extra.append(self.gear_btn)
 
     # Tastenhinweise unten: breit alle, halbes Fenster die wichtigsten, schmal keine; ? zeigt immer alle
-    HINTS = [(0, "1-4", "tab"), (1, "leer", "play"), (1, "n/p", "weiter/zurück"), (1, "/", "suche"),
+    HINTS = [(0, "alt+1-4", "tab"), (1, "leer", "play"), (1, "n/p", "weiter/zurück"), (1, "/", "suche"),
              (0, "l", "♥"), (0, "a", "playlist"), (1, "?", "alle tasten")]
     KEYS = [("leertaste", "play / pause"), ("n · p", "nächster / voriger titel"), ("← →", "5 s spulen"),
             ("+ −", "lauter / leiser"), ("l · d", "gefällt mir / gefällt mir nicht"), ("t", "fernseher-modus an / aus"), ("a", "titel zu playlist hinzufügen"),
-            ("1 – 4", "tabs"), ("bild↑ · bild↓", "analyse: früherer / späterer zeitraum"),
+            ("alt + 1 – 4", "tabs wechseln"), ("bild↑ · bild↓", "analyse: früherer / späterer zeitraum"),
             ("w · m · j · g", "analyse: woche / monat / jahr / gesamt"), ("/", "suchen (tab übernimmt den 1. vorschlag)"), ("h", "hörverlauf-leiste"),
             (",", "einstellungen"), ("[ ]", "lyrics früher / später"), ("s", "sleep-timer"), ("e", "klang: equalizer / überblenden"), ("v · f", "visuals: modus / vollbild"),
             ("rechtsklick", "mehr zu jedem titel"), ("q", "schließen"), ("?", "diese liste"),
@@ -1453,27 +1459,29 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
                  Gdk.KEY_7: 6, Gdk.KEY_8: 7, Gdk.KEY_9: 8}.get(kv)
             tabs = [t for t, _n, _i in self.TABS if t not in self.HIDDEN_TABS]
             if i is not None and i < len(tabs):
-                if isinstance(self.get_focus(), (Gtk.Text, Gtk.Entry)) and tabs[i] != "search":
+                if isinstance(self.get_focus(), (Gtk.Text, Gtk.Entry, Gtk.TextView)) and tabs[i] != "search":
                     self.set_focus(None)
                 self.show_tab(tabs[i])
                 return True
         if (Gdk.KEY_5 <= kv <= Gdk.KEY_9 and not state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK)
-                and not isinstance(self.get_focus(), (Gtk.Text, Gtk.Entry))):
+                and not isinstance(self.get_focus(), (Gtk.Text, Gtk.Entry, Gtk.TextView))):
             return True          # 5–9: kein Reiter mehr dahinter (versteckte Seiten)
-        if self.tv_on and (kv == Gdk.KEY_Escape or Gdk.KEY_1 <= kv <= Gdk.KEY_9):
+        if self.tv_on and kv == Gdk.KEY_Escape:
             self.tv_mode(False)
-            return kv == Gdk.KEY_Escape
+            return True
         if kv == Gdk.KEY_Escape and getattr(self, "focus_mode", False):
             self.toggle_focus(False)
             return True
         if kv == Gdk.KEY_Escape and hasattr(self, "drawer") and self.drawer.is_open():
             self.drawer.close()
             return True
+        if Gdk.KEY_1 <= kv <= Gdk.KEY_9 and not state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK):
+            return False         # Tabs wechseln nur mit Alt+Zahl (reine Zahlen tun nichts mehr)
         return tui.TuiWindow._key(self, c, kv, code, state)
 
     def on_key(self, _c, kv, _code, state):
         focus = self.get_focus()
-        if isinstance(focus, (Gtk.Text, Gtk.Entry)) or state & (Gdk.ModifierType.CONTROL_MASK |
+        if isinstance(focus, (Gtk.Text, Gtk.Entry, Gtk.TextView)) or state & (Gdk.ModifierType.CONTROL_MASK |
                                                                  Gdk.ModifierType.ALT_MASK):
             return False
         if self.current_tab() == "stats" and self.an_key(kv):

@@ -152,6 +152,9 @@ def trusted(own=True):
                         t.setdefault(d["jam"], (d.get("name") or "handy") + " (gekoppelt)")
         except (OSError, ValueError, AttributeError):
             pass
+        for d in (engine.setting("acct_devs") or {}).values():          # alle Geräte des Kontos (Handy, weitere Rechner)
+            if isinstance(d, dict) and len(str(d.get("jd") or "")) >= 8:
+                t.setdefault(d["jd"], (d.get("name") or "gerät") + " (gekoppelt)")
     return t
 
 
@@ -210,6 +213,8 @@ class Jam:
         self.remote = None          # Gast: letzter Stand des Gastgebers (+ "_at" = abgeholt, ms)
         self._poll_gen = 0
         self._poke_at = 0
+        self.offers = {}            # gekoppeltes Gerät hat eine Marmelade gestartet: Dienstname → {"title","host","port","ips","who"}
+        self._watch_zc = None
 
     # ----- Anklopfen (im WLAN gefunden, ohne Code): Gastgeber lässt rein, gemerkte Geräte sofort -----
     def knock(self, name, dev):
@@ -264,6 +269,75 @@ class Jam:
             except OSError as e:
                 last = e
         raise RuntimeError(f"gastgeber im wlan nicht erreichbar ({last})")
+
+    # ----- Gekoppelte Geräte: startet eines eine Marmelade, kommt hier eine Anfrage zum Mitmachen -----
+    @staticmethod
+    def paired_ids():
+        """Marmelade-Kennungen der per Abgleich gekoppelten Geräte (Kennung → Name)."""
+        return {k: v.replace(" (gekoppelt)", "") for k, v in trusted(True).items() if str(v).endswith("(gekoppelt)")}
+
+    def watch(self):
+        """Im Hintergrund nach Marmeladen im WLAN lauschen; die eines gekoppelten Geräts werden als Anfrage angeboten (self.offers)."""
+        if self._watch_zc is not None:
+            return
+        try:
+            from zeroconf import IPVersion, ServiceBrowser, Zeroconf
+        except ImportError:
+            return
+        jam = self
+
+        class L:
+            def _take(self, z, typ, name):
+                def run():
+                    try:
+                        info = z.get_service_info(typ, name, timeout=2000)
+                        if not info or not info.addresses:
+                            return
+                        d = (info.properties.get(b"d") or b"").decode("utf-8", "ignore")
+                        who = jam.paired_ids().get(d)
+                        if not who or d == device_id():
+                            return
+                        ips = [socket.inet_ntoa(a) for a in info.addresses if len(a) == 4]
+                        mine = {i.rsplit(".", 1)[0] for i in local_ips()}
+                        ips.sort(key=lambda i: 0 if i.rsplit(".", 1)[0] in mine else 1)
+                        if not ips or jam.hosting or jam.joined is not None:
+                            return
+                        jam.offers[name] = {"title": name.split("._")[0], "host": ips[0], "port": info.port, "ips": ips, "who": who}
+                        jam._event(f"{who} hat eine marmelade gestartet – mitmachen?")
+                        jam._notify()
+                        if jam.say:
+                            GLib.idle_add(lambda: jam.say(f"󰀂 {who} hat eine marmelade gestartet – unter marmelade mitmachen") and False)
+                    except Exception as e:  # noqa: BLE001
+                        engine.log(f"jam watch: {e!r}")
+                threading.Thread(target=run, daemon=True).start()
+
+            def add_service(self, z, typ, name):
+                self._take(z, typ, name)
+
+            def update_service(self, z, typ, name):
+                if name not in jam.offers:
+                    self._take(z, typ, name)
+
+            def remove_service(self, z, typ, name):
+                if jam.offers.pop(name, None) is not None:
+                    jam._notify()
+        try:
+            self._watch_zc = Zeroconf(ip_version=IPVersion.V4Only)
+            ServiceBrowser(self._watch_zc, TYPE, L())
+        except Exception as e:  # noqa: BLE001
+            engine.log(f"jam watch: {e!r}")
+            self._watch_zc = None
+
+    def accept_offer(self, name, status=None):
+        """Gast: Angebot eines gekoppelten Geräts annehmen (blockierend). Der Gastgeber lässt gekoppelte Geräte sofort herein."""
+        o = self.offers.get(name)
+        if not o:
+            raise RuntimeError("die marmelade ist schon vorbei")
+        found = (o["title"], o["host"], o["port"], o["ips"])
+        res = self.knock_join(found, host_name(), status)
+        self.offers.pop(name, None)
+        self._notify()
+        return res
 
     # ----- Gast: Stand mitlesen und im Player spiegeln („läuft“ zeigt überall dasselbe) -----
     def poke(self):
@@ -368,7 +442,7 @@ class Jam:
         try:
             ips = local_ips()
             info = ServiceInfo(TYPE, f"{jam_title()[:60]}.{TYPE}", port=PORT,
-                               addresses=[socket.inet_aton(i) for i in ips], properties={"v": "1"},
+                               addresses=[socket.inet_aton(i) for i in ips], properties={"v": "1", "d": device_id()},
                                server=f"{host_name()}-jam.local.")
             zc = Zeroconf(ip_version=IPVersion.V4Only)
             zc.register_service(info)
