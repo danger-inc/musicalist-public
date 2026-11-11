@@ -113,6 +113,18 @@ def from_proto(o):
             "duration": int(o.get("d") or 0), "thumb": o.get("th") or "", "artistId": None, "albumId": None}
 
 
+def person_id():
+    """Kurzkennung der Person (aus dem Konto-Namen, verrät ihn nicht): alle Geräte eines Kontos haben dieselbe – so zählt der
+    Gastgeber PC + Handy derselben Person in einer Marmelade nur einmal."""
+    try:
+        import account
+        a = account._ACCT
+        n = (a.name if a is not None and a.on else "") or ""
+    except Exception:  # noqa: BLE001
+        n = ""
+    return hashlib.sha256(f"musicalist-person|{n.lower()}".encode()).hexdigest()[:12] if n else ""
+
+
 def host_name():
     return (socket.gethostname().split(".")[0] or "pc").lower()
 
@@ -235,6 +247,11 @@ class Jam:
         if k["state"] == "ok":
             return {"status": "ok", "code": self.code}
         return {"status": k["state"]}
+
+    def knock_list(self):
+        """Wartende Beitrittsanfragen (für Gäste mit Rechten: sie können sie annehmen)."""
+        now = time.time()
+        return [{"k": k, "n": v["name"]} for k, v in self.knocks.items() if v["state"] == "wait" and now - v["at"] < 120]
 
     def answer_knock(self, key, ok):
         k = self.knocks.get(key)
@@ -456,13 +473,15 @@ class Jam:
         if self.say:
             GLib.idle_add(lambda: self.say(f"󰀂 {text}") and False)
 
-    def _seen(self, name, key):
+    def _seen(self, name, key, person=""):
         g = self.guests.get(key)
         if g is None:
             tr = key in trusted()
             self._event(f"{name} ist der marmelade beigetreten" + (" (gemerkt: hat rechte)" if tr else ""))
             g = self.guests[key] = {"added": 0, "admin": tr, "dev": None if key.startswith("n:") else key}
         g["name"], g["seen"] = name, time.time()
+        if person:
+            g["person"] = str(person)[:16]
 
     def is_admin(self, key):
         return bool((self.guests.get(key) or {}).get("admin")) or key in trusted() or self.is_ultra(key)
@@ -524,11 +543,28 @@ class Jam:
         self._kick = True
         self._notify()
 
+    def _groups(self):
+        """Gäste nach Person gruppiert (Liste von Listen (Schlüssel, Gast)); eigene Geräte fehlen."""
+        own, me = self.paired_ids(), person_id()
+        groups = {}
+        for k, g in self.guests.items():
+            pid = g.get("person") or ""
+            if k in own or (me and pid == me):
+                continue
+            groups.setdefault(pid or k, []).append((k, g))
+        return sorted(groups.values(), key=lambda l: (l[0][1].get("name") or "").lower())
+
     def roles(self, st):
         gs = sorted(self.guests.items(), key=lambda kv: (kv[1].get("name") or "").lower())
         st["title"] = jam_title()
         st["guests"] = [g.get("name") for _, g in gs]
-        st["people"] = [{"n": (g.get("name") or "")[:24], "a": self.is_admin(k), "u": self.is_ultra(k)} for k, g in gs[:16]]
+        # Gezählt wird nach Person: Geräte desselben Kontos in dieser Marmelade sind eine Person; eigene Geräte zählen gar nicht.
+        # „l“ = hört gerade mit (kürzlich gemeldet)
+        now = time.time()
+        groups = self._groups()
+        st["guests"] = [grp[0][1].get("name") for grp in groups]
+        st["people"] = [{"n": (grp[0][1].get("name") or "")[:24], "a": any(self.is_admin(k) for k, _ in grp), "u": any(self.is_ultra(k) for k, _ in grp),
+                         "l": any(now - (g.get("seen") or 0) < 20 for _, g in grp), "dv": len(grp)} for grp in groups[:16]]
         st["admins"] = [hid(g["dev"]) for k, g in gs if g.get("dev") and self.is_admin(k)]
         st["ultras"] = [hid(g["dev"]) for k, g in gs if g.get("dev") and self.is_ultra(k)]
         st["kicked"] = [hid(k) for k in self.kicked if not k.startswith("n:")]
@@ -682,10 +718,17 @@ class Jam:
                 key = _gkey(name, q.get("d"))
                 if key in jam.kicked:
                     return self._send(403, {"error": "kicked"})
-                jam._seen(name, key)
+                jam._seen(name, key, q.get("p") or "")
                 try:
                     if u.path == "/api/state":
-                        return self._send(200, {**jam.state(), "you": {"admin": jam.is_admin(key), "ultra": jam.is_ultra(key)}})
+                        adm = jam.is_admin(key)
+                        return self._send(200, {**jam.state(), "you": {"admin": adm, "ultra": jam.is_ultra(key)},
+                                                **({"knocks": jam.knock_list()} if adm else {})})
+                    if u.path == "/api/knock_answer" and method == "POST":
+                        if not jam.is_admin(key):
+                            return self._send(403, {"error": "keine rechte"})
+                        jam.answer_knock(q.get("k") or "", q.get("ok") == "1")
+                        return self._send(200, {"ok": True})
                     if u.path == "/api/ctl" and method == "POST":
                         if not jam.is_admin(key):
                             return self._send(403, {"error": "keine rechte"})
@@ -749,6 +792,8 @@ class Jam:
 
     def _url(self, j, path, **extra):
         q = {"c": j["code"], "n": j["name"], "d": device_id(), **extra}
+        if person_id():
+            q["p"] = person_id()
         return f"http://{j['host']}:{j['port']}{path}?" + urllib.parse.urlencode(q)
 
     def _get(self, url, timeout=6):
@@ -927,7 +972,7 @@ def _net_host(self):
         if m.get("k") in ("hello", "add", "ctl") and key in self.kicked:
             return
         if m.get("k") == "hello":
-            self._seen(name, key)
+            self._seen(name, key, str(m.get("p") or ""))
             self._kick = True
         elif m.get("k") == "add" and isinstance(m.get("t"), dict):
             try:
@@ -990,7 +1035,7 @@ def _join_net(self, code, name):
             self._net_state, self._net_state_at = m, time.time()
     _listen(self, code, on_msg)
     try:
-        _publish(code, {"k": "hello", "name": nm, "dev": device_id()})
+        _publish(code, {"k": "hello", "name": nm, "dev": device_id(), "p": person_id()})
     except Exception:  # noqa: BLE001
         pass
     self._notify()

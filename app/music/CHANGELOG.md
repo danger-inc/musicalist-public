@@ -1,5 +1,9 @@
 # musicalist – Änderungen
 
+## 2.2.0 (2026-11-12)
+- **Beitrittsanfragen auch am Handy:** Ist dein gekoppeltes Handy Gast in deiner Marmelade (mit Rechten), sieht es Anfragen anderer ebenfalls und kann sie annehmen oder ablehnen – du musst nicht mehr zum Rechner.
+- **Wer hört mit:** In der Gästeliste steht, wer gerade mithört. Gezählt wird nach Person (Konto): PC + Handy derselben Person in einer Marmelade sind ein Gast, deine eigenen Geräte zählen gar nicht, und getrennt spielende Geräte zählen einzeln.
+
 ## 2.1.1 (2026-11-12)
 - **Eigene Geräte haben in der Marmelade alle Rechte (Ultra):** Ein gekoppeltes Handy (oder ein weiteres Gerät mit demselben Konto) kann in deiner Marmelade Titel per Klick sofort spielen, die Reihenfolge ändern und die Lautstärke steuern – ohne dass du es erst freigeben musst.
 - **Radio und Zufall aus der Ferne:** Gäste mit Ultra (auch eigene Geräte) können beim Gastgeber ein Radio starten und die Warteschlange mischen.

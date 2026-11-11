@@ -128,8 +128,9 @@ class QueueMixin:
             self.update_jam()
         fold_btn = tui.Button("󰅀" if collapsed else "󰅃", fold, tooltip="marmelade auf-/zuklappen")
         if j.hosting:
+            n_guests = len(j._groups())          # nach Person gezählt: Geräte desselben Kontos = eine Person, eigene Geräte gar nicht
             head = hbox(label(jm.jam_title(), "accent", ellipsize=True, hexpand=True),
-                        label(f"code {j.code[:3]} {j.code[3:]} · " + (f"{len(j.guests)} gäste" if j.guests else "noch keine gäste"), "dim"),
+                        label(f"code {j.code[:3]} {j.code[3:]} · " + (f"{n_guests} gäste" if n_guests else "noch keine gäste"), "dim"),
                         tui.Button("󰏫", self.jam_rename_form, tooltip="marmelade umbenennen"), fold_btn)
             box.append(head)
             if getattr(self, "jam_rename", None) is not None:
