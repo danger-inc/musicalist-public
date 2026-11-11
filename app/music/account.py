@@ -413,6 +413,8 @@ class Account:
                             item["t"] = m["t"]
                         if m.get("rd"):
                             item["rd"] = int(m["rd"])
+                        if fr.is_tomb(mid):
+                            continue                      # auf einem Gerät zurückgenommen/gelöscht
                         if fr._log(sec, item):
                             down += 1
                         newest = max(newest, item["at"])
@@ -454,6 +456,48 @@ class Account:
                     changed = True
             if changed:
                 engine.set_setting("friends_chat", d)
+
+    def _chatmeta(self):
+        """Gelesen-Stand, Zurücknehmen und Lesebestätigungen zwischen den eigenen Geräten (Log „chatmeta“)."""
+        fr = getattr(self.player, "friends", None)
+        if fr is None:
+            return 0, 0
+        import jam as jm
+        me = jm.device_id()[:8]
+        out = list(engine.setting("chat_meta_out") or [])
+        up = 0
+        if out:
+            lines = [json.dumps({**e, "d": me}, ensure_ascii=False) for e in out]
+            for c in self._chunks(lines):
+                self._append("chatmeta", "\n".join(c).encode())
+            up = len(out)
+            engine.set_setting("chat_meta_out", list(engine.setting("chat_meta_out") or [])[len(out):])
+        down, changed = 0, 0
+        after = int(self.st.get("cmeta") or 0)
+        while True:
+            entries, nxt, more = self._read_log("chatmeta", after, 100)
+            for _s, d in entries:
+                for line in d.decode("utf-8", "replace").splitlines():
+                    try:
+                        ev = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(ev, dict) or ev.get("d") == me:
+                        continue
+                    down += 1
+                    if fr.apply_meta(ev):
+                        changed += 1
+            after = nxt
+            self.st["cmeta"] = after
+            if not more:
+                break
+        if changed:
+            for fn in list(getattr(fr, "listeners", [])):
+                try:
+                    fn()
+                except Exception:  # noqa: BLE001
+                    pass
+        return up, down
 
     def _devices(self):
         """Jedes Gerät legt „dev.<kennung>“ an (Marmelade-Kennung, Name, eigener Freundes-Code) und liest die der anderen:
@@ -540,7 +584,7 @@ class Account:
             self._fire()
             res = {"settings": "", "jup": 0, "jdown": 0, "cup": 0, "cdown": 0, "error": ""}
             try:
-                for what, fn in (("identity", self._identity), ("settings", self._settings), ("journal", self._journal), ("devices", self._devices), ("stats", self._stats), ("chats", self._chats)):
+                for what, fn in (("identity", self._identity), ("settings", self._settings), ("journal", self._journal), ("devices", self._devices), ("stats", self._stats), ("chats", self._chats), ("chatmeta", self._chatmeta)):
                     try:
                         r = fn()
                         if what == "settings":

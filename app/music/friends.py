@@ -716,6 +716,50 @@ class Friends:
             a.sync_soon()                               # Konto: Chat bald abgleichen (andere gekoppelte Geräte)
         return True
 
+    # ----- Abgleich zwischen eigenen Geräten: Gelesen-Stand, Zurücknehmen, Lesebestätigungen (Log „chatmeta“ des Kontos) -----
+    def meta_out(self, ev):
+        """Ereignis zum Hochladen vormerken ({"e": del|rd|rcpt, "fid", "mid"?, "ts"?}) und bald abgleichen."""
+        out = list(engine.setting("chat_meta_out") or [])
+        out.append(ev)
+        engine.set_setting("chat_meta_out", out[-300:])
+        a = getattr(getattr(self, "p", None), "account", None)
+        if a is not None:
+            a.sync_soon()
+
+    def is_tomb(self, mid):
+        return mid in set(engine.setting("chat_tombs") or [])
+
+    def apply_meta(self, ev):
+        """Ereignis eines anderen eigenen Geräts anwenden (löst selbst nichts Neues aus). → geändert?"""
+        sec = next((x["secret"] for x in self.friends if fid(x["secret"]) == str(ev.get("fid") or "")), None)
+        if sec is None:
+            return False
+        kind, mid = ev.get("e"), str(ev.get("mid") or "")
+        if kind == "rd":
+            d = dict(engine.setting("friends_read") or {})
+            ts = int(ev.get("ts") or 0)
+            if ts > (d.get(sec) or 0):
+                d[sec] = ts
+                engine.set_setting("friends_read", d)
+                return True
+            return False
+        if kind == "del" and mid:
+            tombs = list(engine.setting("chat_tombs") or [])
+            if mid not in tombs:
+                engine.set_setting("chat_tombs", (tombs + [mid])[-500:])
+            with self._chat_lock:
+                d = dict(self._chats())
+                l = d.get(sec) or []
+                keep = [x for x in l if x.get("mid") != mid]
+                if len(keep) != len(l):
+                    d[sec] = keep
+                    engine.set_setting("friends_chat", d)
+                    return True
+            return False
+        if kind == "rcpt" and mid:
+            return self._got_receipt(sec, mid, int(ev.get("ts") or 0), emit=False)
+        return False
+
     def unread(self, sec):
         rd = (engine.setting("friends_read") or {}).get(sec) or 0
         return sum(1 for m in self.messages(sec) if not m.get("me") and (m.get("at") or 0) > rd)
@@ -727,6 +771,12 @@ class Friends:
         d = dict(engine.setting("friends_read") or {})
         d[sec] = int(time.time() * 1000) + 1
         engine.set_setting("friends_read", d)
+        last = getattr(self, "_rd_emitted", None)
+        if last is None:
+            last = self._rd_emitted = {}
+        if d[sec] - last.get(sec, 0) > 30_000:                  # nicht bei jedem Öffnen/Auffrischen des Chats
+            last[sec] = d[sec]
+            self.meta_out({"e": "rd", "fid": fid(sec), "ts": d[sec]})
         self._send_receipt(sec)
 
     @property
@@ -759,7 +809,7 @@ class Friends:
                 engine.log(f"freunde: lesebestätigung {e!r}")
         threading.Thread(target=run, daemon=True).start()
 
-    def _got_receipt(self, sec, mid, ts):
+    def _got_receipt(self, sec, mid, ts, emit=True):
         with self._chat_lock:
             d = dict(self._chats())
             l = list(d.get(sec) or [])
@@ -774,7 +824,9 @@ class Friends:
             if ch:
                 d[sec] = l
                 engine.set_setting("friends_chat", d)
-            return ch
+        if ch and emit:
+            self.meta_out({"e": "rcpt", "fid": fid(sec), "mid": mid, "ts": ts})
+        return ch
 
     def _my_fids(self):
         return [fid(self.secret)] + [fid(a) for a in self.aliases]
@@ -860,6 +912,7 @@ class Friends:
             d = dict(self._chats())
             d[f["secret"]] = [x for x in d.get(f["secret"]) or [] if x.get("mid") != mid]
             engine.set_setting("friends_chat", d)
+        self.meta_out({"e": "del", "fid": fid(f["secret"]), "mid": mid})
         msg = {"k": "del", "from": self.name, "fid": fid(self.secret), "fids": self._my_fids(), "mid": mid, "ts": int(time.time())}
 
         def run():
@@ -930,6 +983,9 @@ class Friends:
                                     d[who["secret"]] = keep
                                     engine.set_setting("friends_chat", d)
                                     chat_new += 1
+                                    gone_mid = "m" + str(m["mid"])
+                            if len(keep) != len(l):
+                                self.meta_out({"e": "del", "fid": fid(who["secret"]), "mid": gone_mid})
                         continue
                     if m and m.get("k") in ("msg", "rec") and m.get("fid") and (m.get("x") or isinstance(m.get("t"), dict)):
                         who = self.friend_by(str(m.get("fid")), str(m.get("from") or ""), m.get("fids"))

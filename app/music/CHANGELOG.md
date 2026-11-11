@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 2.1.0 (2026-11-12)
+- **Chat-Zustand gleicht sich zwischen deinen Geräten ab:** Was du auf einem Gerät gelesen hast, gilt auch auf dem anderen als gelesen (kein Zähler mehr für schon Gelesenes). Lesebestätigungen („gelesen“ unter deinen Nachrichten) erscheinen auf allen deinen Geräten, und eine Nachricht, die du innerhalb von 5 Minuten zurücknimmst, verschwindet auch auf den anderen (und kommt bei einem neuen Gerät nicht zurück).
+
 ## 2.0.0 (2026-11-12)
 - **Chats zwischen deinen Geräten:** Nachrichten und Chat-Verläufe gleichen sich zwischen PC und Handy jetzt innerhalb weniger Minuten ab (vorher bis zu 10 Minuten), auch ohne dass du etwas tun musst.
 - **Nachrichten kommen immer an:** Hat jemand PC und Handy mit zwei verschiedenen Codes, wurden Nachrichten vom anderen Gerät stillschweigend verworfen. Jetzt ordnet musicalist sie dem richtigen Freund zu (über die Kennungen aller Geräte, notfalls über den Namen) und merkt sich das zweite Gerät.
