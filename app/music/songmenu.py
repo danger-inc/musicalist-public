@@ -80,6 +80,7 @@ class SongMenus:
                 else:
                     fn(res[1])
             tui.background(p.music.album, bid, done=done)
+        it("󰋽", "info", lambda: self.info_popup(widget, x, y, "album", bid, title, fr.album_artist(alb)))
         it("󰐊", "album abspielen", lambda: tracks(lambda ts: p.play_tracks(ts)))
         it("+", "an warteschlange anhängen", lambda: tracks(lambda ts: ([p.add(dict(t)) for t in ts], w.say(f"{len(ts)} titel angehängt"))))
         _on = engine.sammlung_has("album", bid)
@@ -101,6 +102,42 @@ class SongMenus:
                 it("󰡉", f"direkt an {fx.get('name') or 'freund'}", lambda fx=fx: (p.friends.send_msg(fx, "", alb=alb), w.say(f"album an {fx.get('name') or 'freund'} geschickt")))
         pop.set_child(main)
         pop.popup()
+
+    # ---------- Info-Seite (Veröffentlichung groß, darunter Einzelheiten) ----------
+    def info_popup(self, widget, x, y, kind, ident, title, sub="", t=None):
+        pop = self._popover(widget, x, y)
+        box = vbox(spacing=2)
+        box.set_size_request(300, -1)
+        box.append(label("󰋽  info", "kp-head"))
+        h = label(title or "?", "kp-title", ellipsize=True)
+        h.set_max_width_chars(34)
+        box.append(h)
+        if sub:
+            box.append(label(sub, "kp-sub", ellipsize=True))
+        body = vbox(spacing=2)
+        body.append(label("lädt …", "kp-empty"))
+        box.append(body)
+        pop.set_child(box)
+        pop.popup()
+
+        def done(res):
+            tui.clear(body)
+            if isinstance(res, Exception):
+                body.append(label(f"geht nicht: {engine.explain(res)}", "kp-empty", wrap=True))
+                return
+            body.append(label(res["label"], "kp-rub"))
+            big = label(res["date"] or "unbekannt", "accent", xalign=0)
+            big.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(res['date'] or 'unbekannt')}</span>")
+            big.set_margin_start(10)
+            big.set_margin_bottom(6)
+            body.append(big)
+            for k, v in res["rows"]:
+                body.append(hbox(label(k, "dim", xalign=0, hexpand=True), label(v, xalign=1, ellipsize=True), spacing=12))
+            if res.get("about"):
+                a = label(res["about"][:300], "kp-sub", wrap=True, xalign=0)
+                a.set_max_width_chars(40)
+                body.append(a)
+        tui.background(self.p.music.info, kind, ident, t, done=done)
 
     def _hover(self, w, t, on):
         tid = getattr(w, "_warm_id", None)
@@ -207,6 +244,8 @@ class SongMenus:
                 it("󰠃", f"künstler · {(t.get('artist') or '').split(',')[0]}", lambda: w.open_artist(t))
             if t.get("albumId"):
                 it("󰀥", f"album · {t.get('album') or 'öffnen'}", lambda: w.open_detail("album", t["albumId"]))
+        if not loc:
+            it("󰋽", "info", lambda: self.info_popup(widget, x, y, "track", t["videoId"], t.get("title"), t.get("artist") or "", t))
         if cur:
             it("󰍰", "lyrics", lambda: w.show_tab("lyrics"), "4")
         self._rub(main)

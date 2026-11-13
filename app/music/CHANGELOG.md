@@ -1,5 +1,9 @@
 # musicalist – Änderungen
 
+## 2.4.0 (2026-11-13)
+- **Schnellauswahl startet Radio:** Ein angeklickter Titel spielt sein Radio – nicht mehr alle vorgeschlagenen Titel hintereinander.
+- **Info zu Titeln, Alben und Podcasts:** Im Rechtsklick-Menü gibt es „󰋽 info“. Groß steht das Veröffentlichungsdatum (Titel: YouTube-Datum; Album: Erscheinungsdatum bzw. Jahr; Podcast: neueste Folge), darunter Dauer, Aufrufe, Titelzahl u. a.
+
 ## 2.3.1 (2026-11-12)
 - **Mitteilungen vom Server:** Schickt der Betreiber eine Mitteilung, erscheint sie als Fenster (beim nächsten Abgleich); bei Wartung oder zu alter Version steht ein Hinweis.
 - **Konto umbenannt:** Wird dein Konto auf dem Server umbenannt, übernimmt der PC den neuen Namen beim Abgleich – und deinen Freundes-Nutzernamen, wenn er bisher derselbe war.

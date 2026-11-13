@@ -867,6 +867,66 @@ class Music:
         return [{"id": a.get("browseId"), "title": a.get("title", ""), "sub": ", ".join(x.get("name", "") for x in a.get("artists") or [])}
                 for a in self.yt.get_library_albums(limit=100) if a.get("browseId")]
 
+    # ----- Info (Veröffentlichung u. a.) -----
+    @staticmethod
+    def _de_date(iso):
+        """'2019-05-17' → '17. Mai 2019'."""
+        import datetime
+        mon = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"]
+        d = datetime.date.fromisoformat(str(iso)[:10])
+        return f"{d.day}. {mon[d.month - 1]} {d.year}"
+
+    def _song_meta(self, vid):
+        d = self.yt.get_song(vid)
+        mf = (d.get("microformat") or {}).get("microformatDataRenderer") or {}
+        vd = d.get("videoDetails") or {}
+        iso = mf.get("publishDate") or mf.get("uploadDate") or ""
+        return iso[:10], vd
+
+    def info(self, kind, ident, t=None):
+        """Infoseite: {"label", "date", "rows": [(name, wert)], "about"}. kind = track | album | podcast."""
+        def mmss(sec):
+            sec = int(sec or 0)
+            return "" if sec <= 0 else (f"{sec // 3600}:{sec // 60 % 60:02d}:{sec % 60:02d}" if sec >= 3600 else f"{sec // 60}:{sec % 60:02d}")
+        rows, about = [], ""
+        if kind == "track":
+            t = t or {}
+            if t.get("podcast"):
+                rows = [("podcast", t.get("album") or ""), ("dauer", mmss(t.get("duration")))]
+                return {"label": "veröffentlicht", "date": t.get("note") or "", "rows": [r for r in rows if r[1]], "about": ""}
+            rows = [("künstler·in", t.get("artist") or ""), ("album", t.get("album") or ""), ("dauer", mmss(t.get("duration")))]
+            iso, vd = "", {}
+            try:
+                iso, vd = self._song_meta(ident)
+            except Exception as e:  # noqa: BLE001
+                log(f"info {ident}: {str(e)[:80]}")
+            if str(vd.get("viewCount") or "").isdigit():
+                rows.append(("aufrufe", f"{int(vd['viewCount']):,}".replace(",", ".")))
+            if vd.get("isLiveContent"):
+                rows.append(("art", "livestream"))
+            return {"label": "veröffentlicht", "date": self._de_date(iso) if iso else "", "rows": [r for r in rows if r[1]], "about": ""}
+        if kind == "album":
+            d = self.yt.get_album(ident)
+            year = str(d.get("year") or "")
+            tracks = d.get("tracks") or []
+            rows = [("art", d.get("type") or ""), ("künstler·in", ", ".join(a.get("name", "") for a in d.get("artists") or [])),
+                    ("titel", str(d.get("trackCount") or len(tracks))), ("gesamtdauer", d.get("duration") or "")]
+            date = year
+            first = next((x.get("videoId") for x in tracks if x.get("videoId")), None)
+            if first:
+                try:
+                    iso, _vd = self._song_meta(first)
+                    if iso and iso[:4] == year:        # Album-Seiten nennen nur das Jahr; das genaue Datum kommt vom ersten Titel
+                        date = self._de_date(iso)
+                except Exception as e:  # noqa: BLE001
+                    log(f"info album {ident}: {str(e)[:80]}")
+            return {"label": "erschienen", "date": date, "rows": [r for r in rows if r[1]], "about": d.get("description") or ""}
+        d = self.yt.get_podcast(ident, limit=100)
+        eps = d.get("episodes") or []
+        rows = [("autor·in", (d.get("author") or {}).get("name") or ""), ("folgen", str(len(eps)))]
+        return {"label": "neueste folge", "date": (eps[0].get("date") if eps else "") or "", "rows": [r for r in rows if r[1]],
+                "about": d.get("description") or ""}
+
     def collection_sync(self, kind, ident, on):
         """Herz zu YouTube Music spiegeln (nur angemeldet): Album/Playlist in die Bibliothek legen, Künstler·in abonnieren."""
         if kind == "album":

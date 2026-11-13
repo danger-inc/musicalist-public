@@ -330,6 +330,11 @@ class AnpassenMixin:
         w = (self.get_width() - 30) if self.get_width() > 30 else 800       # Fensterbreite, nicht Kastenbreite (der blähte sich selbst auf)
         return max(1, (w - 40) // (self.quick_side() + 12))
 
+    def _quick_play(self, t):
+        """Titel spielen und sein Radio starten (nicht die ganze Schnellauswahl hintereinander)."""
+        self.p.play_tracks([t], src=("start", "schnellauswahl"))
+        self.p.start_radio(t)
+
     def quick_fill(self):
         grid = self.quick_grid
         tui.clear(grid)
@@ -346,7 +351,7 @@ class AnpassenMixin:
             b.add_css_class("qtile")
             b.set_size_request(side + 8, side + 8)
             b.set_tooltip_text(f"{t['title']} · {t['artist']}")
-            b.connect("clicked", lambda _b, i=i, tr=tr: self.p.play_tracks(tr, start=i, src=("start", "schnellauswahl")))
+            b.connect("clicked", lambda _b, t=t: self._quick_play(t))
             rc = Gtk.GestureClick(button=3)
             rc.connect("pressed", lambda g, n, x, y, b=b, t=t: self.songs.menu(b, x, y, t))
             b.add_controller(rc)
