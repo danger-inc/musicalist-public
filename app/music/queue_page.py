@@ -248,6 +248,18 @@ class QueueMixin:
                     for p_ in ppl[:12]:
                         pr.append(who_chip(p_["n"], " 󰓎" if p_.get("u") else " 󰌆" if p_.get("a") else ""))
                     box.append(pr)
+                devs = st.get("devs") or []
+                if ultra and len(devs) > 1:            # Ausgabe wählen: nur zwischen den gekoppelten Geräten dieser Marmelade
+                    jm_ = __import__("jam")
+                    me, out = jm_.hid(jm_.device_id()), st.get("out", "")
+                    box.append(label("󰓃 ausgabe – welches gerät spielt?", "dim"))
+                    for d in devs:
+                        h = d.get("h") or ""
+                        nm = (d.get("n") or "gerät") + (" (hier)" if h and h == me else " (gastgebend)" if not h else "")
+                        box.append(hbox(tui.Button(("◉ " if out == h else "○ ") + nm, lambda h=h: ctl("out", h),
+                                                   tooltip="Musik auf diesem Gerät ausgeben"), spacing=6))
+                elif j.out_here(st):
+                    box.append(label("󰓃 dieses gerät spielt die marmelade", "accent"))
                 box.append(label("„läuft“ und die warteschlange unten zeigen, was beim gastgeber spielt.", "dim", wrap=True))
             box.append(hbox(label("abspielen spielt sofort beim gastgeber (du bist ultra); „als nächstes“ und „+“ reihen ein." if ultra else
                                   "abspielen, „als nächstes“ und „+“ schicken titel jetzt in die marmelade.", "dim", wrap=True,

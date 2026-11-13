@@ -1,5 +1,17 @@
 # musicalist – Änderungen
 
+## 2.3.1 (2026-11-12)
+- **Mitteilungen vom Server:** Schickt der Betreiber eine Mitteilung, erscheint sie als Fenster (beim nächsten Abgleich); bei Wartung oder zu alter Version steht ein Hinweis.
+- **Konto umbenannt:** Wird dein Konto auf dem Server umbenannt, übernimmt der PC den neuen Namen beim Abgleich – und deinen Freundes-Nutzernamen, wenn er bisher derselbe war.
+
+## 2.3.0 (2026-11-12)
+- **Ausgabegerät der Marmelade:** Wählt die Gastgeber·in dieses Gerät als Ausgabe (Handy-App 1.3: „ausgabe“), spielt der Rechner die Musik der Marmelade selbst – gleicher Titel, gleiche Stelle, Pause/Weiter folgt. Als Gast mit Ultra (auch eigenes Gerät) wählst du die Ausgabe im Marmelade-Kasten zwischen den gekoppelten Geräten. Ohne Wahl bleibt der Rechner still (nur Anzeige).
+- **Rechte merken das Gerät:** Wer Rechte bekommt, wird gemerkt und kommt künftig automatisch rein, ohne anzuklopfen; auch Gäste mit Rechten dieser Marmelade kommen sofort wieder rein.
+- **Freund·innen sehen die Marmelade:** Wer in einer Marmelade mithört, gilt als „hört gerade“ (mit dem Titel der gastgebenden Person). In der Freundesliste steht, in welcher Marmelade jemand ist – und ob mit dir. Behebt auch einen Fehler bei empfohlenen Alben/Playlists in der Freundesliste.
+- **Gemerkt:** Alben, Playlists und Künstler·innen mit „󰋕 merken“ in die eigene Bibliothek legen (auch ohne Anmeldung; angemeldet zusätzlich bei YouTube Music). Neuer Kasten „gemerkt“ in der Bibliothek, auch im Album-Menü.
+- **Playlists laden schneller:** Die Bibliothek zeigt die zuletzt bekannte Playlist-Liste sofort und erneuert sie im Hintergrund.
+- **Mischen (󰒝 zufällig) in Album/Playlist:** Läuft schon ein Titel aus der Liste, spielt er einfach weiter – nur die folgenden Titel werden neu gemischt.
+
 ## 2.2.0 (2026-11-12)
 - **Beitrittsanfragen auch am Handy:** Ist dein gekoppeltes Handy Gast in deiner Marmelade (mit Rechten), sieht es Anfragen anderer ebenfalls und kann sie annehmen oder ablehnen – du musst nicht mehr zum Rechner.
 - **Wer hört mit:** In der Gästeliste steht, wer gerade mithört. Gezählt wird nach Person (Konto): PC + Handy derselben Person in einer Marmelade sind ein Gast, deine eigenen Geräte zählen gar nicht, und getrennt spielende Geräte zählen einzeln.

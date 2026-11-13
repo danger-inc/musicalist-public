@@ -70,6 +70,23 @@ def setting(key):
         return DEFAULT_SETTINGS.get(key)
 
 
+# ----- Sammlung: Alben, Playlists und Künstler „liken“ – erscheinen in der eigenen Bibliothek (auch ohne Anmeldung) -----
+def sammlung(kind=None):
+    l = [x for x in (setting("sammlung") or []) if isinstance(x, dict) and x.get("id")]
+    return [x for x in l if kind in (None, x.get("kind"))]
+
+
+def sammlung_has(kind, ident):
+    return any(x.get("kind") == kind and x.get("id") == ident for x in sammlung())
+
+
+def sammlung_set(kind, ident, title, sub, on):
+    l = [x for x in sammlung() if not (x.get("kind") == kind and x.get("id") == ident)]
+    if on:
+        l.insert(0, {"kind": kind, "id": ident, "title": title, "sub": sub})
+    set_setting("sammlung", l)
+
+
 def set_setting(key, value):
     try:
         with open(SETTINGS) as f:
@@ -532,7 +549,7 @@ def _premium_from_page(html):
 
 
 def logout():
-    for p in (BROWSER_JSON, COOKIES_TXT):
+    for p in (BROWSER_JSON, COOKIES_TXT, os.path.join(DATA, "bibliothek-cache.json")):
         try:
             os.unlink(p)
         except OSError:
@@ -783,9 +800,25 @@ class Music:
                                                      .get("tracks", [])) if t]
         return d.get("name", ""), [t for t in map(track, songs.get("results", [])) if t]
 
+    LIB_CACHE = os.path.join(DATA, "bibliothek-cache.json")
+
+    def library_cached(self):
+        """Zuletzt bekannte Playlist-Liste (sofort, ohne Netz) – die Bibliothek zeigt sie, bis die frische da ist."""
+        try:
+            with open(self.LIB_CACHE, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
     def library(self):
         pls = self.yt.get_library_playlists(limit=100)
-        return [{"id": p["playlistId"], "title": p["title"], "count": p.get("count", "")} for p in pls]
+        res = [{"id": p["playlistId"], "title": p["title"], "count": p.get("count", "")} for p in pls]
+        try:
+            with open(self.LIB_CACHE, "w", encoding="utf-8") as f:
+                json.dump(res, f, ensure_ascii=False)
+        except OSError:
+            pass
+        return res
 
     def editable_playlists(self):
         """Eigene Playlists (in die man Titel legen kann) – ohne Lieblingssongs/Episoden."""
@@ -820,12 +853,28 @@ class Music:
     def dislike(self, vid, on):
         self.yt.rate_song(vid, "DISLIKE" if on else "INDIFFERENT")
 
-    def save_album(self, bid):
-        """Album in die eigene Bibliothek legen (wie „Zur Bibliothek hinzufügen“ in YT Music)."""
+    def save_album(self, bid, on=True):
+        """Album in die eigene Bibliothek legen (wie „Zur Bibliothek hinzufügen“ in YT Music) bzw. wieder herausnehmen."""
         pid = self.yt.get_album(bid).get("audioPlaylistId")
         if not pid:
             raise RuntimeError("album nicht gefunden")
-        self.yt.rate_playlist(pid, "LIKE")
+        self.yt.rate_playlist(pid, "LIKE" if on else "INDIFFERENT")
+
+    def save_playlist(self, pid, on=True):
+        self.yt.rate_playlist(str(pid).removeprefix("VL"), "LIKE" if on else "INDIFFERENT")
+
+    def library_albums(self):
+        return [{"id": a.get("browseId"), "title": a.get("title", ""), "sub": ", ".join(x.get("name", "") for x in a.get("artists") or [])}
+                for a in self.yt.get_library_albums(limit=100) if a.get("browseId")]
+
+    def collection_sync(self, kind, ident, on):
+        """Herz zu YouTube Music spiegeln (nur angemeldet): Album/Playlist in die Bibliothek legen, Künstler·in abonnieren."""
+        if kind == "album":
+            self.save_album(ident, on)
+        elif kind == "playlist":
+            self.save_playlist(ident, on)
+        elif kind == "artist":
+            self.subscribe(ident, on)
 
 
 # ---------- Songtexte ----------
@@ -2465,13 +2514,64 @@ class Player:
     # ----- Marmelade als Gast: die Anzeige spiegelt den Gastgeber, die eigene Wiedergabe ruht -----
     _mirror = None      # gesicherte eigene Wiedergabe, solange gespiegelt wird
 
-    def mirror(self, tracks, playing=False, pos=0.0, dur=0.0, admin=False, vol=None):
-        """GTK-Thread. tracks = [läuft, als nächstes …] des Gastgebers; None = Marmelade verlassen → eigene zurück."""
+    # ----- Marmelade als Gast: Ausgabe auf diesem Gerät -----
+    _m_vid = None            # Titel, der hier gerade (hörbar) gespielt wird
+    _m_gen = 0
+    _m_playing = False
+    _m_seek_ok = 0.0
+
+    def _mirror_audio(self, tracks, playing, audible):
+        """Hat der Gastgeber dieses Gerät als Ausgabe gewählt (audible), spielt der eigene mpv den laufenden Titel des Gastgebers mit:
+        gleicher Titel, gleiche Stelle (self.pos = Stelle des Gastgebers), Pause/Weiter folgt ihm. Sonst bleibt mpv still."""
+        vid = tracks[0].get("videoId") if tracks else None
+        self._m_playing = bool(playing)
+        if not audible or not vid:
+            if self._m_vid is not None:
+                self._m_vid = None
+                self._m_gen += 1
+                self.mpv.cmd("stop")
+            return
+        if vid != self._m_vid:
+            self._m_vid = vid
+            self._m_gen += 1
+            gen = self._m_gen
+            self._m_seek_ok = time.monotonic() + 4
+
+            def done(res):
+                if gen != self._m_gen or self._mirror is None:
+                    return
+                if isinstance(res, Exception):
+                    self.emit(f"error:marmelade: {explain(res)}")
+                    return
+                self.mpv.set("user-agent", res["ua"])
+                self.mpv.loadfile(res["url"], int(max(0, self.pos)))
+                self.mpv.set("pause", not self._m_playing)
+                self._m_seek_ok = time.monotonic() + 4
+            tui.background(self.stream_for, vid, None, done=done)
+        else:
+            self.mpv.set("pause", not self._m_playing)
+
+    def _on_mpv_mirror(self, msg):
+        """mpv-Ereignisse, solange gespiegelt wird: nie Verlauf/Weiterschalten – nur die Stelle dem Gastgeber nachziehen."""
+        ev = msg.get("event")
+        if ev == "property-change" and msg.get("name") == "time-pos" and msg.get("data") is not None and self._m_vid:
+            if self._m_playing and time.monotonic() > self._m_seek_ok and abs(msg["data"] - self.pos) > 3.0:
+                self._m_seek_ok = time.monotonic() + 4
+                self.mpv.cmd("seek", max(0, self.pos), "absolute")
+        elif ev == "end-file" and msg.get("reason") == "error" and self._m_vid:
+            self.emit(f"error:marmelade: wiedergabe fehlgeschlagen ({msg.get('file_error', '')})")
+        return False
+
+    def mirror(self, tracks, playing=False, pos=0.0, dur=0.0, admin=False, vol=None, audible=False):
+        """GTK-Thread. tracks = [läuft, als nächstes …] des Gastgebers; None = Marmelade verlassen → eigene zurück.
+        audible = der Gastgeber hat dieses Gerät als Ausgabe gewählt (dann spielt der eigene mpv mit)."""
         if tracks is None:
             if self._mirror is None:
                 return
+            was_audible = self._m_vid is not None
+            self._mirror_audio(None, False, False)
             m, self._mirror = self._mirror, None
-            self.queue, self.index, self.pos, self.dur, self.started = m["queue"], m["index"], m["pos"], m["dur"], m["started"]
+            self.queue, self.index, self.pos, self.dur, self.started = m["queue"], m["index"], m["pos"], m["dur"], m["started"] and not was_audible
             self.paused, self.restore_pos = True, m["pos"]
             if m.get("vol") is not None and m["vol"] != self.volume:
                 self.volume = m["vol"]
@@ -2491,7 +2591,8 @@ class Player:
         self.paused, self.started, self.loading = not playing, bool(tracks), False
         self._mirror["admin"] = admin
         self.pos, self.dur = pos, dur
-        if vol is not None and int(vol) != self.volume:          # Lautstärke des Gastgebers anzeigen (nur Anzeige: eigener mpv bleibt)
+        self._mirror_audio(tracks, playing, audible)
+        if vol is not None and int(vol) != self.volume and not audible:          # Lautstärke des Gastgebers anzeigen (nur Anzeige: eigener mpv bleibt)
             self.volume = int(vol)
             self.emit("volume")
         if (old or {}).get("videoId") != (self.current or {}).get("videoId"):
@@ -2555,6 +2656,19 @@ class Player:
         if src:
             for t in tracks:
                 t["_src"] = src
+        # Mischen, während schon ein Titel aus dieser Liste läuft (Album/Playlist als Warteschlange): er spielt einfach weiter,
+        # nur was danach kommt wird neu gemischt (kein Neustart des Titels)
+        if shuffle and self._mirror is None and self.started and self.current:
+            cur = self.current.get("videoId")
+            if any(t.get("videoId") == cur for t in tracks):
+                rest = [t for t in tracks if t.get("videoId") != cur]
+                random.shuffle(rest)
+                self.queue = [self.queue[self.index]] + rest          # wie ein frisch gemischter Start, nur ohne den laufenden Titel neu zu laden
+                self.index = 0
+                self.emit("queue")
+                self.prefetch()
+                self.emit(f"notice:󰒝 {len(rest)} folgende titel gemischt – „{self.current.get('title', '')}“ läuft weiter")
+                return
         self._why = "wechsel"
         if shuffle:
             tracks = tracks[:]
@@ -3067,6 +3181,8 @@ class Player:
             self.emit("error:mpv lässt sich nicht mehr starten – musicalist neu starten (ist mpv installiert?)")
             self.emit("state")
             return
+        if self._mirror is not None:          # Gast einer Marmelade: der eigene Player hat hier nichts zu melden
+            return self._on_mpv_mirror(msg)
         if ev == "property-change":
             name, val = msg.get("name"), msg.get("data")
             if name == "time-pos" and val is not None:

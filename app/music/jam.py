@@ -233,7 +233,8 @@ class Jam:
         key = _gkey(name, dev)
         if key in self.kicked:
             return {"status": "no"}
-        if key in trusted():
+        # Rechte = immer reinlassen: gemerkte Geräte und alle, die in dieser Marmelade schon Rechte haben
+        if key in trusted() or (self.guests.get(key) or {}).get("admin"):
             return {"status": "ok", "code": self.code}
         now = time.time()
         k = self.knocks.get(key)
@@ -380,6 +381,12 @@ class Jam:
                     if st is not None and st is not self.remote:
                         st = {**st, "_at": time.time() * 1000}
                     self.remote = st
+                    fr = getattr(self.p, "friends", None)
+                    if fr is not None:
+                        try:
+                            fr.jam_changed()
+                        except Exception:  # noqa: BLE001
+                            pass
                 time.sleep(0.2)
         threading.Thread(target=run, daemon=True, name="jam-gast").start()
 
@@ -398,7 +405,7 @@ class Jam:
                         t["_src"] = (o["src"], o.get("sn") or "")
                     tracks.append(t)
                 dur = (st.get("du") or 0) / 1000 or (tracks[0]["duration"] if tracks else 0)
-                self.p.mirror(tracks, bool(st.get("playing")), remote_pos(st), dur, self.am_admin(st), st.get("vol"))
+                self.p.mirror(tracks, bool(st.get("playing")), remote_pos(st), dur, self.am_admin(st), st.get("vol"), audible=self.out_here(st))
             return True
         GLib.timeout_add(500, tick)
 
@@ -406,6 +413,12 @@ class Jam:
     def _notify(self):
         for fn in list(self.listeners):
             GLib.idle_add(lambda f=fn: f() and False)
+        fr = getattr(self.p, "friends", None)
+        if fr is not None:
+            try:
+                fr.jam_changed()
+            except Exception:  # noqa: BLE001 – Freunde-Meldung darf die Marmelade nie stören
+                pass
 
     _hosting = False
 
@@ -512,7 +525,13 @@ class Jam:
             tr.pop(key, None)
             engine.set_setting("jam_trusted", tr)
         g["admin"] = on
-        self._event(f"{g['name']} hat jetzt gastgeber-rechte" if on else f"{g['name']} hat keine rechte mehr")
+        if on and g.get("dev") and g["dev"] not in trusted(False):       # Rechte merken das Gerät: kommt künftig automatisch rein
+            tr = trusted(False)
+            tr[g["dev"]] = g.get("name") or g["dev"][:6]
+            engine.set_setting("jam_trusted", tr)
+        if not on:
+            g["ultra"] = False
+        self._event(f"{g['name']} hat jetzt gastgeber-rechte (kommt künftig automatisch rein)" if on else f"{g['name']} hat keine rechte mehr")
         self._kick = True
 
     def trust(self, key, on):
@@ -568,6 +587,8 @@ class Jam:
         st["admins"] = [hid(g["dev"]) for k, g in gs if g.get("dev") and self.is_admin(k)]
         st["ultras"] = [hid(g["dev"]) for k, g in gs if g.get("dev") and self.is_ultra(k)]
         st["kicked"] = [hid(k) for k in self.kicked if not k.startswith("n:")]
+        st["out"] = ""                                         # Ausgabe: der Gastgeber (dieser Rechner) spielt selbst
+        st["devs"] = [{"h": "", "n": host_name(), "on": True}]
         return st
 
     def ctl(self, op, vid, name, t=None, ultra=False, to=None):
@@ -575,8 +596,10 @@ class Jam:
         Kennung vid in der Warteschlange anspringen) nur für Ultra-Gäste."""
         def run():
             p = self.p
-            if op in ("play", "jump", "volume", "move", "radio", "shuffle") and not ultra:
+            if op in ("play", "jump", "volume", "move", "radio", "shuffle", "out") and not ultra:
                 return False
+            if op == "out":          # Ausgabe wählen: dieser Rechner ist Gastgeber und spielt immer selbst
+                return True
             if op == "volume":
                 try:
                     p.set_volume(int(vid))
@@ -860,6 +883,11 @@ class Jam:
             self._kicked_out()
             return None
         return st
+
+    @staticmethod
+    def out_here(st):
+        """Hat der Gastgeber dieses Gerät als Ausgabe gewählt? Ältere Gastgeber kennen „out“ nicht → nur Anzeige, wie bisher."""
+        return bool(st) and st.get("out") is not None and st.get("out") != "" and st.get("out") == hid(device_id())
 
     @staticmethod
     def am_admin(st):

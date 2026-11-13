@@ -7,7 +7,7 @@ from gi.repository import GLib, Gtk
 import tui
 import engine
 from tui import label, hbox, vbox
-from rows import track_row
+from rows import track_row, coll_row
 from widgets import DotCover
 import friends as fr
 
@@ -517,6 +517,18 @@ class FriendsMixin:
             return "noch nichts gesehen – hat er das teilen an?", False
         return f"hört gerade nichts · {ago(x.get('at'))}", False
 
+    @staticmethod
+    def _jam_text(x, f):
+        """In welcher Marmelade die Person gerade ist (und ob mit dir) – oder None."""
+        pr = x.get("prof") or {}
+        jm = pr.get("jm")
+        if not jm or fr.inc_active(pr.get("inc")) or not x.get("at") or time.time() * 1000 - x["at"] > 6 * 60_000:
+            return None, False
+        t = jm.get("t") or "marmelade"
+        if jm.get("i") and jm.get("i") == f.my_jam_id():
+            return f"󰀂 mit dir in der marmelade „{t}“", True
+        return f"󰀂 in der marmelade „{t}“" + (" (gastgebend)" if jm.get("h") else ""), False
+
     def _friend_row(self, x):
         """Container in der Liste: Name + aktuelles Lied (ohne Bild); Klick öffnet den Chat."""
         f = self.fr
@@ -531,7 +543,11 @@ class FriendsMixin:
         n = f.unread(x["secret"])
         name = label(("● " if live else "") + x["name"], "accent")
         song = label(txt, "dim", ellipsize=True, hexpand=True, xalign=0)
-        inner = hbox(label("󰍡", "glyph"), vbox(name, song, spacing=1), spacing=10)
+        jt, with_me = self._jam_text(x, f)
+        col = vbox(name, song, spacing=1)
+        if jt:
+            col.append(label(jt, "accent" if with_me else "dim", ellipsize=True, xalign=0))
+        inner = hbox(label("󰍡", "glyph"), col, spacing=10)
         inner.get_last_child().set_hexpand(True)
         if n:
             inner.append(label(f"{n} neu", "accent"))

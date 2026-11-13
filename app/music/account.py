@@ -69,6 +69,8 @@ class Account:
         self.listeners = []          # fn() nach Anmeldung/Abmeldung/Abgleich
         self.busy = False
         self.last_result = ""
+        self.notices = []            # ungelesene Mitteilungen des Betreibers
+        self.banner = ""             # Wartung / Version zu alt
         self._timer = None
         self._soon = False
         self._last_hash = 0
@@ -573,6 +575,70 @@ class Account:
         self.st["stats_sent"] = sent
         return n
 
+    def _version(self):
+        try:
+            return open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "VERSION")).read().strip()
+        except OSError:
+            return "0"
+
+    @staticmethod
+    def _newer(a, b):
+        def parts(v):
+            out = []
+            for x in str(v).lstrip("v").replace("-", ".").split("."):
+                out.append(int(x) if x.isdigit() else 0)
+            return out
+        x, y = parts(a), parts(b)
+        n = max(len(x), len(y))
+        x += [0] * (n - len(x))
+        y += [0] * (n - len(y))
+        return x > y
+
+    def _notices(self):
+        """Mitteilungen des Betreibers (ungelesene → self.notices), Wartungs-/„zu alt“-Hinweis → self.banner."""
+        try:
+            h = self._call("GET", "/v1/health") or {}
+            mn = str((h.get("min") or {}).get("pc") or "")
+            mt = str(h.get("maintenance") or "")
+            if mn and self._newer(mn, self._version()):
+                self.banner = f"diese version ist zu alt – bitte aktualisieren (mindestens {mn})"
+            else:
+                self.banner = mt
+        except Exception:  # noqa: BLE001
+            pass
+        r = self._call("GET", "/v1/notices", token=self.st.get("token")) or {}
+        self.notices = [n for n in (r.get("notices") or []) if not n.get("read")][::-1]
+
+    def dismiss_notice(self, n):
+        self.notices = [x for x in self.notices if x.get("id") != n.get("id")]
+        tok = self.st.get("token")
+        threading.Thread(target=lambda: self._try(lambda: self._call("POST", f"/v1/notices/{int(n['id'])}/read", token=tok)), daemon=True).start()
+
+    @staticmethod
+    def _try(fn):
+        try:
+            fn()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _check_rename(self):
+        """Konto auf dem Server umbenannt (Betreiber)? Neuen Namen übernehmen – und den Freundes-Nutzernamen, wenn er bisher derselbe war."""
+        me = self._call("GET", "/v1/me", token=self.st.get("token"))
+        now = str((me or {}).get("name") or "").lower()
+        old = self.name
+        if not now or now == old:
+            return
+        self.st["name"] = now
+        self._save()
+        fr = getattr(self.player, "friends", None)
+        if fr is not None and old and fr.uname == old:
+            try:
+                fr.set_username(now)
+            except Exception as e:  # noqa: BLE001
+                engine.log(f"konto: neuer nutzername {e!r}")
+        engine.log(f"konto: umbenannt {old} -> {now}")
+        self._fire()
+
     def sync(self, force=False):
         """Alles abgleichen (blockierend). Ohne force höchstens alle 2 Minuten. → Zahlen oder None."""
         if not self.on:
@@ -584,7 +650,7 @@ class Account:
             self._fire()
             res = {"settings": "", "jup": 0, "jdown": 0, "cup": 0, "cdown": 0, "error": ""}
             try:
-                for what, fn in (("identity", self._identity), ("settings", self._settings), ("journal", self._journal), ("devices", self._devices), ("stats", self._stats), ("chats", self._chats), ("chatmeta", self._chatmeta)):
+                for what, fn in (("rename", self._check_rename), ("notices", self._notices), ("identity", self._identity), ("settings", self._settings), ("journal", self._journal), ("devices", self._devices), ("stats", self._stats), ("chats", self._chats), ("chatmeta", self._chatmeta)):
                     try:
                         r = fn()
                         if what == "settings":

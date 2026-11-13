@@ -601,16 +601,69 @@ class Friends:
         except Exception:  # noqa: BLE001
             return ""
 
+    # ----- Marmelade: wer ist mit wem in derselben? -----
+    @staticmethod
+    def _jam_id_of(code):
+        import hashlib
+        return hashlib.sha256(f"musicalist-jam-id|{code}".encode()).hexdigest()[:10]
+
+    def my_jam_id(self):
+        """Kennung der aktuellen Marmelade (für alle darin gleich, aus dem Code abgeleitet – der Code selbst wird nicht verraten)."""
+        j = getattr(self.p, "jam", None)
+        if j is None:
+            return None
+        if j.hosting and j.code:
+            return self._jam_id_of(j.code)
+        if j.joined is not None:
+            return self._jam_id_of(j.joined.get("code") or "")
+        return None
+
+    def _jam_tag(self):
+        j = getattr(self.p, "jam", None)
+        jid = self.my_jam_id()
+        if not jid:
+            return None
+        if j.hosting:
+            import jam as jm
+            title = jm.jam_title()
+        else:
+            title = (j.remote or {}).get("title") or f"marmelade von {(j.joined or {}).get('host_name', '')}"
+        return {"i": jid, "t": title[:30], "h": 1 if j.hosting else 0}
+
+    _jam_sig = ""
+
+    def jam_changed(self):
+        """Von der Marmelade bei Beitritt/Ende/neuem Stand: Änderungen sofort an die Freund·innen melden."""
+        j = getattr(self.p, "jam", None)
+        rem = (j.remote or {}) if j is not None and j.joined is not None else {}
+        tag = self._jam_tag()
+        sig = f"{self.my_jam_id()}|{(rem.get('now') or {}).get('id')}|{bool(rem.get('playing'))}|{(tag or {}).get('t')}"
+        if sig != self._jam_sig:
+            self._jam_sig = sig
+            if self.share:
+                self._touch()
+
     def _payload(self):
         """Genau das sehen Freunde von dir."""
         t = self._cur
         inc = self.inc_until
         now = entry(t) if t and not str(t["videoId"]).startswith("local:") and not inc else None
+        playing = bool(now and self._playing)
+        # Gast in einer Marmelade: gehört wird über das Gerät der gastgebenden Person – das zählt als „hört gerade“
+        j = getattr(self.p, "jam", None)
+        if j is not None and j.joined is not None and not inc and j.remote and j.remote.get("now"):
+            n = j.remote["now"]
+            if n.get("id") and not str(n["id"]).startswith("local:"):
+                now, playing = {"id": n.get("id"), "t": n.get("t"), "a": n.get("a")}, bool(j.remote.get("playing"))
         lv = self.level
-        o = {"k": "prof", "v": 1, "dev": engine.device_id()[:8], "name": self.name, "ts": int(time.time()), "now": now, "pl": bool(now and self._playing),
+        o = {"k": "prof", "v": 1, "dev": engine.device_id()[:8], "name": self.name, "ts": int(time.time()), "now": now, "pl": playing,
              "recent": [] if inc else [{k: r[k] for k in ("id", "t", "a")} for r in self.recent[:5]],
              "recs": [] if lv == "minimal" else [{k: r[k] for k in ("id", "t", "a", "th") if k in r} for r in self.recs[:6]]}
         pf = None if inc else self.profile()
+        if not inc:
+            tag = self._jam_tag()
+            if tag:
+                o["jm"] = tag
         if inc:
             o["inc"] = inc
         if pf:

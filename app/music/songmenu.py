@@ -82,9 +82,17 @@ class SongMenus:
             tui.background(p.music.album, bid, done=done)
         it("󰐊", "album abspielen", lambda: tracks(lambda ts: p.play_tracks(ts)))
         it("+", "an warteschlange anhängen", lambda: tracks(lambda ts: ([p.add(dict(t)) for t in ts], w.say(f"{len(ts)} titel angehängt"))))
-        if getattr(w, "account", None) is not None:
-            it("󰋑", "in bibliothek speichern", lambda: tui.background(p.music.save_album, bid, done=lambda r: w.say(
-                f"speichern: {engine.explain(r)}" if isinstance(r, Exception) else f"„{title}“ in der bibliothek gespeichert")))
+        _on = engine.sammlung_has("album", bid)
+
+        def _heart():
+            engine.sammlung_set("album", bid, title, "", not _on)
+            w.say(f"„{title}“ ist jetzt in deiner bibliothek (gemerkt)" if not _on else f"„{title}“ aus der bibliothek genommen")
+            if hasattr(w, "update_sammlung"):
+                w.update_sammlung()
+            if getattr(w, "account", None) is not None:
+                tui.background(p.music.collection_sync, "album", bid, not _on,
+                               done=lambda r: w.say(f"bei youtube music nicht gespeichert: {engine.explain(r)}", error=True) if isinstance(r, Exception) else None)
+        it("󰋑" if _on else "󰋕", "aus der bibliothek nehmen" if _on else "in bibliothek merken", _heart)
         if getattr(p, "friends", None) is not None:
             self._rub(main, "freunde")
             it("󰡉", "an alle freunde empfehlen", lambda: w.say("freunde sehen: album empfohlen" + ("" if p.friends.share else " – sobald du teilen einschaltest"))

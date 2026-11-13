@@ -49,6 +49,12 @@ class LibraryMixin:
         self.ll_panel.body.append(self.ll_box)
         home.insert_child_after(self.ll_panel, self.login_panel)
         self.update_local_likes()
+        # Alben, Playlists und Künstler „liken“ (Herz auf ihrer Seite): erscheinen hier – auch ohne Anmeldung
+        self.sam_panel = tui.Panel("󰋕 gemerkt")
+        self.sam_box = vbox(spacing=0)
+        self.sam_panel.body.append(self.sam_box)
+        home.insert_child_after(self.sam_panel, self.ll_panel)
+        self.update_sammlung()
         self.lib_stack.add_named(home, "home")
 
         detail = vbox(spacing=8)
@@ -73,6 +79,35 @@ class LibraryMixin:
         detail.append(self.detail_panel)
         self.lib_stack.add_named(detail, "detail")
         self.add_page("lib", self.lib_stack)
+
+    def update_sammlung(self):
+        tui.clear(self.sam_box)
+        for kind, name, glyph in (("album", "alben", "󰀥"), ("playlist", "playlists", "󰲸"), ("artist", "künstler·innen", "󰠃")):
+            n = len(engine.sammlung(kind))
+            self.sam_box.append(coll_row(glyph, name, str(n) if n else "", lambda k=kind: self.open_detail("m_" + k, "")))
+
+    def heart_tool(self, kind, ident, title, sub=""):
+        """Herz für Album/Playlist/Künstler·in: merken = erscheint in „gemerkt“ (immer lokal; angemeldet auch bei YouTube Music)."""
+        b = tui.Button("", None)
+        state = {"on": engine.sammlung_has(kind, ident)}
+
+        def paint():
+            b.set_label("󰋑 gemerkt" if state["on"] else "󰋕 merken")
+            (b.add_css_class if state["on"] else b.remove_css_class)("on")
+        paint()
+
+        def toggle(*_):
+            state["on"] = not state["on"]
+            engine.sammlung_set(kind, ident, title, sub, state["on"])
+            paint()
+            self.update_sammlung()
+            self.say(f"„{title}“ ist jetzt in deiner bibliothek (gemerkt)" if state["on"] else f"„{title}“ aus der bibliothek genommen")
+            if self.account is not None:
+                want = state["on"]
+                tui.background(self.p.music.collection_sync, kind, ident, want,
+                               done=lambda r: self.say(f"bei youtube music nicht gespeichert: {engine.explain(r)}", error=True) if isinstance(r, Exception) else None)
+        b.connect("clicked", toggle)
+        return b
 
     def update_local_likes(self):
         """Ohne Anmeldung: Herzen nur lokal – als eigene Zeile in der Bibliothek."""
@@ -185,18 +220,38 @@ class LibraryMixin:
         new_pl.set_margin_top(6)
         self.coll_newpl = new_pl
 
-        def done(res):
-            if isinstance(res, Exception):
-                self.say(f"bibliothek: {engine.explain(res)}", error=True)
+        shown = {"res": None}
+
+        def render(res):
+            # Playlists erst zeigen, wenn sich etwas geändert hat (der Cache kam schon vorher)
+            if shown["res"] == res:
                 return
+            shown["res"] = res
+            while True:                       # alte Playlist-Zeilen (nach den festen Einträgen) wegräumen
+                last = self.coll.get_last_child()
+                if last is None or getattr(last, "_pl_row", False) is False and last is not self.coll_newpl:
+                    break
+                self.coll.remove(last)
             self.editable_ids = {pl["id"] for pl in res if pl["id"] not in ("LM", "SE")}
             self.lib_playlists = res
             for pl in res:
                 if pl["id"] == "LM":
                     continue
-                self.coll.append(coll_row("󰲸", pl["title"], str(pl["count"] or ""),
-                                          lambda i=pl["id"]: self.open_detail("playlist", i)))
+                row = coll_row("󰲸", pl["title"], str(pl["count"] or ""), lambda i=pl["id"]: self.open_detail("playlist", i))
+                row._pl_row = True
+                self.coll.append(row)
             self.coll.append(self.coll_newpl)
+
+        # zuletzt bekannte Liste sofort (vorher kam sie erst nach dem Netz-Abruf), danach im Hintergrund erneuern
+        cached = self.p.music.library_cached()
+        if cached:
+            render(cached)
+
+        def done(res):
+            if isinstance(res, Exception):
+                self.say(f"bibliothek: {engine.explain(res)}", error=True)
+                return
+            render(res)
         tui.background(self.p.music.library, done=done)
 
     def new_playlist_popover(self, anchor):
@@ -283,6 +338,8 @@ class LibraryMixin:
                 tui.background(self.p.music.subscribe, d["channelId"], want, done=done)
             sub.connect("clicked", toggle)
             btns.append(sub)
+        if self.account is None or not d.get("channelId"):
+            btns.append(self.heart_tool("artist", ident, d["name"], ""))
         box.append(btns)
 
         def head(txt):
@@ -313,12 +370,29 @@ class LibraryMixin:
             self.p.play_tracks(res[1], start=0)
         tui.background(self.p.music.watch_list, pid, done=done)
 
-    COLL_KINDS = {"subs": ("󰠃 abonnierte künstler", "artist", "󰠃"),
+    COLL_KINDS = {"m_album": ("󰀥 gemerkte alben", "album", "󰀥"), "m_playlist": ("󰲸 gemerkte playlists", "playlist", "󰲸"),
+                  "m_artist": ("󰠃 gemerkte künstler·innen", "artist", "󰠃"),
+                  "subs": ("󰠃 abonnierte künstler", "artist", "󰠃"),
                   "podlib": ("󰦖 podcasts", "podcast", "󰦖"),
                   "new": ("󰎈 neu von deinen künstlern", "album", "󰀥")}
     DETAIL_NAMES = {"album": "album", "artist": "künstler", "history": "verlauf", "podcast": "podcast",
                     "subs": "abos", "podlib": "podcasts", "new": "neu", "local": "lokal", "stats": "rückblick"}
     LOCAL_SHOWN, LOCAL_QUEUE = 150, 300
+
+    def _merged(self, kind):
+        """Gemerkte (lokal) plus – angemeldet – die der YouTube-Music-Bibliothek, ohne Doppelte."""
+        mine = [{"id": x["id"], "title": x["title"], "sub": x.get("sub", "")} for x in engine.sammlung(kind)]
+        if self.account is not None and kind == "album":
+            try:
+                mine += [a for a in self.p.music.library_albums() if a["id"] not in {m["id"] for m in mine}]
+            except Exception:  # noqa: BLE001 – Netz weg: wenigstens die lokalen
+                pass
+        elif self.account is not None and kind == "artist":
+            try:
+                mine += [a for a in self.p.music.subscriptions() if a["id"] not in {m["id"] for m in mine}]
+            except Exception:  # noqa: BLE001
+                pass
+        return mine
 
     def detail_shuffle(self):
         pool = self.detail_pool or self.detail_tracks
@@ -370,6 +444,8 @@ class LibraryMixin:
               "artist": self.p.music.artist, "history": lambda _i: ("verlauf", self.p.music.history()),
               "subs": lambda _i: self.p.music.subscriptions(), "podlib": lambda _i: self.p.music.podcast_library(),
               "new": lambda _i: self.p.music.new_releases(),
+              "m_album": lambda _i: self._merged("album"), "m_playlist": lambda _i: self._merged("playlist"),
+              "m_artist": lambda _i: self._merged("artist"),
               "locallikes": lambda _i: ("lieblingssongs (nur hier)", engine.local_likes())}[kind]
 
         def done(res):
@@ -405,6 +481,8 @@ class LibraryMixin:
             if editable:
                 tools += [self.pl_tool("✎ umbenennen", lambda b: self.rename_playlist(b, ident, title)),
                           self.pl_tool("󰆴 löschen", lambda b: self.delete_playlist(b, ident, title), danger=True)]
+            if kind in ("album", "playlist") and ident:
+                tools.append(self.heart_tool(kind, ident, title, ""))
             if tracks and kind != "history":
                 tools.append(self.offline_tool(tracks))
             self.set_tools(*tools)

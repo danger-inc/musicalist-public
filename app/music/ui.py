@@ -479,6 +479,50 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.update_state()
         self.update_queue()
         self.refresh_account()
+        self.hook_notices()
+
+    # ---------- Mitteilungen des Betreibers (Server) ----------
+    def hook_notices(self):
+        ac = getattr(self.p, "account", None)
+        if ac is None or getattr(self, "_notice_hooked", False):
+            return
+        self._notice_hooked = True
+        self._notice_dlg = None
+        self._banner_seen = ""
+        ac.listeners.append(lambda: GLib.idle_add(self._notices_changed))
+
+    def _notices_changed(self):
+        ac = getattr(self.p, "account", None)
+        if ac is None:
+            return False
+        if ac.banner and ac.banner != self._banner_seen:
+            self._banner_seen = ac.banner
+            self.say("󰒓 " + ac.banner, seconds=15)
+        if ac.notices and self._notice_dlg is None and self.get_visible():
+            n = ac.notices[0]
+            dlg = Gtk.Window(title="mitteilung", modal=True, transient_for=self, resizable=False)
+            dlg.set_default_size(420, 10)
+            box = vbox(spacing=8)
+            for m in ("top", "bottom", "start", "end"):
+                getattr(box, f"set_margin_{m}")(16)
+            box.append(label("󰍡 " + (n.get("title") or "mitteilung"), "accent"))
+            if n.get("body"):
+                box.append(label(n["body"], wrap=True))
+            if len(ac.notices) > 1:
+                box.append(label(f"noch {len(ac.notices) - 1} weitere", "dim"))
+
+            def ok(*_):
+                ac.dismiss_notice(n)
+                self._notice_dlg = None
+                dlg.destroy()
+                GLib.idle_add(self._notices_changed)
+            btn = tui.Button("ok", ok)
+            box.append(hbox(btn, spacing=8))
+            dlg.set_child(box)
+            dlg.connect("close-request", lambda *_: (ok(), True)[1])
+            self._notice_dlg = dlg
+            dlg.present()
+        return False
 
     # ---------- Kopfleiste ----------
     def build_header(self):
