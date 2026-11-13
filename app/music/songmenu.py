@@ -17,6 +17,7 @@ CSS = """
 popover.kpop.smenu > contents { min-width: 270px; }
 popover.kpop .kp-title { font-size: 13px; font-weight: bold; margin: 2px 10px 0 10px; }
 popover.kpop button.opt.pl-new { color: @primary; }
+popover.kpop button.opt.pl-has { color: @primary; }
 popover.kpop button.opt.pl-new:hover { color: @on_primary; }
 popover.kpop entry.tentry { margin: 2px 8px 4px 8px; }
 popover.kpop .kp-empty { color: alpha(@foreground, 0.5); font-size: 11px; margin: 4px 10px; }
@@ -340,6 +341,9 @@ class SongMenus:
                 lst.append(label("alle", "kp-rub"))
             if not pls:
                 lst.append(label("noch keine eigenen playlists", "kp-empty"))
+            if n == 1:
+                self._rows_single(lst, pop, pls, tracks[0])
+                return
             for pl in pls:
                 self._item(lst, pop, "󰲸", pl["title"], lambda pl=pl: self.add((pl["id"], pl["title"]), tracks),
                            str(pl.get("count") or ""))
@@ -353,6 +357,78 @@ class SongMenus:
                     self.playlists, self.pl_time = res, time.monotonic()
                 show(res)
             tui.background(self.p.music.editable_playlists, done=done)
+
+    def _rows_single(self, lst, pop, pls, t):
+        """Ein Titel: Haken-Liste wie in der Handy-App. Anhaken legt ihn dazu und lässt das Menü offen (mehrere Playlists nacheinander),
+        wieder abhaken nimmt ihn zurück; Playlists, in denen er schon liegt, sind abgehakt („schon drin“)."""
+        vid, w = t["videoId"], self.win
+        inside, added = set(), {}                    # inside: schon vorher drin · added: pid → setVideoId aus dieser Auswahl
+        rows = {}
+
+        def mark(pid):
+            b = rows.get(pid)
+            if b is not None:
+                on = pid in inside or pid in added
+                b.get_child().get_first_child().set_label("[■]" if on else "[ ]")
+                (b.add_css_class if on else b.remove_css_class)("pl-has")
+
+        def toggle(pl):
+            pid, title = pl["id"], pl["title"]
+            if pid in added:
+                sv = added[pid]
+                if not sv:
+                    w.say("ließ sich nicht zurücknehmen – in der playlist selbst entfernen", error=True)
+                    return
+                added.pop(pid)
+                mark(pid)
+
+                def undone(res):
+                    if isinstance(res, Exception):
+                        added[pid] = sv
+                        mark(pid)
+                        w.say(f"playlist: {str(res)[:120]}", error=True)
+                    else:
+                        self.pl_time = 0.0
+                        w.say(f"„{t['title']}“ wieder aus „{title}“ entfernt")
+                tui.background(self.p.music.remove_one, pid, vid, sv, done=undone)
+            elif pid in inside:
+                w.say(f"„{t['title']}“ ist schon in „{title}“ – zum entfernen in der playlist selbst")
+            else:
+                added[pid] = None
+                self.last_pl = (pid, title)
+                engine.set_setting("last_playlist", [pid, title])
+                mark(pid)
+
+                def done(res):
+                    if isinstance(res, Exception):
+                        added.pop(pid, None)
+                        mark(pid)
+                        w.say(f"playlist: {str(res)[:120]}", error=True)
+                        return
+                    new, sv = res
+                    self.pl_time = 0.0
+                    if new:
+                        added[pid] = sv
+                        w.say(f"󰐒 „{t['title']}“ → „{title}“")
+                    else:
+                        added.pop(pid, None)
+                        inside.add(pid)
+                        mark(pid)
+                        w.say(f"󰀦 bereits in „{title}“", error=True)
+                tui.background(self.p.music.add_one, pid, vid, done=done)
+        for pl in pls:
+            b = self._item(lst, pop, "[ ]", pl["title"], lambda pl=pl: toggle(pl), str(pl.get("count") or ""), close=False)
+            rows[pl["id"]] = b
+
+        def got(res):
+            if isinstance(res, Exception):
+                return
+            inside.update(res)
+            for pid in rows:
+                mark(pid)
+        tui.background(self.p.music.playlists_containing, vid, done=got)
+        self._rub(lst)
+        self._item(lst, pop, "󰄬", "fertig", lambda: None)
 
     def add(self, pl, tracks):
         pid, title = pl

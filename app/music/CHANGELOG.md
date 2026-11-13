@@ -1,5 +1,8 @@
 # musicalist – Änderungen
 
+## 2.4.1 (2026-11-13)
+- **Zu Playlist hinzufügen (ein Titel) wie in der Handy-App:** Kästchen statt Sofort-Schließen. Anhaken legt den Titel dazu und lässt das Menü offen (mehrere Playlists nacheinander), wieder abhaken nimmt ihn zurück. Playlists, in denen der Titel schon liegt, sind abgehakt.
+
 ## 2.4.0 (2026-11-13)
 - **Schnellauswahl startet Radio:** Ein angeklickter Titel spielt sein Radio – nicht mehr alle vorgeschlagenen Titel hintereinander.
 - **Info zu Titeln, Alben und Podcasts:** Im Rechtsklick-Menü gibt es „󰋽 info“. Groß steht das Veröffentlichungsdatum (Titel: YouTube-Datum; Album: Erscheinungsdatum bzw. Jahr; Podcast: neueste Folge), darunter Dauer, Aufrufe, Titelzahl u. a.

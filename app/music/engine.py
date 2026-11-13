@@ -629,6 +629,54 @@ class Music:
             return 0, len(vids)
         raise RuntimeError(str(res)[:160])
 
+    def playlists_containing(self, vid):
+        """IDs der eigenen Playlists, in denen der Titel schon liegt (YouTube-Endpunkt der „Zu Playlist“-Auswahl)."""
+        r = self.yt._send_request("playlist/get_add_to_playlist", {"videoIds": [vid], "excludeWatchLater": False})
+        out = set()
+
+        def walk(o):
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    if k == "playlistAddToOptionRenderer" and isinstance(v, dict) and v.get("containsSelectedVideos") in ("ALL", "SOME"):
+                        pid = str(v.get("playlistId") or "")
+                        if pid:
+                            out.add(pid[2:] if pid.startswith("VL") else pid)
+                    else:
+                        walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
+        walk(r)
+        return out
+
+    def add_one(self, pid, vid):
+        """Einen Titel in eine Playlist legen → (neu_hinzugefügt, setVideoId zum späteren Entfernen)."""
+        r = self.yt._send_request("browse/edit_playlist", {"playlistId": pid[2:] if pid.startswith("VL") else pid, "actions": [
+            {"action": "ACTION_ADD_VIDEO", "addedVideoId": vid, "dedupeOption": "DEDUPE_OPTION_SKIP"}]})
+        txt = json.dumps(r)
+        if "STATUS_SUCCEEDED" not in txt:
+            raise RuntimeError("youtube hat abgelehnt")
+        sv = None
+
+        def walk(o):
+            nonlocal sv
+            if isinstance(o, dict):
+                d = o.get("playlistEditVideoAddedResultData")
+                if isinstance(d, dict) and d.get("setVideoId"):
+                    sv = d["setVideoId"]
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
+        walk(r)
+        return "DUPLICATE" not in txt, sv
+
+    def remove_one(self, pid, vid, set_vid):
+        res = self.yt.remove_playlist_items(pid, [{"videoId": vid, "setVideoId": set_vid}])
+        if isinstance(res, dict) and res.get("status") not in (None, "STATUS_SUCCEEDED"):
+            raise RuntimeError(str(res)[:160])
+
     def create_playlist(self, title, vids):
         pid = self.yt.create_playlist(title, "", privacy_status="PRIVATE", video_ids=vids or None)
         if not isinstance(pid, str):
