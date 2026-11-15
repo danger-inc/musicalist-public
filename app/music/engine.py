@@ -501,6 +501,19 @@ def require_login():
     except Exception:  # noqa: BLE001 – abgelaufene/kaputte Anmeldung
         ok = False
     if not ok:
+        # Google dreht Cookies von Zeit zu Zeit um (die kopierten werden dann ungültig), der Browser hat aber meist schon neue:
+        # einmal still aus dem Browser neu einlesen, bevor die Anmeldung als verloren gilt (sonst: „oft abgemeldet“).
+        try:
+            _login_once()
+            stamp = os.path.getmtime(BROWSER_JSON)
+            from ytmusicapi import YTMusic
+            info = YTMusic(browser_auth()).get_account_info()
+            ok = bool(info.get("accountName") or info.get("channelHandle"))
+            if ok:
+                log("anmeldung aus dem browser erneuert")
+        except Exception as e:  # noqa: BLE001
+            log(f"anmeldung erneuern: {e!r}")
+    if not ok:
         raise LoginRequired("anmeldung nicht bestätigt – bitte neu mit google anmelden")
     pr = premium_status()
     if pr is False:
@@ -1362,9 +1375,9 @@ class SpecTap:
     in BANDS Frequenzbänder, astats gibt je Band den Pegel, ametadata schreibt ihn auf mpvs stdout; Mpv liest das
     und ruft feed(). Hier wird daraus 0–16 wie bei cava (automatische Empfindlichkeit, schneller Anstieg, weiches
     Abklingen) und auf 64 Balken verteilt. Läuft ein zweiter mpv (Überblendung), gilt je Balken der größere Wert."""
-    BANDS, OUT, FLOOR = 12, 64, 62.0
-    SPAN = (45.0, 7000.0)
-    RATE, FRAME = 16000, 800            # 20 Bilder/s – genug fürs Auge, halb so viel Rechenzeit wie 30
+    BANDS, OUT, FLOOR = 20, 64, 62.0
+    SPAN = (40.0, 9000.0)
+    RATE, FRAME = 20000, 1000           # 20 Bilder/s – genug fürs Auge, halb so viel Rechenzeit wie 30
 
     def __init__(self, sink):
         self.sink = sink                      # sink(vals) – aus jedem Thread aufrufbar
@@ -1385,7 +1398,7 @@ class SpecTap:
         g = "asplit=2[m][a];[a]aresample=%d,aformat=channel_layouts=mono,asplit=%d%s;" % (
             cls.RATE, n, "".join(f"[b{i}]" for i in range(n)))
         for i, f in enumerate(cls.freqs()):
-            g += f"[b{i}]bandpass=f={f:.0f}:width_type=q:w=3,asetnsamples=n={cls.FRAME}:p=0[c{i}];"
+            g += f"[b{i}]bandpass=f={f:.0f}:width_type=q:w=4.5,asetnsamples=n={cls.FRAME}:p=0[c{i}];"
         g += "".join(f"[c{i}]" for i in range(n))
         g += (f"amerge=inputs={n},astats=metadata=1:reset=1:measure_perchannel=RMS_level:measure_overall=none,"
               "ametadata=mode=print,anullsink;[m]anull")
@@ -1397,7 +1410,7 @@ class SpecTap:
         if len(db) != n:
             return
         # oberhalb der Grundlinie, nach oben leicht angehoben (Höhen tragen weniger Energie, wirken sonst tot)
-        lv = [max(0.0, d + self.FLOOR) + 0.55 * i for i, d in enumerate(db)]
+        lv = [max(0.0, d + self.FLOOR) + 0.33 * i for i, d in enumerate(db)]
         now = time.monotonic()
         with self.lock:
             self.ref = max(self.ref * 0.9985, max(lv), 16.0)
@@ -2326,6 +2339,8 @@ class Player:
         if bool(on) != self.tap_on:
             self.tap_on = bool(on)
             self.apply_eq()
+            if self.on_tap:
+                self.on_tap()
 
     def ensure_standby(self):
         if self.mpv2 is None:
@@ -2632,17 +2647,41 @@ class Player:
     _m_playing = False
     _m_seek_ok = 0.0
 
+    _m_last = None           # letzte Argumente von _mirror_audio (für spec_changed)
+    _tap_forced = False      # Spektrum-Messung nur wegen der stummen Mitlauf-Wiedergabe eingeschaltet
+    spec_users = staticmethod(lambda: False)     # Cava.attach setzt: zeigt gerade jemand ein Spektrum?
+    on_tap = None
+
+    def spec_changed(self):
+        """Ein Spektrum wurde gezeigt/versteckt: stumme Mitlauf-Wiedergabe des Gasts neu bewerten."""
+        if self._mirror is not None and self._m_last:
+            self._mirror_audio(*self._m_last)
+
     def _mirror_audio(self, tracks, playing, audible):
         """Hat der Gastgeber dieses Gerät als Ausgabe gewählt (audible), spielt der eigene mpv den laufenden Titel des Gastgebers mit:
-        gleicher Titel, gleiche Stelle (self.pos = Stelle des Gastgebers), Pause/Weiter folgt ihm. Sonst bleibt mpv still."""
+        gleicher Titel, gleiche Stelle (self.pos = Stelle des Gastgebers), Pause/Weiter folgt ihm. Sonst bleibt mpv still –
+        außer ein Spektrum ist sichtbar: dann läuft der Titel stumm mit (mpv misst dabei selbst das Spektrum, sonst gäbe es nichts zu messen)."""
+        self._m_last = (tracks, playing, audible)
         vid = tracks[0].get("videoId") if tracks else None
         self._m_playing = bool(playing)
-        if not audible or not vid:
+        mute = bool(vid) and bool(playing) and not audible and bool(self.spec_users())
+        if not (audible or mute) or not vid:
             if self._m_vid is not None:
                 self._m_vid = None
                 self._m_gen += 1
                 self.mpv.cmd("stop")
+            if self._tap_forced:
+                self._tap_forced = False
+                self.mpv.set("mute", self._silent)
+                self.set_tap(spec_intern_wanted())
             return
+        if mute and not self.tap_on:
+            self._tap_forced = True
+            self.set_tap(True)
+        elif not mute and self._tap_forced:
+            self._tap_forced = False
+            self.set_tap(spec_intern_wanted())
+        self.mpv.set("mute", bool(mute))
         if vid != self._m_vid:
             self._m_vid = vid
             self._m_gen += 1
@@ -3081,6 +3120,11 @@ class Player:
         for m in (self.mpv, getattr(self, "mpv2", None)):
             if m is not None:
                 m.set("mute", self._silent)
+        # stumm: cava hört am Ausgang nichts – mpv misst das Spektrum selbst
+        if self._silent:
+            self.set_tap(True)
+        elif not self._tap_forced:
+            self.set_tap(spec_intern_wanted())
 
     def set_volume(self, v):
         if self._mirror is not None:

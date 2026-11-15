@@ -465,6 +465,5 @@ class SongMenus:
             self.last_pl = (res, name)
             self.pl_time = 0.0
             self.win.say(f"󰐒 neue playlist „{name}“ mit {len(vids)} titel{'n' if len(vids) != 1 else ''}")
-            if self.win.account:
-                self.win.load_library()
+            self.win.library_stale = True            # Liste erst beim nächsten Öffnen der Bibliothek neu laden (nicht live)
         tui.background(self.p.music.create_playlist, name, vids, done=done)

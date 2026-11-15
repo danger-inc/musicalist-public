@@ -1,5 +1,11 @@
 # musicalist – Änderungen
 
+## 2.6.0 (2026-11-15)
+- **Live-Spektrum feiner:** das eingebaute Spektrum (Windows, Systeme ohne cava) misst jetzt in 20 statt 12 Bändern – schärfere Balken, die den Tönen besser folgen.
+- **Spektrum auch als Marmeladen-Gast und bei stummem Gastgeber:** spielt die Musik nicht auf diesem PC, läuft der Titel stumm mit, solange ein Spektrum sichtbar ist.
+- **Weniger Abmeldungen:** läuft die kopierte YouTube-Anmeldung ab, liest musicalist sie einmal still aus dem Browser neu ein, bevor „bitte neu anmelden“ erscheint.
+- **Playlists ändern sich nicht mehr live:** nach „zu neuer Playlist hinzufügen“ wird die Bibliothek erst beim nächsten Öffnen neu geladen.
+
 ## 2.5.0 (2026-11-15)
 - **Ausgabegerät wählen, auch wenn der PC die Marmelade hostet:** Ultra-Gäste (und gekoppelte eigene Geräte wie dein Handy) sehen jetzt die Geräteliste und können festlegen, welches Gerät spielt. Der PC bleibt dann stumm und spielt wieder selbst, sobald das Ausgabegerät weg ist oder die Marmelade endet.
 

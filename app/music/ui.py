@@ -226,6 +226,8 @@ noise_reduction = 70
         """Eingebautes Spektrum (engine.SpecTap) anschließen: wird gebraucht, wenn cava fehlt oder nichts liefert."""
         self.player = player
         player.tap_sink = self.push
+        player.spec_users = lambda: bool(self.users)
+        player.on_tap = lambda: self.want(None, False)
         if player.tap_on:
             self.want(None, False)
 
@@ -275,7 +277,10 @@ noise_reduction = 70
 
     def want(self, who, on):
         if who is not None:
+            had = bool(self.users)
             (self.users.add if on else self.users.discard)(who)
+            if self.player is not None and had != bool(self.users):
+                self.player.spec_changed()
         if self.intern():
             if self.proc is not None:
                 self.proc.terminate()
@@ -998,6 +1003,9 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         if getattr(self, "tv_on", False):
             self.tv_mode(False)
         tui.TuiWindow.show_tab(self, tid)
+        if tid == "lib" and getattr(self, "library_stale", False) and getattr(self, "account", None):
+            self.library_stale = False
+            self.load_library()
 
     def toggle_focus(self, on=None):
         """Vollbild nur mit der Visualisierung (f, Esc zurück)."""
