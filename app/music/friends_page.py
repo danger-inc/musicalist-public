@@ -541,7 +541,7 @@ class FriendsMixin:
         if live:
             row.add_css_class("frlive")        # Farben umgekehrt: Füllung in der Akzentfarbe
         n = f.unread(x["secret"])
-        name = label(("● " if live else "") + x["name"], "accent")
+        name = label(("● " if live else "") + x["name"] + self._crown_tag(x["name"]), "accent")
         song = label(txt, "dim", ellipsize=True, hexpand=True, xalign=0)
         jt, with_me = self._jam_text(x, f)
         col = vbox(name, song, spacing=1)
@@ -555,27 +555,6 @@ class FriendsMixin:
         head.set_child(inner)
         head.connect("clicked", lambda *_: self._fr_goto(("chat", x["secret"])))
         row.append(head)
-        rm = tui.Button("✕", None, tooltip=f"{x['name']} als freund entfernen", danger=True)
-        st = {"armed": False, "id": 0}
-
-        def disarm():
-            st["armed"], st["id"] = False, 0
-            rm.set_label("✕")
-            return False
-
-        def click(*_):
-            if st["armed"]:
-                if st["id"]:
-                    GLib.source_remove(st["id"])
-                f.remove(x["secret"])
-                self.say(f"{x['name']} ist kein freund mehr")
-                self.fill_friends()
-                return
-            st["armed"] = True
-            rm.set_label("entfernen?")
-            st["id"] = GLib.timeout_add(3000, disarm)
-        rm.connect("clicked", click)
-        row.append(rm)
         return row
 
     @staticmethod
@@ -998,7 +977,39 @@ class FriendsMixin:
         elif inc:
             box.append(label("incognito an – freunde sehen nur, dass du incognito bist.", "dim", wrap=True))
         box.append(self._friend_card(me, me=True))
+        box.append(self._crown_box())
         box.append(self._me_settings())
+
+    def _crown_tag(self, name, me=False):
+        """„  󰆥 3“ hinter dem Namen, wenn die Person Kronen hat (Zahlen vom Server)."""
+        ac = getattr(self.p, "account", None)
+        if ac is None:
+            return ""
+        n = int(((ac.crowns or {}).get("total") or 0) if me else ((ac.friend_crowns or {}).get(str(name).lower()) or 0))
+        return f"  󰆥 {n}" if n else ""
+
+    def _crown_box(self):
+        """Kronen: jede Woche eine je Rubrik der Top-Liste, in der man vorn liegt (der Server wertet am Wochenanfang aus)."""
+        sb = vbox(spacing=3)
+        sb.set_margin_top(10)
+        ac = getattr(self.p, "account", None)
+        cr = getattr(ac, "crowns", None) if ac is not None else None
+        sb.append(label(f"󰆥 kronen · {int((cr or {}).get('total') or 0)}", "accent"))
+        if ac is None or not ac.on:
+            sb.append(label("kronen gibt es mit konto (einstellungen → konto).", "dim", wrap=True))
+            return sb
+        if cr is None:
+            sb.append(label("wird geladen …", "dim"))
+            return sb
+        sb.append(label("pro woche eine krone in jeder rubrik der top-liste, in der du vorn liegst. ausgewertet wird montags für die woche davor – "
+                        "gleichstand: beide bekommen sie. was man damit kaufen kann, kommt später.", "dim", wrap=True))
+        weeks = cr.get("weeks") or []
+        if not weeks:
+            sb.append(label("noch keine – hör diese woche viel und teile dein profil, dann klappt es vielleicht." if cr.get("last_period") else
+                            "noch keine auswertung gelaufen.", "dim", wrap=True))
+        for w in weeks[:12]:
+            sb.append(hbox(label(w["period"], "dim"), label("󰆥 " + " · ".join(w.get("names") or []), hexpand=True, wrap=True, xalign=0), spacing=8))
+        return sb
 
     def _me_settings(self):
         f = self.fr
@@ -1198,7 +1209,7 @@ class FriendsMixin:
         pr = x.get("prof") or {}
         card = vbox(spacing=3)
         live = f.live(x)
-        card.append(label(("● " if live else "") + x["name"], "accent"))
+        card.append(label(("● " if live else "") + x["name"] + (self._crown_tag(x["name"], me) if True else ""), "accent"))
         now = pr.get("now")
         if now and (live or x.get("at")):
             card.append(label("spielt gerade" if live else f"zuletzt gespielt · {ago(x.get('at'))}", "accent" if live else "dim"))
@@ -1232,7 +1243,27 @@ class FriendsMixin:
         if x.get("error") and x.get("at"):
             card.append(label(f"offline: {x['error']}", "dim"))
         if not me:
-            card.append(hbox(tui.Button("󰆴 entfernen", lambda s=x["secret"]: (f.remove(s), self._fr_goto(None)),
-                                        danger=True), spacing=8))
+            # Entfernen nur hier im Profil (nicht mehr in der Freundesliste), mit Rückfrage
+            rm = tui.Button("󰆴 als freund entfernen", None, danger=True)
+            st = {"armed": False, "id": 0}
+
+            def rm_click(*_, s=x["secret"], n=x.get("name") or "freund"):
+                if st["armed"]:
+                    if st["id"]:
+                        GLib.source_remove(st["id"])
+                    f.remove(s)
+                    self.say(f"{n} ist kein freund mehr")
+                    self._fr_goto(None)
+                    return
+                st["armed"] = True
+                rm.set_label(f"wirklich {n} entfernen? nochmal klicken")
+
+                def disarm():
+                    st["armed"], st["id"] = False, 0
+                    rm.set_label("󰆴 als freund entfernen")
+                    return False
+                st["id"] = GLib.timeout_add(4000, disarm)
+            rm.connect("clicked", rm_click)
+            card.append(hbox(rm, spacing=8))
 
         return card

@@ -61,6 +61,9 @@ class App(Gtk.Application):
         self.hold()
         tui.Theme.get()
         self.player = engine.Player()
+        if not getattr(self, '_wd', False):
+            self._wd = True
+            engine.start_watchdog()
         # Abgleich mit der Handy-App (läuft erst, wenn einmal gekoppelt wurde)
         import handy_sync
         self.player.handy = handy_sync.Server(self.player)

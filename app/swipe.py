@@ -244,8 +244,11 @@ class SwipeBack:
         sc.connect("scroll", lambda c, dx, dy: bool(me() and me()._scroll(c, dx, dy)))
         sc.connect("scroll-end", lambda c: me() and me()._end(c))
         self.bin.add_controller(sc)
-        for btn, d in (((8, -1), (9, 1)) if mouse else ()):                  # Seitentasten „zurück“/„vor“ der Maus
+        # Seitentasten „zurück“/„vor“ der Maus: X11/Wayland melden 8/9, Windows (XBUTTON1/2) je nach GTK 4/5 oder 8/9
+        for btn, d in (((8, -1), (9, 1), (4, -1), (5, 1)) if mouse and os.name == "nt"
+                       else ((8, -1), (9, 1)) if mouse else ()):
             mouse = Gtk.GestureClick(button=btn)
+            mouse.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)       # auch über Listen/Knöpfen
             mouse.connect("pressed", lambda *_, d=d: me() and me().trigger(d=d))
             self.bin.add_controller(mouse)
 

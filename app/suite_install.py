@@ -140,7 +140,15 @@ def _git_auth():
 
 def candidates(key):
     out = []
+    voll = False
+    try:                    # volle Ausgabe installiert → nie die öffentliche holen (wäre ein Rückschritt)
+        import changelog
+        voll = changelog.installed_edition(key) == "voll"
+    except Exception:       # noqa: BLE001
+        pass
     for name in APPS[key]["repos"]:
+        if voll and name.endswith("-public"):
+            continue
         for owner in OWNERS:
             out.append(f"https://github.com/{owner}/{name}.git")
     return out
@@ -170,10 +178,14 @@ def fetch_repo(key, log, step):
     os.makedirs(SRC_ROOT, exist_ok=True)
     if os.path.isdir(os.path.join(dest, ".git")):
         step("lädt neuesten stand …")
-        if (_run(["git"] + auth + ["-C", dest, "fetch", "--depth", "1", "origin", "HEAD"], log, timeout=300) == 0
-                and _run(["git", "-C", dest, "reset", "--hard", "FETCH_HEAD"], log) == 0
-                and _run(["git", "-C", dest, "clean", "-fdq"], log) == 0):
-            return dest
+        # Quellen in Reihenfolge probieren (privat vor öffentlich) – so wechselt eine öffentliche Kopie auf die private
+        # Ausgabe, sobald Zugriff da ist, und eine private bleibt privat
+        for url in candidates(key):
+            if (_run(["git"] + auth + ["-C", dest, "fetch", "--depth", "1", url, "HEAD"], log, timeout=300) == 0
+                    and _run(["git", "-C", dest, "reset", "--hard", "FETCH_HEAD"], log) == 0
+                    and _run(["git", "-C", dest, "clean", "-fdq"], log) == 0):
+                _run(["git", "-C", dest, "remote", "set-url", "origin", url], log)
+                return dest
         log.write("… vorhandene Kopie unbrauchbar, lade neu\n")
     tmp = dest + ".neu"
     shutil.rmtree(tmp, ignore_errors=True)

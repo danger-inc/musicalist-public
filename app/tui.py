@@ -923,6 +923,11 @@ class TuiWindow(Gtk.ApplicationWindow):
             self._set_app_id()
         finally:
             self.on_show()
+        if os.name == "nt":                         # Titelleiste in Designfarben (auch nach Designwechsel)
+            GLib.idle_add(lambda: (getattr(glass, "win32_style", lambda w: None)(self), False)[1])
+            if not getattr(self, "_win_style_hook", False):
+                self._win_style_hook = True
+                self.theme.listeners.append(lambda: getattr(glass, "win32_style", lambda w: None)(self))
 
     def _set_app_id(self, *_):
         if self.APP_ID:

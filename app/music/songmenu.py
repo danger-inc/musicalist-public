@@ -65,6 +65,8 @@ class SongMenus:
             return
         title = alb.get("title") or "?"
         pop = self._popover(widget, x, y)
+        stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.SLIDE_LEFT_RIGHT, transition_duration=120,
+                          vhomogeneous=False, hhomogeneous=True)
         main = vbox(spacing=1)
         head = label(title, "kp-title", ellipsize=True)
         head.set_max_width_chars(34)
@@ -96,12 +98,16 @@ class SongMenus:
                                done=lambda r: w.say(f"bei youtube music nicht gespeichert: {engine.explain(r)}", error=True) if isinstance(r, Exception) else None)
         it("󰋑" if _on else "󰋕", "aus der bibliothek nehmen" if _on else "in bibliothek merken", _heart)
         if getattr(p, "friends", None) is not None:
-            self._rub(main, "freunde")
-            it("󰡉", "an alle freunde empfehlen", lambda: w.say("freunde sehen: album empfohlen" + ("" if p.friends.share else " – sobald du teilen einschaltest"))
-               if p.friends.recommend_album(alb) else None)
-            for fx in p.friends.friends[:6]:
-                it("󰡉", f"direkt an {fx.get('name') or 'freund'}", lambda fx=fx: (p.friends.send_msg(fx, "", alb=alb), w.say(f"album an {fx.get('name') or 'freund'} geschickt")))
-        pop.set_child(main)
+            def _all():
+                if p.friends.recommend_album(alb):
+                    w.say("freunde sehen: album empfohlen" + ("" if p.friends.share else " – sobald du teilen einschaltest"))
+            it("󰡉", "teilen", lambda: self._show_share(stack, share_box, pop, _all,
+                                                    lambda fx: (p.friends.send_msg(fx, "", alb=alb), w.say(f"album an {fx.get('name') or 'freund'} geschickt")),
+                                                    f"„{title}“"), "›", close=False)
+        stack.add_named(main, "main")
+        share_box = vbox(spacing=1)
+        stack.add_named(share_box, "share")
+        pop.set_child(stack)
         pop.popup()
 
     # ---------- Info-Seite (Veröffentlichung groß, darunter Einzelheiten) ----------
@@ -233,10 +239,12 @@ class SongMenus:
             it("󰔑" if dis else "󰔒", "„gefällt mir nicht“ zurücknehmen" if dis else "gefällt mir nicht",
                lambda: p.dislike(t, not dis), "d" if cur else "")
         if not loc and getattr(p, "friends", None) is not None:
-            it("󰡉", "an alle freunde empfehlen", lambda: w.say("freunde sehen: empfohlen" + ("" if p.friends.share else " – sobald du teilen einschaltest (bibliothek → freunde)"))
-               if p.friends.recommend(t) else None)
-            for fx in p.friends.friends[:6]:
-                it("󰡉", f"direkt an {fx.get('name') or 'freund'}", lambda fx=fx: (p.friends.send_to(fx, t), w.say(f"an {fx.get('name') or 'freund'} geschickt")))
+            def _all():
+                if p.friends.recommend(t):
+                    w.say("freunde sehen: empfohlen" + ("" if p.friends.share else " – sobald du teilen einschaltest (bibliothek → freunde)"))
+            it("󰡉", "teilen", lambda: self._show_share(stack, share_box, pop, _all,
+                                                    lambda fx: (p.friends.send_to(fx, t), w.say(f"an {fx.get('name') or 'freund'} geschickt")),
+                                                    f"„{t.get('title') or '?'}“"), "›", close=False)
         if t.get("artist") or t.get("albumId") or t.get("podcastId"):
             self._rub(main, "öffnen")
             if t.get("podcastId"):
@@ -271,9 +279,42 @@ class SongMenus:
         stack.add_named(main, "main")
         pl_box = vbox(spacing=1)
         stack.add_named(pl_box, "pl")
+        share_box = vbox(spacing=1)
+        stack.add_named(share_box, "share")
         pop.set_child(stack)
         pop.popup()
         return pop
+
+    # ---------- Teilen → an … (alle Freunde nur hier, nicht im Hauptmenü) ----------
+    def _show_share(self, stack, box, pop, to_all, to_friend, what):
+        tui.clear(box)
+        self._item(box, pop, "‹", "zurück", lambda: stack.set_visible_child_name("main"), close=False)
+        self._rub(box)
+        box.append(label("󰡉  teilen → an …", "kp-head"))
+        sub = label(what, "kp-sub", ellipsize=True)
+        sub.set_max_width_chars(36)
+        box.append(sub)
+        self._item(box, pop, "󰡉", "an alle freunde empfehlen", to_all)
+        self._rub(box)
+        fr = sorted(self.p.friends.friends, key=lambda f: (f.get("name") or "").lower())
+        lst = vbox(spacing=1)
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, propagate_natural_height=True,
+                                    max_content_height=320, child=lst)
+
+        def fill(q=""):
+            tui.clear(lst)
+            hit = [f for f in fr if q in (f.get("name") or "").lower()]
+            for fx in hit:
+                self._item(lst, pop, "󰀄", fx.get("name") or "freund", lambda fx=fx: to_friend(fx))
+            if not hit:
+                lst.append(label("niemand gefunden" if fr else "noch keine freunde", "kp-empty"))
+        if len(fr) > 6:
+            entry = tui.Entry("freund suchen …")
+            entry.connect("changed", lambda e: fill(e.get_text().strip().lower()))
+            box.append(entry)
+        box.append(scroll)
+        fill()
+        stack.set_visible_child_name("share")
 
     # ---------- Playlist-Auswahl ----------
     def picker(self, anchor, tracks, x=None, y=None):

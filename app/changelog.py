@@ -209,19 +209,55 @@ def _fetch(repo, path, token):
     return v if re.match(r"^\d+(\.\d+)*$", v) else None
 
 
-def latest_version(key):
-    """Neueste Version auf GitHub (blockiert – nur im Thread aufrufen). None = unbekannt."""
-    path, repos = REPOS.get(key, (None, ()))
+# Ausgaben: Woran erkennt man, welche Ausgabe installiert ist? (App → (Datei relativ zu diesem Ordner, Zeile nur in der
+# vollen/privaten Ausgabe)). Die öffentliche Ausgabe hat diese Zeile nicht.
+EDITION_PROBE = {"musicalist": ("music/engine.py", "PLAY_NEEDS_LOGIN = " + "False")}
+
+
+def installed_edition(key):
+    """'voll' (private Ausgabe), 'public' oder None (unbekannt / App hat nur eine Ausgabe)."""
+    probe = EDITION_PROBE.get(key)
+    if not probe:
+        return None
+    try:
+        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), probe[0])
+        with open(path, encoding="utf-8") as f:
+            return "voll" if probe[1] in f.read() else "public"
+    except OSError:
+        return None
+
+
+def is_public_repo(repo):
+    return repo.endswith("-public")
+
+
+def repos_for(key):
+    """Repos in Prüf-Reihenfolge. Wer die volle Ausgabe hat, bekommt NIE die öffentliche (Rückschritt);
+    privat → privat bleibt privat, öffentlich → privat, sobald ein Zugriff da ist (private Repos stehen vorn)."""
+    repos = REPOS.get(key, (None, ()))[1]
+    if installed_edition(key) == "voll":
+        repos = tuple(r for r in repos if not is_public_repo(r))
+    return repos
+
+
+def latest_info(key):
+    """(neueste Version, kam sie aus einem privaten Repo?) – blockiert, nur im Thread. (None, False) = unbekannt."""
+    path = REPOS.get(key, (None, ()))[0]
     token = _token()
-    for repo in repos:
+    for repo in repos_for(key):
         for tok in ((token, None) if token else (None,)):
             try:
                 v = _fetch(repo, path, tok)
                 if v:
-                    return v
+                    return v, not is_public_repo(repo)
             except Exception:
                 continue
-    return None
+    return None, False
+
+
+def latest_version(key):
+    """Neueste Version auf GitHub (blockiert – nur im Thread aufrufen). None = unbekannt."""
+    return latest_info(key)[0]
 
 
 def _load_updates():
@@ -244,22 +280,24 @@ def check_update(key, version, callback, force=False, none=None):
     import time
     cache = _load_updates().get(key) or {}
 
-    def report(latest):
-        if latest and _vkey(latest) > _vkey(version):
+    def report(latest, priv=False):
+        # gleiche Version, aber öffentliche Ausgabe installiert und die private erreichbar → Umstieg anbieten
+        upgrade = bool(latest and priv and installed_edition(key) == "public")
+        if latest and (_vkey(latest) > _vkey(version) or upgrade):
             _updates[key] = latest
             GLib.idle_add(lambda: (callback(latest), False)[1])
         elif none:
             GLib.idle_add(lambda: (none("aktuell" if latest else "offline"), False)[1])
 
     if not force and time.time() - cache.get("t", 0) < UPDATE_EVERY:
-        report(cache.get("latest"))
+        report(cache.get("latest"), cache.get("priv", False))
         return
 
     def work():
-        latest = latest_version(key)
+        latest, priv = latest_info(key)
         if latest:
             data = _load_updates()
-            data[key] = {"t": time.time(), "latest": latest}
+            data[key] = {"t": time.time(), "latest": latest, "priv": priv}
             try:
                 os.makedirs(os.path.dirname(UPDATE_FILE), exist_ok=True)
                 tmp = f"{UPDATE_FILE}.{os.getpid()}"
@@ -268,7 +306,7 @@ def check_update(key, version, callback, force=False, none=None):
                 os.replace(tmp, UPDATE_FILE)
             except OSError:
                 pass
-        report(latest)
+        report(latest, priv)
     threading.Thread(target=work, daemon=True).start()
 
 
@@ -343,7 +381,7 @@ def windows_install(key, update=True, step=None):
         step("lädt …")
         token = _token()
         ok, why = False, None
-        for repo in REPOS[key][1]:
+        for repo in repos_for(key):
             for tok in ((token, None) if token else (None,)):
                 ok, e = _zip_download(repo, zpath, tok)
                 if ok:
@@ -414,7 +452,8 @@ def update_button(key, version, notify=None, restart=None, classes=("tflat", "ne
         if st["mode"] == "idle":
             btn.add_css_class("news")
             btn.set_label("󰚰 update")
-            btn.set_tooltip_text(f"Update auf v{latest} laden und installieren")
+            btn.set_tooltip_text(f"Auf die private Ausgabe v{latest} umsteigen" if latest == version
+                                 else f"Update auf v{latest} laden und installieren")
 
     def none(why):
         if st["mode"] == "idle":

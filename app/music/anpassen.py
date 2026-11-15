@@ -73,19 +73,94 @@ class AnpassenMixin:
         lp.connect("pressed", lambda *_: self.pixel_menu(btn))
         btn.add_controller(lp)
 
-    def pixel_menu(self, anchor):
-        pop = self.songs._popover(anchor)
-        up = bool(getattr(self, "tv_on", False))             # im Fernseher-Modus sitzt der Knopf unten → Menü nach oben
-        pop.set_position(Gtk.PositionType.TOP if up else Gtk.PositionType.BOTTOM)
-        holder = vbox(spacing=6)
-        for m in ("set_margin_top", "set_margin_bottom", "set_margin_start", "set_margin_end"):
-            getattr(holder, m)(10)
-        hh = int(max(260, min(640, self.get_height() - 120)))
-        if up:
-            hh = min(hh, 420)
-        pop.set_child(Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, min_content_height=hh, max_content_height=hh,
-                                         min_content_width=400, max_content_width=440, propagate_natural_width=True, child=holder))
+    def pixel_menu(self, anchor=None):
+        """Titelbild-Raster einstellen: eigenes, großes Fenster (links Live-Vorschau, rechts alle Regler). Ein Popover am
+        Knopf war im Kinomodus viel zu klein und trug dessen Kino-Schriften/-Farben."""
+        old = getattr(self, "_pixel_dlg", None)
+        if old is not None:
+            old.present()
+            return
+        dlg = Gtk.Window(title="titelbild-raster", transient_for=self, modal=False, resizable=True,
+                         destroy_with_parent=True)
+        dlg.add_css_class("pb-window")
+        dlg.add_css_class("tui")
+        dlg.add_css_class("rastered")
+        sw0, sh0 = self.get_width() or 1000, self.get_height() or 700
+        dlg.set_default_size(int(max(640, min(960, sw0 * 0.7))), int(max(460, min(660, sh0 * 0.8))))
+        root = hbox(spacing=18)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(root, f"set_margin_{m}")(18)
+        holder = vbox(spacing=8)
         timer = {"id": 0}
+        left = vbox(spacing=10)
+        left.set_size_request(300, -1)
+        preview = Gtk.DrawingArea(content_width=300, content_height=300, hexpand=True, vexpand=True,
+                                  halign=Gtk.Align.FILL, valign=Gtk.Align.FILL)
+        preview.add_css_class("rastered-preview")
+        left.append(preview)
+        sample = {}
+
+        def sample_pb():
+            """Aktuelles Titelbild, sonst ein Farbverlauf zum Einstellen."""
+            t = self.p.current
+            if t and t.get("thumb"):
+                try:
+                    return fetch_pixbuf(big_thumb(t["thumb"]))
+                except Exception:  # noqa: BLE001
+                    pass
+            if "pb" not in sample:
+                import cairo
+                sf = cairo.ImageSurface(cairo.FORMAT_RGB24, 160, 160)
+                cx = cairo.Context(sf)
+                g = cairo.RadialGradient(60, 60, 4, 80, 80, 100)
+                g.add_color_stop_rgb(0, 1, 0.95, 0.7)
+                g.add_color_stop_rgb(0.45, 0.8, 0.25, 0.35)
+                g.add_color_stop_rgb(1, 0.05, 0.1, 0.3)
+                cx.set_source(g)
+                cx.paint()
+                sf.flush()
+                sample["pb"] = _surface_pixbuf(sf)
+            return sample["pb"]
+
+        def _surface_pixbuf(sf):
+            from gi.repository import GdkPixbuf
+            w, h, st = sf.get_width(), sf.get_height(), sf.get_stride()
+            raw, out = bytes(sf.get_data()), bytearray(w * h * 3)
+            for y in range(h):
+                for x in range(w):
+                    o = y * st + x * 4
+                    q = (y * w + x) * 3
+                    out[q], out[q + 1], out[q + 2] = raw[o + 2], raw[o + 1], raw[o]
+            return GdkPixbuf.Pixbuf.new_from_bytes(__import__("gi").repository.GLib.Bytes.new(bytes(out)),
+                                                   GdkPixbuf.Colorspace.RGB, False, 8, w, h, w * 3)
+
+        def pdraw(_a, cr, w, h):
+            side = min(w, h)
+            ox, oy = (w - side) / 2, (h - side) / 2
+            pb = sample_pb()
+            c = pixelart.cfg()
+            cols = tui.colors()
+            bg = cols.get("background")
+            if bg is not None:                      # Hintergrund wie im Player, damit Farben 1:1 stimmen
+                cr.set_source_rgba(bg.red, bg.green, bg.blue, 1)
+                cr.rectangle(ox, oy, side, side)
+                cr.fill()
+            gb = pixelart.background(c) if pixel_on() else None
+            if gb:
+                cr.set_source_rgba(gb[0], gb[1], gb[2], 1)
+                cr.rectangle(ox, oy, side, side)
+                cr.fill()
+            if not pixel_on():
+                draw_photo(cr, pb, ox, oy, side)
+                return
+            pixelart.draw(cr, pixelart.grid(pb, c["res"], c), side, c, flip=ink_darker(), x0=ox, y0=oy)
+        preview.set_draw_func(pdraw)
+        left.append(label("so sieht jedes titelbild aus", "dim", xalign=0.5))
+        sc = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, hexpand=True, vexpand=True,
+                                min_content_width=340, child=holder)
+        root.append(left)
+        root.append(sc)
+        dlg.set_child(root)
 
         def changed(rebuild=True):
             if timer["id"]:
@@ -94,9 +169,9 @@ class AnpassenMixin:
             def go():
                 timer["id"] = 0
                 notify_pixel()
-                preview.queue_draw()
                 return False
-            timer["id"] = GLib.timeout_add(120, go)
+            preview.queue_draw()
+            timer["id"] = GLib.timeout_add(150, go)       # die Titelbilder überall erst nach kurzer Pause neu zeichnen
             if rebuild:
                 fill()
 
@@ -107,7 +182,8 @@ class AnpassenMixin:
             changed(rebuild=True)
 
         def choice(opts, cur, key):
-            row = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=6, row_spacing=6, max_children_per_line=6, homogeneous=False)
+            row = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=6, row_spacing=6,
+                              max_children_per_line=4, homogeneous=False)
             row.add_css_class("opts")
             for k, name in opts:
                 b = tui.Button(name, lambda k=k: put(**{key: k}))
@@ -130,37 +206,21 @@ class AnpassenMixin:
                 changed(rebuild=False)
             m = tui.Meter(1000, on, mark=False)
             m.set_value(int((c[key] - lo) / (hi - lo) * 1000))
+            m.set_size_request(-1, 22)
             holder.append(hbox(label(name, hexpand=True), val))
             holder.append(m)
 
-        preview = Gtk.DrawingArea(content_width=200, content_height=200, halign=Gtk.Align.CENTER)
-
-        def pdraw(_a, cr, w, h):
-            t = self.p.current
-            pb = None
-            if t and t.get("thumb"):
-                try:
-                    pb = fetch_pixbuf(big_thumb(t["thumb"]))
-                except Exception:  # noqa: BLE001
-                    pb = None
-            side = min(w, h)
-            if pb is None:
-                return
-            if not pixel_on():
-                draw_photo(cr, pb, 0, 0, side)
-                return
-            c = pixelart.cfg()
-            pixelart.draw(cr, pixelart.grid(pb, c["res"], c), side, c, flip=ink_darker())
-        preview.set_draw_func(pdraw)
-
         def fill():
+            adj = sc.get_vadjustment()
+            keep = adj.get_value()
             tui.clear(holder)
             c = pixelart.cfg()
             holder.append(label("󱗼  titelbild-raster", "kp-head"))
-            holder.append(preview)
-            holder.append(tui.Check("als raster zeigen (aus = foto)", pixel_on(), lambda on: (set_pixel(on), preview.queue_draw())))
+            holder.append(tui.Check("als raster zeigen (aus = foto)", pixel_on(),
+                                    lambda on: (set_pixel(on), preview.queue_draw())))
             holder.append(label("presets", "kp-sub"))
-            pr = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=6, row_spacing=6, max_children_per_line=3, homogeneous=False)
+            pr = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=6, row_spacing=6,
+                             max_children_per_line=3, homogeneous=False)
             pr.add_css_class("opts")
             for name, p in pixelart.PRESETS:
                 b = tui.Button(name, lambda p=p: (pixelart.set_cfg(p), changed()))
@@ -181,9 +241,21 @@ class AnpassenMixin:
                 holder.append(label("rasterung", "kp-sub"))
                 holder.append(choice(pixelart.DITHERS, c["dither"], "dither"))
                 holder.append(tui.Check("aus-punkte schwach zeigen", c["off"], lambda on: put(off=on)))
-            holder.append(tui.Button("zurücksetzen (wie bisher)", lambda: (pixelart.set_cfg(None), changed()), danger=True))
+            holder.append(hbox(tui.Button("zurücksetzen (wie bisher)", lambda: (pixelart.set_cfg(None), changed()), danger=True),
+                               tui.Button("fertig", lambda: dlg.close()), spacing=8))
+            GLib.idle_add(lambda: (adj.set_value(keep), False)[1])
+            preview.queue_draw()
+
+        def closed(*_):
+            self._pixel_dlg = None
+            return False
+        dlg.connect("close-request", closed)
+        key = Gtk.EventControllerKey()
+        key.connect("key-pressed", lambda _c, kv, *_: (dlg.close(), True)[1] if kv == Gdk.KEY_Escape else False)
+        dlg.add_controller(key)
+        self._pixel_dlg = dlg
         fill()
-        pop.popup()
+        dlg.present()
 
     def sync_pixel_btn(self):
         (self.pixel_btn.add_css_class if pixel_on() else self.pixel_btn.remove_css_class)("on")

@@ -3,7 +3,7 @@
 #
 # Stream-Adressen löst yt-dlp im Prozess auf (≈1,5 s); der nächste Titel wird schon während des laufenden
 # vorgeladen, damit der Wechsel sofort geht. Zustand (Warteschlange, Lautstärke …) liegt in state.json.
-import glob, importlib, importlib.util, math, re, zlib, sys, json, os, random, shutil, socket, sqlite3, subprocess, tempfile, threading, time
+import queue, glob, importlib, importlib.util, math, re, zlib, sys, json, os, random, shutil, socket, sqlite3, subprocess, tempfile, threading, time
 
 from gi.repository import Gio, GLib
 
@@ -120,6 +120,30 @@ def log(msg):
     """Fehler ins Log ($XDG_RUNTIME_DIR/rice-music.log) – nie mit Zugangsdaten."""
     import sys
     print(time.strftime("%H:%M:%S"), msg, file=sys.stderr, flush=True)
+
+
+def start_watchdog(limit=10):
+    """Friert die Oberfläche länger als `limit` s ein, steht der Stapel aller Threads in DATA/haenger.log –
+    damit lässt sich ein „reagiert nicht“ nachträglich finden (v. a. unter Windows)."""
+    import faulthandler
+    beat = [time.monotonic()]
+    GLib.timeout_add(1000, lambda: (beat.__setitem__(0, time.monotonic()), True)[1])
+
+    def run():
+        shown = 0.0
+        while True:
+            time.sleep(2)
+            stale = time.monotonic() - beat[0]
+            if stale > limit and beat[0] != shown:
+                shown = beat[0]
+                try:
+                    with open(os.path.join(DATA, "haenger.log"), "a", encoding="utf-8") as f:
+                        f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')}: Oberfläche steht seit {stale:.0f} s ===\n")
+                        f.flush()
+                        faulthandler.dump_traceback(file=f, all_threads=True)
+                except OSError:
+                    pass
+    threading.Thread(target=run, daemon=True).start()
 
 
 def secs(text):
@@ -1376,6 +1400,7 @@ class SpecTap:
     und ruft feed(). Hier wird daraus 0–16 wie bei cava (automatische Empfindlichkeit, schneller Anstieg, weiches
     Abklingen) und auf 64 Balken verteilt. Läuft ein zweiter mpv (Überblendung), gilt je Balken der größere Wert."""
     BANDS, OUT, FLOOR = 20, 64, 62.0
+    TILT = None            # unten: je Band (f/100)^0.5
     SPAN = (40.0, 9000.0)
     RATE, FRAME = 20000, 1000           # 20 Bilder/s – genug fürs Auge, halb so viel Rechenzeit wie 30
 
@@ -1383,8 +1408,9 @@ class SpecTap:
         self.sink = sink                      # sink(vals) – aus jedem Thread aufrufbar
         self.lock = threading.Lock()
         self.src = {}                         # Quelle → (Zeit, Werte 0–1)
-        self.ref = 20.0
+        self.ref = 0.05
         self.sm = [0.0] * self.BANDS
+        self.TILT = [(f / 100.0) ** 0.5 for f in self.freqs()]
 
     @classmethod
     def freqs(cls):
@@ -1409,13 +1435,14 @@ class SpecTap:
         n = self.BANDS
         if len(db) != n:
             return
-        # oberhalb der Grundlinie, nach oben leicht angehoben (Höhen tragen weniger Energie, wirken sonst tot)
-        lv = [max(0.0, d + self.FLOOR) + 0.33 * i for i, d in enumerate(db)]
+        # Linear statt in dB (wie cava): in dB wurde alles gleich hoch und flach. Höhere Bänder werden leicht angehoben
+        # (Musik hat dort weniger Energie), Bezugswert = langsam abklingender Spitzenwert (automatische Empfindlichkeit).
+        # Gemessen gegen cava mit derselben Musik: Mittelwert ~3/16, oberes Zehntel ~8/16, Spitzen bis 16.
+        lv = [10.0 ** (max(d, -90.0) / 20.0) * self.TILT[i] for i, d in enumerate(db)]
         now = time.monotonic()
         with self.lock:
-            self.ref = max(self.ref * 0.9985, max(lv), 16.0)
-            cur = [min(1.0, v / self.ref) for v in lv]
-            cur = [c ** 1.5 for c in cur]    # etwas Kontrast: leise Bänder nicht ständig halb voll
+            self.ref = max(self.ref * 0.9985, max(lv), 0.01)
+            cur = [min(1.0, v / self.ref) ** 1.5 for v in lv]
             old = self.src.get(key, (0, self.sm))[1]
             sm = [c if c > o else o * 0.72 + c * 0.28 for c, o in zip(cur, old)]
             self.src[key] = (now, sm)
@@ -1464,7 +1491,7 @@ class Mpv:
                                      "--audio-client-name=musicalist", "--cache=yes", "--demuxer-max-bytes=64MiB",
                                      "--gapless-audio=weak", "--replaygain=track"] +
                                     ([f"--log-file={os.path.join(os.environ.get('TEMP', '.'), 'rice-mpv.log')}",
-                                      "--msg-level=all=warn,ffmpeg=v"] if IS_WIN else []),
+                                      "--msg-level=all=warn"] if IS_WIN and self.tap is None else []),
                                     stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE if self.tap is not None else subprocess.DEVNULL,
                                     stderr=subprocess.STDOUT if self.tap is not None else subprocess.DEVNULL,
@@ -1542,11 +1569,27 @@ class Mpv:
         return False
 
     def cmd(self, *args):
+        """Befehl an mpv. Geschrieben wird in einem eigenen Thread: ein mpv, das nicht mehr liest (Named Pipe voll,
+        Prozess hängt), darf die Oberfläche nie einfrieren (unter Windows blockiert WriteFile dann ewig)."""
         data = (json.dumps({"command": list(args)}) + "\n").encode()
-        with self.lock:
+        if self._wq is None:
+            self._wq = queue.Queue()
+            threading.Thread(target=self._writer, daemon=True).start()
+        self._wq.put(data)
+
+    _wq = None
+
+    def _writer(self):
+        while True:
+            data = self._wq.get()
+            if data is None:
+                return
+            with self.lock:
+                sock = self.sock
             try:
-                self.sock.sendall(data)
-            except OSError:
+                if sock is not None:
+                    sock.sendall(data)
+            except (OSError, ValueError):
                 pass
 
     def set(self, prop, value):
@@ -1585,6 +1628,8 @@ class Mpv:
     def quit(self):
         self.closing = True
         self.cmd("quit")
+        if self._wq is not None:
+            self._wq.put(None)
 
 
 # ---------- Player ----------
@@ -1763,6 +1808,37 @@ def spec_intern_wanted():
     if src == "cava":
         return False
     return src == "intern" or IS_WIN or shutil.which("cava") is None
+
+
+SPEC_SINK = "musicalist_spec"
+
+
+def spec_sink_ensure():
+    """Stumme virtuelle Soundkarte für das Spektrum (Linux, pulse/pipewire-pulse + cava): der Gast ohne Ton schickt den
+    mitlaufenden Titel dorthin, cava hört ihren Monitor ab – echtes cava statt der Näherung. True = bereit."""
+    if IS_WIN or not shutil.which("pactl") or not shutil.which("cava"):
+        return False
+    if (os.environ.get("MUSICALIST_SPEC") or setting("spec_src") or "auto") == "intern":
+        return False
+    try:
+        out = subprocess.run(["pactl", "list", "short", "sinks"], capture_output=True, text=True, timeout=5).stdout
+        if SPEC_SINK in out:
+            return True
+        r = subprocess.run(["pactl", "load-module", "module-null-sink", f"sink_name={SPEC_SINK}",
+                            "sink_properties=device.description=musicalist-spektrum"], capture_output=True, text=True, timeout=5)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def spec_sink_drop():
+    try:
+        out = subprocess.run(["pactl", "list", "short", "modules"], capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            if "module-null-sink" in line and SPEC_SINK in line:
+                subprocess.run(["pactl", "unload-module", line.split()[0]], capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def dislikes():
@@ -2652,10 +2728,47 @@ class Player:
     spec_users = staticmethod(lambda: False)     # Cava.attach setzt: zeigt gerade jemand ein Spektrum?
     on_tap = None
 
+    _sink_on = False
+    on_source = None
+
+    def _spec_leave(self):
+        """Mitlauf fürs Spektrum beenden: Ton-Ausgang, cava-Eingang und Messung wieder normal."""
+        if self._sink_on:
+            self._sink_on = False
+            self.mpv.set("audio-device", "auto")
+            if self.on_source:
+                self.on_source(None)
+        if self._tap_forced:
+            self._tap_forced = False
+            self.mpv.set("mute", self._silent)
+            self.set_tap(spec_intern_wanted())
+
+    _spec_timer = 0
+
+    def _spec_timer_due(self):
+        """Wahr, sobald die Karenzzeit ohne Spektrum abgelaufen ist (Aufruf aus _spec_apply)."""
+        return self._spec_due
+    _spec_due = False
+
     def spec_changed(self):
-        """Ein Spektrum wurde gezeigt/versteckt: stumme Mitlauf-Wiedergabe des Gasts neu bewerten."""
-        if self._mirror is not None and self._m_last:
-            self._mirror_audio(*self._m_last)
+        """Ein Spektrum wurde gezeigt/versteckt: stumme Mitlauf-Wiedergabe des Gasts neu bewerten – verzögert, denn beim
+        Tabwechsel ist kurz keins sichtbar (sonst würde der Titel jedes Mal abgebrochen und neu geladen)."""
+        if self._mirror is None or not self._m_last:
+            return
+        if self._spec_timer:
+            GLib.source_remove(self._spec_timer)
+        # an: fast sofort · aus: erst nach 4 s ohne Spektrum
+        self._spec_timer = GLib.timeout_add(500 if self.spec_users() else 4000, self._spec_apply)
+
+    def _spec_apply(self):
+        self._spec_timer = 0
+        self._spec_due = True
+        try:
+            if self._mirror is not None and self._m_last:
+                self._mirror_audio(*self._m_last)
+        finally:
+            self._spec_due = False
+        return False
 
     def _mirror_audio(self, tracks, playing, audible):
         """Hat der Gastgeber dieses Gerät als Ausgabe gewählt (audible), spielt der eigene mpv den laufenden Titel des Gastgebers mit:
@@ -2664,24 +2777,35 @@ class Player:
         self._m_last = (tracks, playing, audible)
         vid = tracks[0].get("videoId") if tracks else None
         self._m_playing = bool(playing)
-        mute = bool(vid) and bool(playing) and not audible and bool(self.spec_users())
+        mute = bool(vid) and bool(playing) and not audible and (bool(self.spec_users()) or (self._m_vid == vid and self._tap_forced and not self._spec_timer_due()))
+        sink = mute and (self._sink_on or spec_sink_ensure())          # Linux: stumme Soundkarte + echtes cava
         if not (audible or mute) or not vid:
             if self._m_vid is not None:
                 self._m_vid = None
                 self._m_gen += 1
                 self.mpv.cmd("stop")
+            self._spec_leave()
+            return
+        if sink:
+            if not self._sink_on:
+                self._sink_on = True
+                self.mpv.set("audio-device", "pulse/" + SPEC_SINK)
+                if self.on_source:
+                    self.on_source(SPEC_SINK)
             if self._tap_forced:
                 self._tap_forced = False
-                self.mpv.set("mute", self._silent)
                 self.set_tap(spec_intern_wanted())
-            return
-        if mute and not self.tap_on:
-            self._tap_forced = True
-            self.set_tap(True)
-        elif not mute and self._tap_forced:
-            self._tap_forced = False
-            self.set_tap(spec_intern_wanted())
-        self.mpv.set("mute", bool(mute))
+            self.mpv.set("mute", False)
+        else:
+            if self._sink_on:
+                self._spec_leave()
+            if mute and not self.tap_on:
+                self._tap_forced = True
+                self.set_tap(True)
+            elif not mute and self._tap_forced:
+                self._tap_forced = False
+                self.set_tap(spec_intern_wanted())
+            self.mpv.set("mute", bool(mute))
         if vid != self._m_vid:
             self._m_vid = vid
             self._m_gen += 1
@@ -2721,6 +2845,8 @@ class Player:
                 return
             was_audible = self._m_vid is not None
             self._mirror_audio(None, False, False)
+            self._spec_leave()
+            spec_sink_drop()
             m, self._mirror = self._mirror, None
             self.queue, self.index, self.pos, self.dur, self.started = m["queue"], m["index"], m["pos"], m["dur"], m["started"] and not was_audible
             self.paused, self.restore_pos = True, m["pos"]

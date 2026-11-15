@@ -1,5 +1,13 @@
 # musicalist – Änderungen
 
+## 2.7.0 (2026-11-15)
+- **Kronen:** der Server wertet jede Woche die Rubriken der Top-Liste aus (Hörzeit, Wiederholungen, Titel, Künstler·innen, Lieblingskünstler, Durchhörer, Vielfalt, Entdecker, Serie). Wer in einer Rubrik vorn liegt, bekommt eine Krone (Gleichstand: beide; mindestens zwei Konten nötig). Unter „mein profil“ steht dein Stand, hinter Namen von Freund·innen ihre Zahl. Was man damit kaufen kann, kommt später.
+- **Titelbild-Raster einstellen:** eigenes großes Fenster mit Live-Vorschau statt des kleinen Menüs – auch im Kinomodus, mit den Farben des Designs.
+- **Rechtsklick auf Lieder:** „teilen › an …“ statt aller Freund·innen untereinander (mit Suche bei vielen Freund·innen).
+- **Freund·in entfernen** geht nur noch im Profil der Person (mit Rückfrage), nicht mehr aus der Liste.
+- **Update:** wer die private Ausgabe hat, bleibt privat (nie ein Rückschritt auf die öffentliche); wer die öffentliche hat und Zugriff auf die private bekommt, kann umsteigen – auch bei gleicher Versionsnummer.
+- **Windows:** Titelleiste in den Farben des Designs (dunkel/hell, runde Ecken), Daumentasten der Maus (zurück/vor), Wiedergabe-Befehle blockieren die Oberfläche nicht mehr, kein ständig wachsendes mpv-Log mehr; hängt die Oberfläche, steht der Grund in `haenger.log` im Datenordner.
+
 ## 2.6.0 (2026-11-15)
 - **Live-Spektrum feiner:** das eingebaute Spektrum (Windows, Systeme ohne cava) misst jetzt in 20 statt 12 Bändern – schärfere Balken, die den Tönen besser folgen.
 - **Spektrum auch als Marmeladen-Gast und bei stummem Gastgeber:** spielt die Musik nicht auf diesem PC, läuft der Titel stumm mit, solange ein Spektrum sichtbar ist.

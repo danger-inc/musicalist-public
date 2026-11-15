@@ -145,6 +145,12 @@ button.sugg.first .accent { color: @primary; }
 .lyric.plain { color: alpha(@foreground, 0.8); }
 /* Tastenliste (?) */
 popover.kpop .kp-grid label { font-size: 12px; }
+.rastered .kp-head { color: @primary; font-size: 16px; font-weight: bold; margin: 0 0 4px 0; }
+.rastered .kp-sub { color: @secondary; font-size: 12px; margin: 8px 0 2px 0; }
+.rastered .dim { color: alpha(@foreground, 0.6); }
+.rastered .rastered-preview { border: 1px solid alpha(@primary, 0.5); border-radius: 6px; }
+.rastered .opts button { padding: 6px 12px; }
+.rastered .opts button label { font-size: 14px; }
 popover.kpop .kp-grid .k { color: @primary; }
 """ + sources.CSS + visuals.CSS + verlauf.CSS + songmenu.CSS
 
@@ -185,6 +191,8 @@ class Cava:
         GLib.timeout_add(250, self.watchdog)
         GLib.timeout_add(40, self.pump)                  # 25 Bilder/s
         self.cfg = RUNTIME + "/rice-music-cava.conf"
+        self.source = "auto"            # Eingabe: „auto“ (Standard-Ausgang) oder eine eigene stumme Soundkarte (Marmelade, Gast ohne Ton)
+        self._saved_method = None
         self.methods = self.pick_methods()
         self.method = self.methods[0]
         self.methods_left = self.methods[1:]
@@ -210,7 +218,7 @@ framerate = 30
 sleep_timer = 1
 [input]
 method = {self.method}
-source = auto
+source = {self.source}
 [output]
 method = raw
 raw_target = /dev/stdout
@@ -222,12 +230,31 @@ frame_delimiter = 10
 noise_reduction = 70
 """)
 
+    def set_source(self, name):
+        """cava auf eine andere Eingabe umstellen (name = Soundkarte, ihr „.monitor“ wird abgehört) oder zurück auf auto."""
+        want = f"{name}.monitor" if name else "auto"
+        if want == self.source:
+            return
+        if name:
+            self._saved_method = self.method
+            self.method = "pulse"                      # Monitor-Namen kennt pulse (auch über pipewire-pulse) sicher
+        elif self._saved_method:
+            self.method, self._saved_method = self._saved_method, None
+        self.source = want
+        self.write_cfg()
+        if self.proc is not None:
+            self.proc.terminate()
+            self.proc = None
+        self.latest = []
+        self.want(None, False)
+
     def attach(self, player):
         """Eingebautes Spektrum (engine.SpecTap) anschließen: wird gebraucht, wenn cava fehlt oder nichts liefert."""
         self.player = player
         player.tap_sink = self.push
         player.spec_users = lambda: bool(self.users)
         player.on_tap = lambda: self.want(None, False)
+        player.on_source = self.set_source
         if player.tap_on:
             self.want(None, False)
 
@@ -236,7 +263,7 @@ noise_reduction = 70
 
     def _early_exit(self, proc):
         """cava sofort wieder beendet (falsche Eingabe-Methode, z. B. pipewire in cava 0.7) → nächste Methode."""
-        if self.proc is proc and proc.poll() is not None and self.methods_left and not self.latest:
+        if self.source == "auto" and self.proc is proc and proc.poll() is not None and self.methods_left and not self.latest:
             self.method = self.methods_left.pop(0)
             self.write_cfg()
             self.proc = None
@@ -245,7 +272,7 @@ noise_reduction = 70
 
     def _check_cava(self, proc):
         """3 s nach dem Start muss cava Werte liefern (PipeWire fehlt / Pulse-only / Sandbox …) – sonst übernimmt mpv."""
-        if self.proc is proc and not (self.player is not None and self.player.tap_on) and self.playing:
+        if self.source == "auto" and self.proc is proc and not (self.player is not None and self.player.tap_on) and self.playing:
             if proc.poll() is not None or not self.latest and self.last_t == 0.0:
                 if self.methods_left:                  # andere Eingabe-Methode versuchen, bevor mpv übernimmt
                     self.method = self.methods_left.pop(0)
@@ -311,7 +338,7 @@ noise_reduction = 70
                 vals = [int(v) for v in line.strip().strip(";").split(";")]
             except ValueError:
                 continue
-            if engine.setting("cava_method") != self.method:      # läuft: diese Methode beim nächsten Mal zuerst
+            if self.source == "auto" and engine.setting("cava_method") != self.method:      # läuft: diese Methode beim nächsten Mal zuerst
                 engine.set_setting("cava_method", self.method)
             self.push(vals)
 
@@ -712,8 +739,10 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         box = vbox(spacing=8)
         for m in ("top", "bottom", "start", "end"):
             getattr(box, f"set_margin_{m}")(16)
-        box.append(label(f"󰚰 neue version v{latest}", "accent"))
-        box.append(label("musicalist kann sich jetzt aktualisieren.", "dim", wrap=True))
+        same = latest == open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "VERSION")).read().strip()
+        box.append(label(f"󰚰 private ausgabe v{latest}" if same else f"󰚰 neue version v{latest}", "accent"))
+        box.append(label("du hast Zugriff auf die private Ausgabe – jetzt umsteigen?" if same
+                         else "musicalist kann sich jetzt aktualisieren.", "dim", wrap=True))
 
         def close(*_):
             engine.set_setting("update_asked", f"{latest}|{time.time()}")

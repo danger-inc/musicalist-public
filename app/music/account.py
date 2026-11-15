@@ -560,7 +560,14 @@ class Account:
             if r.get("empty"):
                 sent[period] = "e"
                 continue
-            doc = {"v": 1, "period": period, "secs": int(r["base"]["secs"]),
+            cat = {"h": int(r["base"]["secs"]), "n": int(r["base"]["tracks"]), "ar": int(r["base"]["artists"]),
+                   "rep": max([int(t["plays"]) for t in r["tracks"]] or [0]),
+                   "art": max([int(a["secs"]) for a in r["artists"]] or [0]),
+                   "sk": round(r.get("skip_rate") or 0), "dv": round(r.get("diversity") or 0),
+                   "nw": len(r.get("new_artists") or [])}
+            if r.get("streak_now"):
+                cat["sn"] = int(r["streak_now"])
+            doc = {"v": 1, "period": period, "secs": int(r["base"]["secs"]), "cat": cat,
                    "tracks": [{"id": t["id"], "t": t.get("t", ""), "a": t.get("a", ""), "n": int(t["plays"]), "s": int(t["secs"])} for t in r["tracks"][:100]],
                    "artists": [{"n": a["name"], "s": int(a["secs"]), "p": int(a["plays"])} for a in r["artists"][:50]]}
             raw = json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode()
@@ -574,6 +581,29 @@ class Account:
                 break
         self.st["stats_sent"] = sent
         return n
+
+    crowns = None                    # Antwort von GET /v1/crowns: {"total", "weeks": [{"period", "cats", "names", "values"}], …}
+    friend_crowns = None             # {name: Kronen} der Freund·innen (GET /v1/crowns/of)
+
+    def _crowns(self):
+        """Kronen holen: eigene (Summe + je Woche) und die der Freund·innen (für die Listen). Fehler sind harmlos (ältere Server)."""
+        try:
+            self.crowns = self._call("GET", "/v1/crowns", token=self.st.get("token"))
+        except ServerError as x:
+            if x.code == 401:
+                raise
+            return 0
+        fr = getattr(self.player, "friends", None)
+        names = [str(f.get("name") or "").lower() for f in (getattr(fr, "friends", None) or []) if f.get("name")]
+        if names:
+            import urllib.parse
+            try:
+                self.friend_crowns = self._call("GET", "/v1/crowns/of?names=" + urllib.parse.quote(",".join(names[:100])), token=self.st.get("token"))
+            except ServerError as x:
+                if x.code == 401:
+                    raise
+        self._fire()
+        return int((self.crowns or {}).get("total") or 0)
 
     def _version(self):
         try:
@@ -665,7 +695,7 @@ class Account:
             self._fire()
             res = {"settings": "", "jup": 0, "jdown": 0, "cup": 0, "cdown": 0, "error": ""}
             try:
-                for what, fn in (("rename", self._check_rename), ("notices", self._notices), ("identity", self._identity), ("settings", self._settings), ("journal", self._journal), ("devices", self._devices), ("stats", self._stats), ("chats", self._chats), ("chatmeta", self._chatmeta)):
+                for what, fn in (("rename", self._check_rename), ("notices", self._notices), ("identity", self._identity), ("settings", self._settings), ("journal", self._journal), ("devices", self._devices), ("stats", self._stats), ("crowns", self._crowns), ("chats", self._chats), ("chatmeta", self._chatmeta)):
                     try:
                         r = fn()
                         if what == "settings":
