@@ -590,7 +590,7 @@ class FriendsMixin:
         head.add_css_class("frhead")
         if live:
             head.add_css_class("frlive")
-        col = vbox(label(("● " if live else "") + x["name"], "accent"), label(txt, "dim", ellipsize=True, xalign=0),
+        col = vbox(label(("● " if live else "") + x["name"] + self._crown_tag(x["name"]), "accent"), label(txt, "dim", ellipsize=True, xalign=0),
                    label("profil ›", "dim"), spacing=2)
         col.set_hexpand(True)
         head.set_child(hbox(tile, col, spacing=12))
@@ -1195,7 +1195,7 @@ class FriendsMixin:
             panel.append(label("noch keine Angaben – Freunde müssen teilen (umfang normal/mehr für alles außer hörzeit; vielfalt, entdecker, serie nur bei „mehr“).", "dim", wrap=True))
         for i, (n, t, z, me) in enumerate(rows, 1):
             cls = ("accent",) if me else ()
-            panel.append(hbox(label(f"{i}.", "accent" if me else "dim"), label(n, *cls, hexpand=True, ellipsize=True),
+            panel.append(hbox(label(f"{i}.", "accent" if me else "dim"), label(n + self._crown_tag(n, me), *cls, hexpand=True, ellipsize=True),
                               label(t, *cls), spacing=8))
             if z:
                 panel.append(label("    " + z, "dim", wrap=True))

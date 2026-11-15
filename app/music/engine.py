@@ -10,6 +10,7 @@ from gi.repository import Gio, GLib
 import tui
 import localmusic
 import audiofx
+import taste
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -3193,6 +3194,8 @@ class Player:
                 self._guest_ctl("next")
             return
         self._why = "ende" if auto else "skip"
+        if not auto and self.current is not None and self.pos < 30:
+            self._skipped_track = self.current                    # für die Live-Anpassung (tune_queue) nach dem Wechsel
         if auto and self.sleep_track:                 # „nach diesem Titel“: Ende erreicht → stehen bleiben
             self._sleep_stop()
             if self.index + 1 < len(self.queue):
@@ -3217,6 +3220,9 @@ class Player:
             self.extend_radio(then_next=True)
         else:
             self.mpv.set("pause", True)
+        sk, self._skipped_track = getattr(self, "_skipped_track", None), None
+        if sk is not None:
+            GLib.idle_add(lambda: (self.tune_queue(sk), False)[1])
 
     def prev(self):
         if self._mirror is not None:
@@ -3289,6 +3295,7 @@ class Player:
         keep = self.current and self.current["videoId"] == t["videoId"]
         res = [x for x in res if not is_disliked(x.get("videoId"))]
         rest = drop_dupes(res, self.queue[:self.index + 1] if keep else [t])
+        rest = self.taste_now().rank(rest)[:taste.BATCH]          # nach Überspringverhalten sortiert, kurze Warteschlange
         for x in rest:
             x["_src"] = ("radio", t.get("title"))
         if self.current and self.current["videoId"] == t["videoId"]:
@@ -3297,6 +3304,45 @@ class Player:
             self.prefetch()
         else:
             self.play_tracks([t] + rest, src=("radio", t.get("title")))
+
+    _taste, _taste_at = None, 0.0
+
+    def taste_now(self):
+        """Geschmack aus dem Hörprotokoll (höchstens alle 2 min neu gerechnet; Protokoll noch nicht geladen → neutral)."""
+        now = time.time()
+        if self._taste is None or now - self._taste_at > 120:
+            rows = self.journal.rows
+            if rows is None:
+                threading.Thread(target=self.journal.load, daemon=True).start()
+                return self._taste or taste.Taste(())
+            keep = self._taste.sess if self._taste is not None else {}
+            self._taste, self._taste_at = taste.Taste(rows, now), now
+            self._taste.sess = keep
+        return self._taste
+
+    def tune_queue(self, skipped=None):
+        """Nach einem Überspringen live nachjustieren: Radio-/Autoplay-Titel hinter dem laufenden, die jetzt unerwünscht sind,
+        fliegen raus; liegen weniger als AHEAD voraus, wird nachgefüllt (die Warteschlange bleibt kurz)."""
+        if self._mirror is not None or not self.autoplay or self.current is None:
+            return
+        tt = self.taste_now()
+        if skipped:
+            tt.skipped(skipped)
+        i = self.index + 1
+        tail = self.queue[i:]
+        keep, tune_ids = [], set()
+        for x in tail:
+            auto = (x.get("_src") or ("",))[0] in ("radio", "autoplay")
+            if auto and tt.score(x) is None:
+                continue
+            keep.append(x)
+        if len(keep) != len(tail):
+            self.queue[i:] = keep
+            self.emit("queue")
+        ahead = sum(1 for x in self.queue[i:] if (x.get("_src") or ("",))[0] in ("radio", "autoplay"))
+        if ahead < taste.AHEAD and not getattr(self, "_ext_busy", False):
+            self._extending = None
+            self.extend_radio()
 
     def extend_radio(self, then_next=False):
         if self._mirror is not None:
@@ -3322,9 +3368,10 @@ class Player:
                 self.emit(f"error:autoplay: {res}")
                 return
             new = drop_dupes([x for x in res if not is_disliked(x.get("videoId"))], self.queue)
-            for x in new[:25]:
+            new = self.taste_now().rank(new)[:taste.BATCH]
+            for x in new:
                 x["_src"] = ("autoplay", cur.get("title"))
-            self.queue += new[:25]
+            self.queue += new
             self.emit("queue")
             if then_next and self.index + 1 < len(self.queue):
                 self.index = min(self.index + skips, len(self.queue) - 1)

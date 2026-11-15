@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+## 2.8.0 (2026-11-15)
+- **Bessere Vorschläge aus dem Überspringverhalten:** Radio und Autoplay lassen Künstler·innen und Titel aus, die du zuletzt (30 Tage) oft übersprungen hast, und stellen vor, was du gern zu Ende hörst. Ein einzelnes Überspringen zählt nicht; ab 2 Skips mit hoher Quote wird abgewertet, ab 3 ausgelassen.
+- **Kurze Warteschlange, live angepasst:** statt 25–40 Radio-Titel liegen nur noch etwa 5–8 voraus; nach jedem Überspringen fliegt Unerwünschtes raus und es wird nachgefüllt.
+- **Kronen** stehen jetzt in allen Freundeslisten, im Chat-Kopf und in der Top-Liste hinter dem Namen.
+
 ## 2.7.0 (2026-11-15)
 - **Kronen:** der Server wertet jede Woche die Rubriken der Top-Liste aus (Hörzeit, Wiederholungen, Titel, Künstler·innen, Lieblingskünstler, Durchhörer, Vielfalt, Entdecker, Serie). Wer in einer Rubrik vorn liegt, bekommt eine Krone (Gleichstand: beide; mindestens zwei Konten nötig). Unter „mein profil“ steht dein Stand, hinter Namen von Freund·innen ihre Zahl. Was man damit kaufen kann, kommt später.
 - **Titelbild-Raster einstellen:** eigenes großes Fenster mit Live-Vorschau statt des kleinen Menüs – auch im Kinomodus, mit den Farben des Designs.
