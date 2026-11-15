@@ -184,6 +184,8 @@ def local_ips():
 
 def _on_main(fn, timeout=3):
     """fn im GTK-Thread ausführen und auf das Ergebnis warten (der Player ist nicht threadsicher)."""
+    if threading.current_thread() is threading.main_thread():
+        return fn()
     box, ev = {}, threading.Event()
 
     def run():
@@ -209,6 +211,7 @@ class Jam:
         self.code = ""
         self.guests = {}            # key (Geräte-Kennung oder n:<name>) → {"name", "seen", "added", "admin", "dev"}
         self.kicked = set()
+        self.out_dev = ""           # Ausgabegerät: "" = dieser Rechner, sonst Kennung (key) eines gekoppelten Gast-Geräts
         self.events = []
         self.joined = None          # Gast: {"host", "port", "code", "name", "host_name"}
         self.listeners = []         # fn() bei Änderungen (Oberfläche)
@@ -455,6 +458,9 @@ class Jam:
 
     def stop(self):
         self._hosting = False
+        if self.out_dev:
+            self.out_dev = ""
+            _on_main(lambda: self.p.set_silent(False))
         self._net_stop()
         if self.httpd is not None:
             srv, self.httpd = self.httpd, None
@@ -587,9 +593,40 @@ class Jam:
         st["admins"] = [hid(g["dev"]) for k, g in gs if g.get("dev") and self.is_admin(k)]
         st["ultras"] = [hid(g["dev"]) for k, g in gs if g.get("dev") and self.is_ultra(k)]
         st["kicked"] = [hid(k) for k in self.kicked if not k.startswith("n:")]
-        st["out"] = ""                                         # Ausgabe: der Gastgeber (dieser Rechner) spielt selbst
-        st["devs"] = [{"h": "", "n": host_name(), "on": True}]
+        self.check_output()
+        g_ = self.guests.get(self.out_dev) or {}
+        st["out"] = hid(g_["dev"]) if self.out_dev and g_.get("dev") else ""
+        st["devs"] = [{"h": "", "n": host_name(), "on": True}] + [
+            {"h": hid(g["dev"]), "n": (g.get("name") or "gerät")[:30], "on": now - (g.get("seen") or 0) < 30}
+            for k, g in self.own_devices()]
         return st
+
+    def own_devices(self):
+        """Gekoppelte (eigene) Geräte, die gerade als Gast in dieser Marmelade sind: Liste (key, gast)."""
+        own = self.paired_ids()
+        return sorted(((k, g) for k, g in self.guests.items() if g.get("dev") and k in own),
+                      key=lambda kv: (kv[1].get("name") or "").lower())
+
+    def set_output(self, key):
+        """Ausgabe auf diesen Rechner ("") oder ein gekoppeltes Gast-Gerät legen; dieser Rechner bleibt dann stumm."""
+        if key and not any(k == key for k, _ in self.own_devices()):
+            return
+        self.out_dev = key
+        _on_main(lambda: self.p.set_silent(bool(key)))
+        self._event("ausgabe: " + ((self.guests.get(key) or {}).get("name") or "gerät") if key else "ausgabe: dieser rechner")
+        self._kick = True
+
+    def check_output(self):
+        """Verschwindet das Ausgabegerät (weg/offline), spielt wieder dieser Rechner – sonst bliebe die Marmelade stumm."""
+        d = self.out_dev
+        if not d:
+            return
+        g = self.guests.get(d)
+        if g is None or time.time() - (g.get("seen") or 0) > 60:
+            self.out_dev = ""
+            _on_main(lambda: self.p.set_silent(False))
+            self._event("ausgabegerät weg – es spielt wieder dieser rechner")
+            self._kick = True
 
     def ctl(self, op, vid, name, t=None, ultra=False, to=None):
         """Steuerbefehl eines Gasts mit Rechten (GTK-Thread). „play“ (Titel t sofort spielen) und „jump“ (Titel mit der
@@ -598,7 +635,13 @@ class Jam:
             p = self.p
             if op in ("play", "jump", "volume", "move", "radio", "shuffle", "out") and not ultra:
                 return False
-            if op == "out":          # Ausgabe wählen: dieser Rechner ist Gastgeber und spielt immer selbst
+            if op == "out":          # Ausgabe wählen: vid = Kurzform des Geräts, leer = dieser Rechner
+                k = ""
+                if vid:
+                    k = next((k_ for k_, g in self.own_devices() if hid(g["dev"]) == vid), None)
+                    if k is None:
+                        return False
+                self.set_output(k)
                 return True
             if op == "volume":
                 try:

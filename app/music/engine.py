@@ -2332,6 +2332,8 @@ class Player:
             try:
                 self.mpv2 = self._new_mpv(MPV_SOCK2)
                 self.mpv2.set("volume", 0)
+                if self._silent:
+                    self.mpv2.set("mute", True)
                 self.apply_eq()
             except Exception as e:  # noqa: BLE001 – ohne zweiten mpv gibt es eben keine Überblendung
                 log(f"standby-mpv: {e}")
@@ -2497,6 +2499,8 @@ class Player:
     def _mpv_restarted(self):
         """mpv war abgestürzt und läuft wieder: Lautstärke setzen, Titel an der alten Stelle fortsetzen."""
         self.mpv.set("volume", self.volume)
+        if self._silent:
+            self.mpv.set("mute", True)
         self.apply_eq()                       # Klang-Filter und Spektrum-Messung gehen mit dem Prozess verloren
         was_playing = not self.paused and self.current is not None and self.started
         self.started, self.restore_pos, self.loading = False, self.pos, False
@@ -3069,6 +3073,14 @@ class Player:
         self.mpv.cmd("seek", sec, "relative" if relative else "absolute")
         self.pos = max(0, sec if not relative else self.pos + sec)
         self.mpris.seeked()
+
+    _silent = False     # Gastgeber einer Marmelade: ein gekoppeltes Gerät spielt, dieser Rechner bleibt stumm
+
+    def set_silent(self, on):
+        self._silent = bool(on)
+        for m in (self.mpv, getattr(self, "mpv2", None)):
+            if m is not None:
+                m.set("mute", self._silent)
 
     def set_volume(self, v):
         if self._mirror is not None:

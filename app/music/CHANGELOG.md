@@ -1,5 +1,11 @@
 # musicalist – Änderungen
 
+## 2.5.0 (2026-11-15)
+- **Ausgabegerät wählen, auch wenn der PC die Marmelade hostet:** Ultra-Gäste (und gekoppelte eigene Geräte wie dein Handy) sehen jetzt die Geräteliste und können festlegen, welches Gerät spielt. Der PC bleibt dann stumm und spielt wieder selbst, sobald das Ausgabegerät weg ist oder die Marmelade endet.
+
+## 2.4.2 (2026-11-13)
+- Kleine Verbesserungen im Hintergrund.
+
 ## 2.4.1 (2026-11-13)
 - **Zu Playlist hinzufügen (ein Titel) wie in der Handy-App:** Kästchen statt Sofort-Schließen. Anhaken legt den Titel dazu und lässt das Menü offen (mehrere Playlists nacheinander), wieder abhaken nimmt ihn zurück. Playlists, in denen der Titel schon liegt, sind abgehakt.
 

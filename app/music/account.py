@@ -607,10 +607,22 @@ class Account:
         except Exception:  # noqa: BLE001
             pass
         r = self._call("GET", "/v1/notices", token=self.st.get("token")) or {}
-        self.notices = [n for n in (r.get("notices") or []) if not n.get("read")][::-1]
+        self.notices = self._local_notices() + [n for n in (r.get("notices") or []) if not n.get("read")][::-1]
+
+    def _local_notices(self):
+        """Hinweise, die die App selbst erzeugt (id < 0): z. B. „dein name wurde geändert“ – nur für diese Person, bis sie weggedrückt werden."""
+        p = self.st.get("rename_pending")
+        if not (isinstance(p, list) and len(p) == 2 and p[1]):
+            return []
+        return [{"id": -1, "kind": "rename", "title": "dein name wurde geändert",
+                 "body": f"dein konto heißt jetzt „{p[1]}“ (vorher „{p[0]}“). melde dich ab jetzt mit „{p[1]}“ an – passwort und alles andere bleiben wie sie waren."}]
 
     def dismiss_notice(self, n):
         self.notices = [x for x in self.notices if x.get("id") != n.get("id")]
+        if int(n.get("id") or 0) < 0:
+            self.st.pop("rename_pending", None)
+            self._save()
+            return
         tok = self.st.get("token")
         threading.Thread(target=lambda: self._try(lambda: self._call("POST", f"/v1/notices/{int(n['id'])}/read", token=tok)), daemon=True).start()
 
@@ -629,6 +641,9 @@ class Account:
         if not now or now == old:
             return
         self.st["name"] = now
+        if old:
+            self.st["rename_pending"] = [old, now]
+            self.notices = self._local_notices() + [x for x in self.notices if int(x.get("id") or 0) >= 0]
         self._save()
         fr = getattr(self.player, "friends", None)
         if fr is not None and old and fr.uname == old:

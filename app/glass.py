@@ -166,7 +166,7 @@ def bring_here(win):
 
 def load():
     try:
-        with open(SETTINGS) as f:
+        with open(SETTINGS, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
@@ -181,7 +181,7 @@ def set_on(on):
     data["glass"] = bool(on)
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
     tmp = SETTINGS + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=1)
     os.replace(tmp, SETTINGS)
 
@@ -769,7 +769,7 @@ class EndFx(Gtk.Widget):
 
         def log(*a):
             if dbg:
-                with open("/tmp/endfx.log", "a") as f:
+                with open("/tmp/endfx.log", "a", encoding="utf-8") as f:
                     f.write(" ".join(str(x) for x in a) + "\n")
         ev = ctrl.get_current_event()
         if ev is not None:                              # Lage direkt aus dem Ereignis (ohne vorherige Mausbewegung)
