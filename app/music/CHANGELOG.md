@@ -1,5 +1,10 @@
 # musicalist – Änderungen
 
+<!-- Regeln: nur, was Nutzende in der App sehen oder tun können. Nicht hinein: Server-Seite (Verwaltung, Admin, was der Betreiber tun kann, stille Uploads/Kürzungen), Fehlersuche/Diagnose für den Entwickler, interne Umbauten. -->
+
+## 2.9.1 (2026-11-16)
+- Kleine Verbesserungen im Hintergrund.
+
 ## 2.9.0 (2026-11-16)
 - **Neuer Reiter „start“ (ganz links, Alt+1):** Startseite wie in YT Music – oben Stimmungen (entspannen, workout, party, konzentration …) filtern die ganze Seite, darunter die Schnellauswahl als 3×3-Raster zum Blättern (‹ › oder zwei Finger seitlich), dann „zuletzt gehört“, „freund·innen hören“, „wiederentdecken“ und die Regale von YT Music. Die übrigen Reiter rücken eine Zahl nach hinten.
 - **Künstler·in → zufällig:** dasselbe Lied kommt nicht mehr zweimal (Single-, Album- und Videofassung werden zusammengelegt).
@@ -7,7 +12,6 @@
 - **Playlists durchsuchen:** Suchfeld über den Playlists in der Bibliothek.
 - **Kronen neben dem eigenen Namen** unter „mein profil“.
 - **Hörverhalten** öffnet immer auf der laufenden Kalenderwoche.
-- **Anzeigename vom Betreiber:** ändert der Betreiber deinen Anzeigenamen, übernimmt die App ihn beim nächsten Abgleich und sagt Bescheid.
 
 ## 2.8.0 (2026-11-15)
 - **Bessere Vorschläge aus dem Überspringverhalten:** Radio und Autoplay lassen Künstler·innen und Titel aus, die du zuletzt (30 Tage) oft übersprungen hast, und stellen vor, was du gern zu Ende hörst. Ein einzelnes Überspringen zählt nicht; ab 2 Skips mit hoher Quote wird abgewertet, ab 3 ausgelassen.
@@ -43,7 +47,6 @@
 
 ## 2.3.1 (2026-11-12)
 - **Mitteilungen vom Server:** Schickt der Betreiber eine Mitteilung, erscheint sie als Fenster (beim nächsten Abgleich); bei Wartung oder zu alter Version steht ein Hinweis.
-- **Konto umbenannt:** Wird dein Konto auf dem Server umbenannt, übernimmt der PC den neuen Namen beim Abgleich – und deinen Freundes-Nutzernamen, wenn er bisher derselbe war.
 
 ## 2.3.0 (2026-11-12)
 - **Ausgabegerät der Marmelade:** Wählt die Gastgeber·in dieses Gerät als Ausgabe (Handy-App 1.3: „ausgabe“), spielt der Rechner die Musik der Marmelade selbst – gleicher Titel, gleiche Stelle, Pause/Weiter folgt. Als Gast mit Ultra (auch eigenes Gerät) wählst du die Ausgabe im Marmelade-Kasten zwischen den gekoppelten Geräten. Ohne Wahl bleibt der Rechner still (nur Anzeige).
@@ -71,9 +74,7 @@
 - **Marmelade mit gekoppelten Geräten:** Startet dein gekoppeltes Handy eine Marmelade, erscheint im Marmelade-Panel „mitmachen“ – der Rechner spielt dann mit (mit allen Rechten) und kann so das Ausgabegerät sein. Umgekehrt fragt das Handy, wenn du hier eine startest.
 - **Suche kennt dich:** Lieder, die du schon gehört oder neulich aus der Suche gespielt hast, stehen vorne in der Titel-Liste und haben ein kleines Symbol davor (󰍉 neulich gesucht, 󰋚 schon gehört). Auch beim besten Treffer zählen sie stärker.
 - **Bibliothek ruckelt nicht mehr:** Die Kacheln der Schnellauswahl werden nur noch einmal gezeichnet und danach als Bild wiederverwendet.
-- **Wöchentliche Statistik:** Mit dem Abgleich lädt musicalist pro abgeschlossener Woche eine Zusammenfassung (meistgehörte Titel und Künstler·innen mit Zählern) auf den Server. Daraus entstehen Auswertungen über alle Nutzenden.
 - **Bedienung:** Tabs wechselst du nur noch mit Alt + Zahl. Im Chat lösen Tippen und Leertaste keine Tastenkürzel mehr aus, der Kopf mit „was der Freund hört“ bleibt oben stehen, im Kino-Modus sind die Knöpfe im Glas-Modus durchsichtig, und die Profil-Zusammenfassung zeigt zwei Themen nebeneinander.
-- Weniger Datenverkehr: Status-Meldungen werden auf dem Server auf die neuesten gekürzt.
 
 ## 1.49.0 (2026-11-11)
 - **Konto ist Pflicht:** Beim Start (nach dem Nutzernamen) fragt ein Fenster nach Nutzername und Passwort – neu anlegen oder anmelden. Nur wenn der Server nicht erreichbar ist, gibt es „später (offline)“; das Fenster kommt dann beim nächsten Start wieder.
