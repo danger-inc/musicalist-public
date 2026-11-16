@@ -49,17 +49,20 @@ def favor(kind, ident, st):
     if kind != "song" or not ident:
         return 0.0
     plays = st[0].get(ident, 0)
-    return (0.9 * math.log(1 + plays) if plays > 0 else 0.0) + pick_bonus(ident, st)
+    mine = st[3] if len(st) > 3 else {}
+    return (0.9 * math.log(1 + plays) if plays > 0 else 0.0) + pick_bonus(ident, st) + (1.2 if ident in mine else 0.0)
 
 
 def mark(ident, st):
-    """Kleines Symbol vor dem Titel: Lupe = neulich gesucht/gespielt, Uhr = schon mal gehört."""
+    """Kleines Symbol vor dem Titel: Liste = in einer meiner Playlists, Lupe = neulich gesucht/gespielt, Uhr = schon mal gehört."""
+    if len(st) > 3 and ident in st[3]:
+        return "󰲸"
     if pick_bonus(ident, st) > 0:
         return "󰍉"
     return "󰋚" if st[0].get(ident, 0) > 0 else ""
 
 
-def stats(rows, picks=None):
+def stats(rows, picks=None, mine=None, mylists=None):
     """rows: (at, vid, title, artist, dur) des Hörprotokolls → Zähler je Titel-ID und Künstler (+ gemerkte Such-Treffer)."""
     by_id, by_art = {}, {}
     for r in rows:
@@ -72,7 +75,8 @@ def stats(rows, picks=None):
             a = norm(a)
             if a:
                 by_art[a] = by_art.get(a, 0) + 1
-    return by_id, by_art, dict(picks or {})
+    # 4./5.: Titel-ID → meine Playlists, IDs meiner Playlists (für den Vorrang in der Suche)
+    return by_id, by_art, dict(picks or {}), dict(mine or {}), set(mylists or ())
 
 
 def score(q, kind, name, sub, rank, ident, st):
@@ -81,4 +85,9 @@ def score(q, kind, name, sub, rank, ident, st):
     plays = by_id.get(ident, 0) if kind == "song" else by_art.get(norm(name), 0) if kind == "artist" else 0
     pick = pick_bonus(ident, st) if kind == "song" else 0.0
     own = 0.9 * math.log(1 + plays) + pick if m > 0.4 else 0.0
+    if m > 0.4 and len(st) > 4:
+        if kind == "song" and ident in st[3]:
+            own += 1.2                                   # steht in einer meiner Playlists
+        if kind == "playlist" and str(ident).removeprefix("VL") in st[4]:
+            own += 1.5                                   # eigene Playlist
     return 3.0 * m + own + 0.8 / (1 + rank) + PRIOR.get(kind, 0.0)

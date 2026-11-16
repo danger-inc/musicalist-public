@@ -9,6 +9,7 @@ import engine
 from engine import fmt
 import localmusic
 import searchrank
+import myplaylists
 from rows import track_row, coll_row, artist_link
 from widgets import Cover, preview_supported, DESK_POS
 
@@ -240,7 +241,24 @@ class SearchMixin:
             self.all_box.set_visible(False)
             return
         picks = dict(engine.setting("search_picks") or {})
-        st = searchrank.stats(list(self.p.stats.rows), picks) if getattr(self.p, "stats", None) else ({}, {}, picks)
+        myplaylists.load()
+        mine = {k: e["l"] for k, e in myplaylists.by_id.items()}
+        mylists = {p["id"] for p in myplaylists.lists}
+        st = (searchrank.stats(list(self.p.stats.rows), picks, mine, mylists) if getattr(self.p, "stats", None)
+              else ({}, {}, picks, mine, mylists))
+        # Titel aus meinen Playlists, die YouTube nicht geliefert hat, und eigene Playlists, deren Name passt
+        res = dict(res)
+        have = {r.get("videoId") for r in res.get("song", [])}
+        res["song"] = list(res.get("song", [])) + [
+            {"videoId": t["videoId"], "title": t["title"], "artists": [{"name": t.get("artist") or "", "id": t.get("artistId")}],
+             "album": {"name": t.get("album") or "", "id": t.get("albumId")}, "duration_seconds": t.get("duration") or 0,
+             "thumbnails": [{"url": t.get("thumb") or ""}]} for t in myplaylists.matches(q) if t["videoId"] not in have]
+        plhave = {str(r.get("browseId") or "").removeprefix("VL") for r in res.get("playlist", [])}
+        res["playlist"] = list(res.get("playlist", [])) + [
+            {"browseId": "VL" + p["id"], "title": p["title"], "author": "deine playlist", "itemCount": ""}
+            for p in myplaylists.playlist_hits(q) if p["id"] not in plhave]
+        if not res["playlist"]:
+            res.pop("playlist")
         self._rank_st = st
         cands = []                                   # (punkte, art, ergebnis)
         for kind, lst in res.items():

@@ -636,8 +636,19 @@ class Account:
                 self.banner = mt
         except Exception:  # noqa: BLE001
             pass
-        r = self._call("GET", "/v1/notices", token=self.st.get("token")) or {}
-        self.notices = self._local_notices() + [n for n in (r.get("notices") or []) if not n.get("read")][::-1]
+        tok = self.st.get("token")
+        r = self._call("GET", "/v1/notices", token=tok) or {}
+        new = [n for n in (r.get("notices") or []) if not n.get("read")][::-1]
+        # „dname“: Verwaltung hat den Anzeigenamen geändert → übernehmen, Namensanspruch neu, als gelesen melden
+        fr = getattr(self.player, "friends", None)
+        for n in new:
+            if n.get("kind") == "dname" and (n.get("title") or "").strip() and fr is not None:
+                fr.set_name(n["title"])
+                fr._claim_at = 0
+                self._try(lambda i=int(n["id"]): self._call("POST", f"/v1/notices/{i}/read", token=tok))
+                n["body"] = f"du heißt jetzt „{n['title'].strip()}“." + (f"\n\n{n['body']}" if n.get("body") else "")
+                n["title"], n["kind"] = "dein anzeigename wurde geändert", "info"
+        self.notices = self._local_notices() + new
 
     def _local_notices(self):
         """Hinweise, die die App selbst erzeugt (id < 0): z. B. „dein name wurde geändert“ – nur für diese Person, bis sie weggedrückt werden."""

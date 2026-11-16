@@ -38,6 +38,8 @@ from anpassen import AnpassenMixin
 from lyrics_page import LyricsMixin
 from sound_page import SoundMixin
 from stats_page import StatsMixin
+from start_page import StartMixin
+import myplaylists
 
 RUNTIME = engine.RUNTIME
 
@@ -407,11 +409,11 @@ class Spectrum(Gtk.DrawingArea):
 
 # ---------- Hauptfenster ----------
 class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsMixin, AnpassenMixin, LyricsMixin, SoundMixin, StatsMixin,
-                  tui.TuiWindow):
+                  StartMixin, tui.TuiWindow):
     APP_ID = "de.invincible.Music"
     # sichtbare Reiter: jetzt · warteschlange · bibliothek · suchen (ganz rechts). Die übrigen Seiten haben keinen Reiter:
     # lyrics/visuals unter „läuft“, hörverhalten in der Bibliothek, freunde oben rechts neben dem Konto, einstellungen = ⚙
-    TABS = [("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"), ("search", "suchen", "󰍉"),
+    TABS = [("start", "start", "󰋜"), ("now", "jetzt", "󰝚"), ("queue", "warteschlange", "󰲸"), ("lib", "bibliothek", "󰋑"), ("search", "suchen", "󰍉"),
             ("lyrics", "lyrics", "\U000f0370"), ("visuals", "visuals", "󱑽"), ("stats", "hörverhalten", "󰄨"),
             ("friends", "freunde", "󰡉"), ("settings", "einstellungen", "󰒓")]
     HIDDEN_TABS = ("lyrics", "visuals", "stats", "friends", "settings")
@@ -446,6 +448,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         if getattr(self, "update_btn", None):
             self.header_extra.reorder_child_after(self.update_btn, self.changelog_btn)
 
+        self.build_start()
         self.build_now()
         self.build_queue()
         self.build_search()
@@ -1527,10 +1530,14 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
             GLib.timeout_add(60, lambda: self.sync_lyrics(jump=True) and False)
         if tab == "stats":
             self.an_shown()
+        if tab == "start":
+            self.start_shown()
         if tab == "friends":
             self.friends_shown()
         if tab == "search":
             GLib.idle_add(lambda: self.query.grab_focus() and False)
+            if self.account is not None:          # Playlist-Index für die Suche (höchstens alle 6 h neu)
+                tui.background(lambda: myplaylists.refresh(self.p.music))
 
     def _key(self, c, kv, code, state):
         """Vor tui.TuiWindow._key (das Esc sonst immer schluckt): Vollbild/Leiste schließen."""

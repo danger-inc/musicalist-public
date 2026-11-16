@@ -833,6 +833,31 @@ class Music:
         d = self.yt.get_watch_playlist(playlistId=pid, limit=50)
         return "radio", [t for t in map(track, d.get("tracks", [])) if t]
 
+    def home_full(self, params=None, limit=8):
+        """Startseite wie YT Music → (regale, chips). params = Stimmungs-Chip (Workout, Entspannung …); chips = [(name, params)]
+        (ohne Podcasts). Geht auch ohne Anmeldung."""
+        from ytmusicapi.continuations import get_continuations
+        from ytmusicapi.navigation import SECTION_LIST, SINGLE_COLUMN_TAB, nav
+        from ytmusicapi.parsers.browsing import parse_mixed_content
+        yt = self.yt
+        body = {"browseId": "FEmusic_home"}
+        if params:
+            body["params"] = params
+        resp = yt._send_request("browse", body)
+        shelves = parse_mixed_content(nav(resp, SINGLE_COLUMN_TAB + SECTION_LIST))
+        sl = nav(resp, [*SINGLE_COLUMN_TAB, "sectionListRenderer"])
+        if "continuations" in sl and len(shelves) < limit:
+            shelves += get_continuations(sl, "sectionListContinuation", limit - len(shelves),
+                                         lambda extra: yt._send_request("browse", body, extra), parse_mixed_content)
+        chips = []
+        for c in ((sl.get("header") or {}).get("chipCloudRenderer") or {}).get("chips") or []:
+            r = c.get("chipCloudChipRenderer") or {}
+            name = "".join(x.get("text", "") for x in (r.get("text") or {}).get("runs") or [])
+            p = ((r.get("navigationEndpoint") or {}).get("browseEndpoint") or {}).get("params")
+            if name and p and name.lower() != "podcasts":
+                chips.append((name, p))
+        return [s for s in shelves if s.get("contents")], chips
+
     def quick_picks(self):
         """Schnellauswahl der Startseite (geht auch ohne Anmeldung): Liste von Titeln."""
         shelves = self.yt.get_home(limit=4)
@@ -2930,6 +2955,8 @@ class Player:
             return
         if self.jam_route(tracks[min(start, len(tracks) - 1)], now=True):
             return
+        if shuffle:
+            tracks = drop_dupes(tracks, [])      # Künstler/Alben: gleiches Lied als Single+Album/Video sonst 2× (oft direkt hintereinander)
         src = src or self._src()
         if src:
             for t in tracks:
@@ -2939,7 +2966,7 @@ class Player:
         if shuffle and self._mirror is None and self.started and self.current:
             cur = self.current.get("videoId")
             if any(t.get("videoId") == cur for t in tracks):
-                rest = [t for t in tracks if t.get("videoId") != cur]
+                rest = drop_dupes([t for t in tracks if t.get("videoId") != cur], [self.current])
                 random.shuffle(rest)
                 self.queue = [self.queue[self.index]] + rest          # wie ein frisch gemischter Start, nur ohne den laufenden Titel neu zu laden
                 self.index = 0

@@ -1,5 +1,14 @@
 # musicalist – Änderungen
 
+## 2.9.0 (2026-11-16)
+- **Neuer Reiter „start“ (ganz links, Alt+1):** Startseite wie in YT Music – oben Stimmungen (entspannen, workout, party, konzentration …) filtern die ganze Seite, darunter die Schnellauswahl als 3×3-Raster zum Blättern (‹ › oder zwei Finger seitlich), dann „zuletzt gehört“, „freund·innen hören“, „wiederentdecken“ und die Regale von YT Music. Die übrigen Reiter rücken eine Zahl nach hinten.
+- **Künstler·in → zufällig:** dasselbe Lied kommt nicht mehr zweimal (Single-, Album- und Videofassung werden zusammengelegt).
+- **Suche:** Titel aus deinen Playlists kommen zuerst (󰲸 davor), auch wenn YouTube sie nicht liefert; deine Playlists erscheinen als Treffer, wenn der Name passt.
+- **Playlists durchsuchen:** Suchfeld über den Playlists in der Bibliothek.
+- **Kronen neben dem eigenen Namen** unter „mein profil“.
+- **Hörverhalten** öffnet immer auf der laufenden Kalenderwoche.
+- **Anzeigename vom Betreiber:** ändert der Betreiber deinen Anzeigenamen, übernimmt die App ihn beim nächsten Abgleich und sagt Bescheid.
+
 ## 2.8.0 (2026-11-15)
 - **Bessere Vorschläge aus dem Überspringverhalten:** Radio und Autoplay lassen Künstler·innen und Titel aus, die du zuletzt (30 Tage) oft übersprungen hast, und stellen vor, was du gern zu Ende hörst. Ein einzelnes Überspringen zählt nicht; ab 2 Skips mit hoher Quote wird abgewertet, ab 3 ausgelassen.
 - **Kurze Warteschlange, live angepasst:** statt 25–40 Radio-Titel liegen nur noch etwa 5–8 voraus; nach jedem Überspringen fliegt Unerwünschtes raus und es wird nachgefüllt.

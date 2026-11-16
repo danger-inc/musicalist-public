@@ -198,9 +198,7 @@ class StatsMixin:
         css.load_from_string(CSS)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
                                                   Gtk.STYLE_PROVIDER_PRIORITY_USER + 2)
-        self.an_art = engine.setting("analyse_art") or "w"
-        if self.an_art not in dict(ART_OPTS):
-            self.an_art = "w"
+        self.an_art = "w"                    # immer laufende Kalenderwoche (Wunsch), nicht die zuletzt gewählte Art
         self.an_off, self.an_res, self.an_gen, self.an_dirty = 0, None, 0, True
         self.an_more = set()                 # aufgeklappte Listen
         self.an_clear_armed = 0
@@ -277,6 +275,10 @@ class StatsMixin:
             engine.set_setting("review_seen", seen)
             self.an_art, self.an_off = art, -1
             self.an_sel.set_options(ART_OPTS, art)
+            self.an_refresh(top=True)
+        elif (self.an_art, self.an_off) != ("w", 0):    # Daemon läuft tagelang: beim Öffnen zurück auf die laufende Woche
+            self.an_art, self.an_off = "w", 0
+            self.an_sel.set_options(ART_OPTS, "w")
             self.an_refresh(top=True)
         elif self.an_dirty or self.an_res is None:
             self.an_refresh()

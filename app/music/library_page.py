@@ -6,6 +6,7 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Graphene, Gtk, Pango, Pango
 import tui
 from tui import label, hbox, vbox, esc
 import engine
+import searchrank
 from engine import fmt
 from rows import track_row, coll_row, artist_link
 
@@ -214,6 +215,19 @@ class LibraryMixin:
         self.coll.append(coll_row("󰠃", "abonnierte künstler", "", lambda: self.open_detail("subs", "")))
         self.coll.append(coll_row("󰎈", "neu von deinen künstlern", "", lambda: self.open_detail("new", "")))
         self.coll.append(coll_row("󰦖", "podcasts", "", lambda: self.open_detail("podlib", "")))
+        # Playlists durchsuchen: blendet nicht passende Playlist-Zeilen aus
+        pl_q = tui.Entry("󰍉 playlists suchen", activate=lambda: None)
+        pl_q.set_margin_top(6)
+
+        def pl_filter(*_):
+            q = pl_q.get_text().strip()
+            row = self.coll.get_first_child()
+            while row is not None:
+                if getattr(row, "_pl_row", False):
+                    row.set_visible(not q or searchrank.name_match(q, row._pl_title) >= 0.45)
+                row = row.get_next_sibling()
+        pl_q.connect("changed", pl_filter)
+        self.coll.append(pl_q)
         new_pl = tui.Button("󰐒 neue playlist", lambda: self.new_playlist_popover(new_pl),
                             tooltip="Leere Playlist in YouTube Music anlegen")
         new_pl.set_halign(Gtk.Align.START)
@@ -239,8 +253,10 @@ class LibraryMixin:
                     continue
                 row = coll_row("󰲸", pl["title"], str(pl["count"] or ""), lambda i=pl["id"]: self.open_detail("playlist", i))
                 row._pl_row = True
+                row._pl_title = pl["title"]
                 self.coll.append(row)
             self.coll.append(self.coll_newpl)
+            pl_filter()
 
         # zuletzt bekannte Liste sofort (vorher kam sie erst nach dem Netz-Abruf), danach im Hintergrund erneuern
         cached = self.p.music.library_cached()

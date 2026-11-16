@@ -433,7 +433,7 @@ class FriendsMixin:
         mb = Gtk.Button(hexpand=True)
         mb.add_css_class("rowhead")
         mb.set_child(hbox(vbox(label("󰀄 mein profil", "accent"),
-                               label(f"{f.name} · " + ("teilen an" if f.share else "teilen aus") + " – ansehen und einstellen", "dim", wrap=True),
+                               label(f"{f.name}{self._crown_tag(f.name, True)} · " + ("teilen an" if f.share else "teilen aus") + " – ansehen und einstellen", "dim", wrap=True),
                                spacing=2), label("›", "accent"), spacing=10))
         mb.connect("clicked", lambda *_: self.open_profile())
         box.append(mb)
@@ -1022,7 +1022,7 @@ class FriendsMixin:
         sb.append(label("aus – niemand sieht etwas." if not f.share else "freunde sehen dein profil wie oben.", "dim", wrap=True))
         sb.append(label("nutzername", "dim"))
         nm = label("", "accent")
-        nm.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(f.name)}</span>")
+        nm.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(f.name + self._crown_tag(f.name, True))}</span>")
         sb.append(nm)
         sb.append(hbox(tui.Button("✎ ändern", self.ask_username), spacing=8))
         sb.append(label("freunde suchen dich mit diesem namen und schicken dir eine anfrage, die du bestätigst.", "dim", wrap=True))
