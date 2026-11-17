@@ -75,6 +75,25 @@ RUBRIKEN = [("h", "hörzeit", _v_h, True), ("rep", "wiederholungen", _v_rep, Tru
             ("sn", "serie", _num("sn", "", "tage in folge"), True)]
 
 
+ICONS = {"h": "󰥔", "rep": "󰑖", "n": "󰝚", "ar": "󰠃", "art": "󰋑", "sk": "󰒭", "dv": "󰏘", "nw": "󰍉", "sn": "󰃭"}
+
+
+def top_summary(ranks, names):
+    """Eingeklappte Top-Liste in einer Zeile (wie Handy topSummary): wer die meisten Rubriken anführt + mein bester Platz.
+    ranks: je Rubrik [(name, ich?)] in Rangfolge."""
+    wins = {}
+    for r in ranks:
+        if r:
+            wins[r[0]] = wins.get(r[0], 0) + 1
+    if not wins:
+        return "noch keine angaben"
+    lead, n = max(wins.items(), key=lambda kv: kv[1])
+    who = "du führst" if lead[1] else f"{lead[0]} führt"
+    mine = min(((next(i for i, x in enumerate(r) if x[1]), names[k]) for k, r in enumerate(ranks) if any(x[1] for x in r)), default=None)
+    me = f" · du: platz {mine[0] + 1} ({mine[1]})" if mine and not lead[1] else ""
+    return f"󰆥 {who} in {n} von {sum(1 for r in ranks if r)}{me}"
+
+
 def top_rows(entries, key):
     """entries: [(name, pf, ich)] → sortierte Zeilen [(name, text, zusatz, ich)] der gewählten Rubrik (nur wer die Angabe teilt)."""
     _k, _n, fn, desc = next(r for r in RUBRIKEN if r[0] == key)
@@ -1176,7 +1195,9 @@ class FriendsMixin:
         cat = getattr(self, "_fr_cat", "") or "h"
         menu = getattr(self, "_fr_menu", False)
         panel = vbox(spacing=3)
-        panel.append(label("󰔷 top-liste · diese woche", "accent"))
+        mini = bool(engine.setting("top_min"))
+        tgl = tui.Button("󰅀 ausklappen" if mini else "󰅃 einklappen", lambda: (engine.set_setting("top_min", not mini), self.fill_friends()))
+        panel.append(hbox(label("󰔷 top-liste · diese woche", "accent", hexpand=True), tgl, spacing=8))
         entries = []
         mine = f._payload().get("pf") if f.share else None
         entries.append((f.name + " (ich)", mine, True))
@@ -1186,6 +1207,14 @@ class FriendsMixin:
             # Profil-Stand ist ein Schnappschuss vom letzten Senden: älter als diese Woche = noch nichts gehört → nicht die Stunden der Vorwoche zeigen
             fresh = (x.get("at") or 0) >= week
             entries.append((x["name"], (x.get("prof") or {}).get("pf") if fresh else None, False))
+        if mini:                          # eingeklappt: eine Zeile, anklicken klappt auf
+            b = Gtk.Button(hexpand=True)
+            b.add_css_class("rowhead")
+            b.set_child(label(top_summary([[(n, me) for n, _t, _z, me in top_rows(entries, k)] for k, *_ in RUBRIKEN],
+                                          [nm for _k, nm, *_ in RUBRIKEN]), ellipsize=True, xalign=0))
+            b.connect("clicked", lambda *_: (engine.set_setting("top_min", False), self.fill_friends()))
+            panel.append(b)
+            return panel
         # alle Rubriken untereinander, je nur Platz 1; anklicken klappt die ganze Rangliste dieser Rubrik auf
         if not any(top_rows(entries, k) for k, *_ in RUBRIKEN):
             panel.append(label("noch keine Angaben – Freunde müssen teilen (umfang normal/mehr für alles außer hörzeit; vielfalt, entdecker, serie nur bei „mehr“).", "dim", wrap=True))
@@ -1202,7 +1231,9 @@ class FriendsMixin:
             else:
                 right = label("–", "dim")
                 b.set_sensitive(False)
-            b.set_child(hbox(label(name, "dim", hexpand=True, xalign=0), right, spacing=10))
+            ic = label(ICONS.get(key, ""), "accent")
+            ic.set_width_chars(2)
+            b.set_child(hbox(ic, label(name, "dim", hexpand=True, xalign=0), right, spacing=10))
             b.connect("clicked", lambda *_, k=key, o=is_open: (setattr(self, "_fr_cat", k), setattr(self, "_fr_menu", not o), self.fill_friends()))
             panel.append(b)
             if is_open:
