@@ -63,6 +63,10 @@ fi
 say "Kopiere musicalist nach $DIR …"
 mkdir -p "$DIR" "$RICE/fonts" "$BIN" "$APPS" "$ICONS"
 cp -f "$SRC"/app/music/*.py "$SRC"/app/music/VERSION "$SRC"/app/music/CHANGELOG.md "$DIR/"
+if [ -d "$SRC/app/serverist" ]; then                                # Server-Verwaltung für den Entwicklermodus (nur volle Ausgabe)
+    mkdir -p "$HOME/.local/share/serverist"
+    cp -f "$SRC"/app/serverist/* "$HOME/.local/share/serverist/"
+fi
 cp -f "$SRC/app/tui.py" "$SRC/app/glass.py" "$SRC/app/istheme.py" "$SRC/app/ist-swipe.py" "$SRC/app/changelog.py" "$SRC/app/swipe.py" "$RICE/"             # gemeinsame Bausteine der Suite
 cp -f "$SRC"/app/fonts/* "$RICE/fonts/"                           # Symbolschrift (Icons ohne Nerd Font)
 

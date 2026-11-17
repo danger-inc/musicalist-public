@@ -514,6 +514,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
         self.update_state()
         self.update_queue()
         self.refresh_account()
+        GLib.timeout_add_seconds(1800, self.auto_relogin)        # Browser-Anmeldung still nachziehen
         self.hook_notices()
 
     # ---------- Mitteilungen des Betreibers (Server) ----------
@@ -619,7 +620,7 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
             ("+ −", "lauter / leiser"), ("l · d", "gefällt mir / gefällt mir nicht"), ("t", "fernseher-modus an / aus"), ("a", "titel zu playlist hinzufügen"),
             ("alt + 1 – 4", "tabs wechseln"), ("bild↑ · bild↓", "analyse: früherer / späterer zeitraum"),
             ("w · m · j · g", "analyse: woche / monat / jahr / gesamt"), ("/", "suchen (tab übernimmt den 1. vorschlag)"), ("h", "hörverlauf-leiste"),
-            (",", "einstellungen"), ("[ ]", "lyrics früher / später"), ("s", "sleep-timer"), ("e", "klang: equalizer / überblenden"), ("v · f", "visuals: modus / vollbild"),
+            (",", "einstellungen"), ("[ ]", "lyrics früher / später"), ("k", "karaoke (vollbild)"), ("s", "sleep-timer"), ("e", "klang: equalizer / überblenden"), ("v · f", "visuals: modus / vollbild"),
             ("rechtsklick", "mehr zu jedem titel"), ("q", "schließen"), ("?", "diese liste"),
             ("super+alt+n / p", "weiter / zurück – auch wenn musicalist zu ist"),
             ("super+alt+leertaste", "play / pause von überall")]
@@ -1601,6 +1602,8 @@ class MusicWindow(SettingsMixin, QueueMixin, SearchMixin, LibraryMixin, FriendsM
                     pop.set_position(Gtk.PositionType.TOP)
         elif kv in (Gdk.KEY_question, Gdk.KEY_F1):
             self.show_keys()
+        elif kv == Gdk.KEY_k:
+            self.karaoke()
         elif kv in (Gdk.KEY_bracketleft, Gdk.KEY_bracketright):
             self.shift_lyrics(-0.25 if kv == Gdk.KEY_bracketleft else 0.25)
         elif kv == Gdk.KEY_comma:

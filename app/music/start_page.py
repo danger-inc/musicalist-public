@@ -2,7 +2,7 @@
 Oben Stimmungs-Chips (filtern die ganze Seite), darunter die Schnellauswahl als 3×3-Raster zum Durchblättern
 (‹ › oder seitlich wischen/scrollen), dann eigene Regale aus dem Hörprotokoll (zuletzt gehört, Freund·innen hören,
 wiederentdecken) und danach die Regale von YT Music."""
-import time
+import json, os, time
 from concurrent.futures import ThreadPoolExecutor
 
 from gi.repository import Gtk
@@ -11,6 +11,7 @@ import tui
 import engine
 from tui import label, hbox, vbox
 from widgets import big_thumb, fetch_pixbuf, DotThumb
+from rows import track_row, coll_row
 
 PAGE = 9            # 3×3
 # ytmusicapi bleibt auf Englisch (sonst findet die Suche nichts) → Chip-Namen nur für die Anzeige übersetzen
@@ -20,7 +21,9 @@ CHIP_DE = {"relax": "entspannen", "workout": "workout", "energize": "power", "fe
 
 def chip_name(name):
     return CHIP_DE.get(name.lower(), name.lower())
-TILE = 104          # px je Kästchen
+TILE = 92           # px je Kästchen (Raster bleibt links und klein, rechts daneben „freund·innen hören“)
+SCROLL_SHELVES = 2  # nur so viele Regale zum seitlichen Wischen, der Rest als kurze Listen (2 Spalten)
+CACHE = os.path.join(engine.DATA, "start-cache.json")      # letzte Startseite: erscheint sofort, statt ~15 s leer
 
 
 def recent_tracks(rows, n=20):
@@ -99,19 +102,38 @@ class StartMixin:
                                        tui.Button("›", lambda: self.st_page(1), tooltip="nächste Seite"), self.st_new, spacing=6))
         self.st_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.SLIDE_LEFT_RIGHT, transition_duration=180, hhomogeneous=True,
                                   vhomogeneous=True, halign=Gtk.Align.START)
-        # Touchpad: zwei Finger seitlich = blättern
-        scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.HORIZONTAL | Gtk.EventControllerScrollFlags.DISCRETE)
-        scroll.connect("scroll", lambda _c, dx, _dy: (self.st_page(1 if dx > 0 else -1), True)[1] if abs(dx) > 0.3 else False)
+        self.st_side, self.st_cells = TILE, []
+        # Touchpad/Maus: seitlich scrollen = blättern; senkrecht geht an die Seite weiter (Raster blockiert das Scrollen nicht)
+        self._st_dx = 0.0
+        scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.BOTH_AXES)
+        scroll.connect("scroll", self._st_scroll)
+        scroll.connect("scroll-end", lambda *_: setattr(self, "_st_dx", 0.0))
         self.st_stack.add_controller(scroll)
         swipe = Gtk.GestureSwipe()
         swipe.connect("swipe", lambda _g, vx, vy: self.st_page(1 if vx < 0 else -1) if abs(vx) > abs(vy) and abs(vx) > 300 else None)
         self.st_stack.add_controller(swipe)
         self.st_quick.body.append(self.st_stack)
-        page.append(self.st_quick)
+        self.st_quick.set_hexpand(False)
+        self.st_live = tui.Panel("󰀄 freund·innen hören")
+        self.st_live.set_hexpand(True)
+        self.st_live_box = vbox(spacing=2)
+        self.st_live.body.append(self.st_live_box)
+        top = hbox(self.st_quick, self.st_live, spacing=10)
+        top.set_valign(Gtk.Align.START)
+        self.st_live.set_valign(Gtk.Align.FILL)
+        page.append(top)
         self.st_shelves = vbox(spacing=10)
         page.append(self.st_shelves)
         self.st_grid_tracks, self.st_pages = [], 0
         self.add_page("start", page)
+        try:                                   # zuletzt gezeigte Startseite sofort (Bilder kommen beim Laden nach)
+            c = json.load(open(CACHE))
+            self.st_chips = [tuple(x) for x in c.get("chips") or []]
+            self.st_fill_chips()
+            self.st_fill_grid(c.get("grid") or [])
+            self.st_fill_shelves([(n, [tuple(x) for x in items]) for n, items in c.get("shelves") or []])
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
 
     def start_shown(self):
         sel = self.st_sel
@@ -138,16 +160,9 @@ class StartMixin:
                 rec = recent_tracks(rows)
                 if rec:
                     own.append(("󰋚 zuletzt gehört", [("song", t) for t in rec]))
-                live = []
-                for f in list(getattr(fr, "friends", None) or []):
-                    now = (f.get("prof") or {}).get("now") or {}
-                    vid = now.get("id") or ""
-                    if len(vid) == 11:
-                        t = {"videoId": vid, "title": now.get("t") or "?", "artist": now.get("a") or "",
-                             "thumb": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg", "_who": f.get("name") or ""}
-                        live.append(("song", t))
-                if live:
-                    own.append(("󰀄 freund·innen hören", live))
+                mix = fr.weekly_mix() if fr is not None else []
+                if len(mix) >= 5:
+                    own.append(("󰡉 freund·innen-mix der woche", [("song", t) for t in mix]))
                 ag = again_tracks(rows)
                 if ag:
                     own.append(("󰑖 wiederentdecken", [("song", t) for t in ag]))
@@ -208,6 +223,13 @@ class StartMixin:
             self.st_info.set_label("antippen = radio · rechtsklick = menü" if grid else "nichts da")
             self.st_fill_grid(grid)
             self.st_fill_shelves(own + rest[:8] if sel is None else rest)
+            if sel is None:
+                try:
+                    with open(CACHE + ".tmp", "w") as f:
+                        json.dump({"chips": self.st_chips, "grid": grid, "shelves": own + rest[:8]}, f)
+                    os.replace(CACHE + ".tmp", CACHE)
+                except (OSError, TypeError, ValueError):
+                    pass
         tui.background(work, done=done)
 
     # ----- Chips -----
@@ -235,12 +257,56 @@ class StartMixin:
             self.st_stack.remove(c)
         self.st_grid_tracks = tracks
         self.st_pages = (len(tracks) + PAGE - 1) // PAGE
+        self.st_cells = []
         for p in range(self.st_pages):
             grid = Gtk.Grid(column_spacing=8, row_spacing=6)
             for i, t in enumerate(tracks[p * PAGE:(p + 1) * PAGE]):
-                grid.attach(self._st_tile(t, lambda t=t: self._st_radio(t), TILE), i % 3, i // 3, 1, 1)
+                cell = self._st_tile(t, lambda t=t: self._st_radio(t), self.st_side)
+                self.st_cells.append(cell)
+                grid.attach(cell, i % 3, i // 3, 1, 1)
             self.st_stack.add_named(grid, f"p{p}")
         self.st_page(0, absolute=True)
+
+    def _st_scroll(self, _c, dx, dy):
+        if abs(dx) <= abs(dy):
+            return False                    # senkrecht: Seite scrollt weiter
+        self._st_dx += dx
+        if abs(self._st_dx) >= 1.0:         # Mausrad seitlich = 1 Raste, Touchpad sammelt etwa eine Fingerbreite
+            self.st_page(1 if self._st_dx > 0 else -1)
+            self._st_dx = 0.0
+        return True
+
+    def st_fill_live(self):
+        """Rechts neben dem Raster: was Freund·innen gerade hören (bzw. zuletzt), anklicken = mithören."""
+        box = self.st_live_box
+        tui.clear(box)
+        fr = getattr(self, "fr", None)
+        rows = []
+        for f in list(getattr(fr, "friends", None) or []):
+            pr = f.get("prof") or {}
+            now = pr.get("now") or {}
+            if not now.get("id") or len(now.get("id")) != 11:
+                continue
+            live = bool(fr.live(f)) if hasattr(fr, "live") else False
+            rows.append((not live, -(f.get("at") or 0), f, now, live))
+        rows.sort(key=lambda r: (r[0], r[1]))
+        for _a, _b, f, now, live in rows[:10]:
+            t = {"videoId": now["id"], "title": now.get("t") or "?", "artist": now.get("a") or "",
+                 "thumb": f"https://i.ytimg.com/vi/{now['id']}/hqdefault.jpg"}
+            b = Gtk.Button(hexpand=True)
+            b.add_css_class("rowhead")
+            if live:
+                b.add_css_class("on")
+            b.set_child(vbox(label(("● " if live else "") + (f.get("name") or "?"), "accent", ellipsize=True, xalign=0),
+                             label(f"{t['title']} – {t['artist']}", "dim", ellipsize=True, xalign=0), spacing=1))
+            b.set_tooltip_text("anklicken = mithören")
+            b.connect("clicked", lambda *_, t=t, n=f.get("name") or "": self.p.play_tracks([t], src=("freunde", n)))
+            rc = Gtk.GestureClick(button=3)
+            rc.connect("pressed", lambda g, n, x, y, b=b, t=t: self.songs.menu(b, x, y, t))
+            b.add_controller(rc)
+            box.append(b)
+        if not rows:
+            box.append(label("gerade hört niemand etwas" if fr is not None and fr.friends else "noch keine freund·innen – oben 󰡉", "dim", wrap=True, xalign=0))
 
     def st_page(self, d, absolute=False):
         if not self.st_pages:
@@ -257,30 +323,68 @@ class StartMixin:
 
     # ----- Regale -----
     def st_fill_shelves(self, shelves):
+        self.st_fill_live()
         tui.clear(self.st_shelves)
-        for title, items in shelves:
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True, max_children_per_line=2, min_children_per_line=1,
+                           column_spacing=10, row_spacing=10)
+        for n, (title, items) in enumerate(shelves):
             panel = tui.Panel(title.lower())
-            row = hbox(spacing=10)
-            row.set_halign(Gtk.Align.START)
             songs = [x[1] for x in items if x[0] == "song"]
             src = ("start", title.split(" ", 1)[-1] if title[:1] in "󰋚󰀄󰑖" else title)
-            for x in items[:14]:
-                if x[0] == "song":
-                    t = x[1]
-                    i = songs.index(t)
-                    row.append(self._st_tile(t, lambda i=i: self.p.play_tracks(songs, start=i, src=src), 120, sub=t.get("_who")))
-                else:
-                    kind, ident, name, sub, _th = x
-                    row.append(self._st_tile({"videoId": ident, "title": name, "artist": sub}, lambda k=kind, i=ident: self.open_detail(k, i),
-                                             120, menu=False))
-            sw = Gtk.ScrolledWindow(vscrollbar_policy=Gtk.PolicyType.NEVER, hscrollbar_policy=Gtk.PolicyType.AUTOMATIC, child=row)
-            panel.body.append(sw)
+            if n < SCROLL_SHELVES:
+                row = hbox(spacing=10)
+                row.set_halign(Gtk.Align.START)
+                for x in items[:14]:
+                    if x[0] == "song":
+                        t = x[1]
+                        i = songs.index(t)
+                        row.append(self._st_tile(t, lambda i=i: self.p.play_tracks(songs, start=i, src=src), 110, sub=t.get("_who")))
+                    else:
+                        kind, ident, name, sub, _th = x
+                        row.append(self._st_tile({"videoId": ident, "title": name, "artist": sub}, lambda k=kind, i=ident: self.open_detail(k, i),
+                                                 110, menu=False))
+                sw = Gtk.ScrolledWindow(vscrollbar_policy=Gtk.PolicyType.NEVER, hscrollbar_policy=Gtk.PolicyType.AUTOMATIC, child=row)
+                self._pass_vertical(sw)
+                panel.body.append(sw)
+            else:                            # kurze Liste statt Wisch-Regal
+                for x in items[:5]:
+                    if x[0] == "song":
+                        t = x[1]
+                        i = songs.index(t)
+                        panel.body.append(track_row(t, lambda i=i: self.p.play_tracks(songs, start=i, src=src), [], menus=self.songs))
+                    else:
+                        kind, ident, name, sub, _th = x
+                        panel.body.append(coll_row({"album": "󰀥", "playlist": "󰲸", "artist": "󰠃"}.get(kind, "󰲸"), name, sub,
+                                                   lambda k=kind, i=ident: self.open_detail(k, i)))
             if songs:
                 panel.body.append(hbox(tui.Button("󰐊 alle", lambda s=songs: self.p.play_tracks(s, src=src)),
                                        tui.Button("󰒝 mischen", lambda s=songs: self.p.play_tracks(s, shuffle=True, src=src)), spacing=8))
-            self.st_shelves.append(panel)
+            if n < SCROLL_SHELVES:
+                self.st_shelves.append(panel)
+            else:
+                flow.append(panel)
+        if len(shelves) > SCROLL_SHELVES:
+            self.st_shelves.append(flow)
         if not shelves:
             self.st_shelves.append(label("keine regale", "empty"))
+
+    @staticmethod
+    def _pass_vertical(sw):
+        """Waagrechtes Regal: das Mausrad (senkrecht) scrollt die Seite statt das Regal (GTK lenkt es sonst seitlich um)."""
+        sc = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.BOTH_AXES)
+        sc.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+
+        def on(_c, dx, dy):
+            if abs(dy) <= abs(dx):
+                return False
+            outer = sw.get_parent().get_ancestor(Gtk.ScrolledWindow) if sw.get_parent() else None
+            if outer is None:
+                return False
+            adj = outer.get_vadjustment()
+            adj.set_value(adj.get_value() + dy * 50)
+            return True
+        sc.connect("scroll", on)
+        sw.add_controller(sc)
 
     def _st_tile(self, t, on_click, side, sub=None, menu=True):
         pic = DotThumb(side)
@@ -295,11 +399,13 @@ class StartMixin:
             b.add_controller(rc)
         cell = vbox(b, spacing=2)
         cell.set_halign(Gtk.Align.START)
+        cell._pic, cell._lbls = pic, []
         for txt, cls in ((t["title"], ""), ((f"{sub} · " if sub else "") + (t.get("artist") or ""), "dim")):
             lb = label(txt, *([cls] if cls else []), ellipsize=True, xalign=0)
             lb.set_max_width_chars(max(6, side // 8))
             lb.set_size_request(side + 8, -1)
             cell.append(lb)
+            cell._lbls.append(lb)
         return cell
 
     @staticmethod

@@ -230,6 +230,13 @@ class SongMenus:
             it("󰐹", "radio zu diesem titel", lambda: (p.start_radio(t), w.say("radio startet …")))
             self._rub(main, "sammeln")
             it("󰐒", "zu playlist hinzufügen", lambda: self._show_pl(stack, pl_box, pop, [t]), "›", close=False)
+            import sharedlist
+            for sl in sharedlist.mine()[:4]:          # gemeinsame Playlists direkt im Menü
+                def add_shared(sl=sl):
+                    me = (p.friends.name if getattr(p, "friends", None) is not None else "") or "ich"
+                    tui.background(sharedlist.add, sl["code"], t, me,
+                                   done=lambda r, n=sl["name"]: w.say(str(r), error=True) if isinstance(r, Exception) else w.say(f"zu „{n}“ hinzugefügt"))
+                it("󰡉", f"zu „{sl['name']}“ (gemeinsam)", add_shared)
         if not loc:
             liked = bool(t.get("liked") or (w.account is None and engine.is_local_liked(t.get("videoId"))))
             it("󰋑" if liked else "󰋕", "gefällt mir nicht mehr" if liked else "gefällt mir",

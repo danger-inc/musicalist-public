@@ -98,6 +98,7 @@ class SettingsMixin:
         page.append(self.build_spotify())
         page.append(self.build_local())
         page.append(self.build_ytdlp())
+        page.append(self.build_about())
         self.add_page("settings", page)
         self.on_hover_changed = None       # setzt musicd: schaltet die Vorschau live ein/aus
         self.on_desk_changed = None        # setzt musicd: Anzeige auf dem Hintergrund an/aus/verschieben
@@ -183,6 +184,115 @@ class SettingsMixin:
             self.local_scanned = False
             self.rescan_local(say_done=True)
         dlg.select_folder(self, None, done)
+
+    # ---------- über + versteckter Entwicklermodus (wie am Handy: 7× auf die Versionszeile, Passwort = Verwalter-Geheimnis) ----------
+    DEV_SECRET = os.path.expanduser("~/.config/musicalist-server/admin-secret")      # liest auch serverist
+
+    def build_about(self):
+        panel = tui.Panel("über")
+        try:
+            ver = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")).read().strip()
+        except OSError:
+            ver = "?"
+        vl = label(f"musicalist für pc · {ver}", "dim", xalign=0)
+        taps = [0]
+        click = Gtk.GestureClick()
+        click.connect("released", lambda *_: self._dev_tap(taps))
+        vl.add_controller(click)
+        panel.body.append(vl)
+        self.dev_box = vbox(spacing=6)
+        panel.body.append(self.dev_box)
+        self.fill_dev()
+        return panel
+
+    def _dev_tap(self, taps):
+        taps[0] += 1
+        if engine.setting("dev_on"):
+            if taps[0] >= 3:
+                taps[0] = 0
+                self.open_serverist()
+        elif taps[0] >= 7:
+            taps[0] = 0
+            self.fill_dev(ask=True)
+        elif taps[0] >= 4:
+            self.say(f"noch {7 - taps[0]}× klicken …")
+
+    def fill_dev(self, ask=False):
+        box = self.dev_box
+        tui.clear(box)
+        if engine.setting("dev_on"):
+            box.append(hbox(tui.Button("󰒓 server verwalten (entwickler)", self.open_serverist),
+                            tui.Button("entwicklermodus ausschalten", self.dev_lock, danger=True), spacing=8))
+        elif ask:
+            err = label("", "err", wrap=True, xalign=0)
+            ent = tui.Entry("entwickler-passwort", password=True)
+
+            def go():
+                pw = ent.get_text().strip()
+                if not pw:
+                    return
+                err.set_label("prüfe …")
+                tui.background(self._dev_check, pw, done=lambda r: self._dev_done(r, pw, err))
+            ent.connect("activate", lambda *_: go())
+            box.append(hbox(ent, tui.Button("freischalten", go), tui.Button("abbrechen", lambda: self.fill_dev()), spacing=8))
+            box.append(label("das verwalter-geheimnis deines servers – wird am server geprüft und nur für dich lesbar "
+                             "(~/.config/musicalist-server) abgelegt.", "dim", wrap=True, xalign=0))
+            box.append(err)
+            ent.grab_focus()
+
+    @staticmethod
+    def _dev_check(pw):
+        import account, urllib.request, urllib.error
+        url = (account._ACCT.url if account._ACCT is not None else account.DEFAULT_URL) + "/admin/stats"
+        req = urllib.request.Request(url, headers={"Authorization": "Bearer " + pw})
+        try:
+            urllib.request.urlopen(req, timeout=10).read()
+        except urllib.error.HTTPError as e:
+            raise RuntimeError("das geheimnis stimmt nicht" if e.code == 401 else f"server: {e.code}") from None
+        except OSError as e:
+            raise RuntimeError(f"server nicht erreichbar: {e}") from None
+        return True
+
+    def _dev_done(self, r, pw, err):
+        if isinstance(r, Exception):
+            err.set_label(str(r))
+            return
+        path = self.DEV_SECRET
+        try:
+            old = open(path).read().strip()
+        except OSError:
+            old = None
+        if old != pw:
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(pw + "\n")
+            os.replace(path + ".tmp", path)
+            engine.set_setting("dev_wrote", old is None)       # nur selbst angelegte Datei beim Ausschalten wieder löschen
+        engine.set_setting("dev_on", True)
+        self.say("entwicklermodus an")
+        self.fill_dev()
+
+    def dev_lock(self):
+        if engine.setting("dev_wrote"):
+            try:
+                os.unlink(self.DEV_SECRET)
+            except OSError:
+                pass
+        engine.set_setting("dev_wrote", False)
+        engine.set_setting("dev_on", False)
+        self.say("entwicklermodus aus")
+        self.fill_dev()
+
+    def open_serverist(self):
+        import shutil, subprocess, sys
+        d = os.path.expanduser("~/.local/share/serverist")
+        cmd = [shutil.which("serverist")] if shutil.which("serverist") else \
+            ([sys.executable, os.path.join(d, "serverist.py")] if os.path.exists(os.path.join(d, "serverist.py")) else None)
+        if cmd is None:
+            self.say("serverist ist auf diesem rechner nicht installiert (nur in der vollen ausgabe)", error=True)
+            return
+        subprocess.Popen(cmd, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # ---------- yt-dlp ----------
     def build_ytdlp(self):

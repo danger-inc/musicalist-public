@@ -1080,6 +1080,35 @@ class Friends:
             a.push_soon()                              # Konto: Freundesliste bald sichern
 
     @staticmethod
+    def _norm(t, a):
+        return (t or "").lower().split(" (")[0].strip() + "|" + (a or "").lower().split(",")[0].strip()
+
+    def same_as_me(self, f, cur):
+        """Hört die Person gerade (live) denselben Titel wie ich? (gleiche id oder gleicher Titel + Künstler·in)"""
+        now = (f.get("prof") or {}).get("now") or {}
+        if not cur or not now or not self.live(f):
+            return False
+        return now.get("id") == cur.get("videoId") or self._norm(now.get("t"), now.get("a")) == self._norm(cur.get("title"), cur.get("artist"))
+
+    def weekly_mix(self, n=40):
+        """Freund·innen-Mix der Woche: Top-Titel (pf.trk), zuletzt gehört und Empfehlungen aller, reihum gemischt, ohne Doppelte."""
+        lists = []
+        for f in self.friends:
+            pr = f.get("prof") or {}
+            top = [{"id": x.get("i"), "t": x.get("t"), "a": x.get("a")} for x in ((pr.get("pf") or {}).get("trk") or []) if isinstance(x, dict)]
+            lists.append([e for e in top + (pr.get("recent") or []) + (pr.get("recs") or [])
+                          if isinstance(e, dict) and len(e.get("id") or "") == 11])
+        out, seen, i = [], set(), 0
+        while len(out) < n and any(i < len(l) for l in lists):
+            for l in lists:
+                if i < len(l) and l[i]["id"] not in seen and not engine.is_disliked(l[i]["id"]):
+                    seen.add(l[i]["id"])
+                    out.append({"videoId": l[i]["id"], "title": l[i].get("t") or "?", "artist": l[i].get("a") or "",
+                                "thumb": f"https://i.ytimg.com/vi/{l[i]['id']}/hqdefault.jpg"})
+            i += 1
+        return out[:n]
+
+    @staticmethod
     def live(f):
         pr = f.get("prof") or {}
         return bool(not inc_active(pr.get("inc")) and pr.get("now") and pr.get("pl") and f.get("at") and time.time() * 1000 - f["at"] < 6 * 60_000)

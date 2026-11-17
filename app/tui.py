@@ -1001,6 +1001,13 @@ class TuiWindow(Gtk.ApplicationWindow):
                 self.on_tab(tid)
 
     def _key(self, _c, kv, _code, state):
+        if kv in (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R, Gdk.KEY_Control_L, Gdk.KEY_Control_R, Gdk.KEY_Shift_L, Gdk.KEY_Shift_R,
+                  Gdk.KEY_Super_L, Gdk.KEY_Super_R, Gdk.KEY_ISO_Level3_Shift):
+            # GTK schaltet bei jeder Taste den Fokusrahmen ein → der zufällig fokussierte Kopf-Knopf (z. B. freunde) leuchtete bei Alt auf
+            GLib.idle_add(lambda: self.set_focus_visible(False) and False)
+            return False
+        if state & (Gdk.ModifierType.ALT_MASK | Gdk.ModifierType.CONTROL_MASK):      # Alt+Zahl usw. ebenso
+            GLib.idle_add(lambda: self.set_focus_visible(False) and False)
         focus = self.get_focus()
         in_entry = isinstance(focus, (Gtk.Text, Gtk.Entry, Gtk.TextView))      # auch mehrzeilige Felder (Chat): Tastenkürzel nicht auslösen
         if kv == Gdk.KEY_Escape:

@@ -424,6 +424,22 @@ def _slim(rows):
     return rows
 
 
+def browser_login_newer():
+    """True, wenn ein Browser-Profil YouTube-Cookies hat, die neuer sind als unsere Kopie (Google erneuert sie laufend –
+    die alte Kopie läuft sonst nach Tagen ab und man musste von Hand „neu einlesen“)."""
+    try:
+        mine = os.path.getmtime(COOKIES_TXT)
+    except OSError:
+        return False
+    for db in browser_profiles():
+        try:
+            if os.path.getmtime(db) > mine + 60 or (os.path.exists(db + "-wal") and os.path.getmtime(db + "-wal") > mine + 60):
+                return True
+        except OSError:
+            pass
+    return False
+
+
 def _login_once():
     """Sucht das Browser-Profil mit YouTube-Anmeldung und legt die Zugangsdateien an.
     Gibt den Kontonamen zurück oder wirft RuntimeError."""
@@ -3243,13 +3259,12 @@ class Player:
         elif self.repeat == "alle" and self.queue:
             self.index = 0
             self.load()
-        elif self.autoplay and self.current:
+        elif self.current and self._refills():
             self.extend_radio(then_next=True)
         else:
             self.mpv.set("pause", True)
         sk, self._skipped_track = getattr(self, "_skipped_track", None), None
-        if sk is not None:
-            GLib.idle_add(lambda: (self.tune_queue(sk), False)[1])
+        GLib.idle_add(lambda: (self.tune_queue(sk), False)[1])     # kurze Warteschlange: nach jedem Wechsel nachfüllen
 
     def prev(self):
         if self._mirror is not None:
@@ -3347,10 +3362,14 @@ class Player:
             self._taste.sess = keep
         return self._taste
 
+    def _refills(self):
+        """Wird nachgefüllt? Mit autoplay immer, sonst nur ein gestartetes Radio (wie am Handy)."""
+        return self.autoplay or (self.current is not None and (self.current.get("_src") or ("",))[0] in ("radio", "autoplay"))
+
     def tune_queue(self, skipped=None):
         """Nach einem Überspringen live nachjustieren: Radio-/Autoplay-Titel hinter dem laufenden, die jetzt unerwünscht sind,
         fliegen raus; liegen weniger als AHEAD voraus, wird nachgefüllt (die Warteschlange bleibt kurz)."""
-        if self._mirror is not None or not self.autoplay or self.current is None:
+        if self._mirror is not None or self.current is None or not self._refills():
             return
         tt = self.taste_now()
         if skipped:

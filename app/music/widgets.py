@@ -208,7 +208,7 @@ class DotThumb(Gtk.DrawingArea):
             draw_photo(cr, self.pb, 0, 0, side)
             return
         c = pixelart.cfg()
-        res = self.res or (min(c["res"], 44) if pixelart.custom() else self.N)
+        res = self.res or c["res"]          # überall dieselbe Einstellung wie im großen Titelbild
         k = (pixelart.key(c), res)
         if self._g is None or self._g[0] != k:
             self._g = (k, pixelart.grid(self.pb, res, c))
@@ -244,7 +244,7 @@ class Cover(Gtk.Box):
 
     def apply(self):
         photo = self.pb is not None and not pixel_on()
-        drawn = self.pb is not None and pixel_on() and pixelart.custom()      # eigenes Raster: gezeichnet statt Braille
+        drawn = self.pb is not None and pixel_on()      # immer das eingestellte Raster (vorher nur bei eigener Einstellung, sonst Braille)
         if drawn:
             side = int(self.cols * 5.4)
             c = pixelart.cfg()
@@ -342,7 +342,7 @@ class DotCover(Gtk.DrawingArea):
             return
         if self.pb is not None:
             c = pixelart.cfg()
-            res = c["res"] if pixelart.custom() else self.DOTS
+            res = c["res"]
             k = (pixelart.key(c), res)
             if getattr(self, "_g", None) is None or self._g[0] != k:
                 self._g = (k, pixelart.grid(self.pb, res, c))

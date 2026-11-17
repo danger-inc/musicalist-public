@@ -41,7 +41,83 @@ class LyricsMixin:
         self._lyr_cur = None
         self.lyr_synced = False
         self.lyr_offset = 0.0
-        self.add_page("lyrics", self.lyr_scroll, scroll=False)
+        bar = hbox(label("", hexpand=True), tui.Button("󰍬 karaoke", self.karaoke, tooltip="Karaoke: ganzer Bildschirm, aktuelle Zeile füllt sich (k)"), spacing=8)
+        bar.set_margin_top(4)
+        self.add_page("lyrics", vbox(bar, self.lyr_scroll, spacing=0), scroll=False)
+
+    def karaoke(self):
+        """Karaoke-Fenster (Vollbild): aktuelle Zeile groß, füllt sich bis zur nächsten Zeile in der Akzentfarbe;
+        davor die letzte Zeile blass, danach die nächsten zwei. Esc/Klick/k = schließen."""
+        if getattr(self, "_kara", None) is not None:
+            self._kara.close()
+            return
+        self.load_lyrics()                         # auch aus anderen Reitern (k): Text des laufenden Titels
+        if not self.lyr_synced or not self.lyric_lines:
+            self.say("karaoke geht nur mit songtext mit zeitstempeln", error=True)
+            return
+        win = Gtk.Window(title="musicalist · karaoke", transient_for=self)
+        win.add_css_class("karaoke")
+        da = Gtk.DrawingArea(hexpand=True, vexpand=True)
+        win.set_child(da)
+
+        def draw(_a, cr, w, h):
+            c = tui.colors()
+            bg, fg, ac = c.get("background"), c.get("foreground"), c.get("primary")
+            if (self.p.current or {}).get("videoId") != self.lyrics_vid:
+                self.load_lyrics()                 # Titelwechsel während Karaoke
+            cr.set_source_rgb(bg.red, bg.green, bg.blue)
+            cr.paint()
+            lines = [(s, l.get_label()) for s, l in self.lyric_lines]
+            pos = self.p.pos + 0.15 - getattr(self, "lyr_offset", 0.0)
+            i = max([k for k, (s, _t) in enumerate(lines) if s is not None and s <= pos] or [-1])
+            cur = lines[i] if i >= 0 else None
+            nxt = lines[i + 1] if i + 1 < len(lines) else None
+            frac = 0.0 if cur is None else 1.0 if nxt is None else max(0.0, min(1.0, (pos - cur[0]) / max(0.5, nxt[0] - cur[0])))
+
+            def text(t, size, y, col, alpha, bold=False, clip=None):
+                lay = PangoCairo.create_layout(cr)
+                lay.set_font_description(Pango.FontDescription.from_string(f"{tui.FONT} {'Bold ' if bold else ''}{int(size)}"))
+                lay.set_width(int((w - 80) * Pango.SCALE))
+                lay.set_alignment(Pango.Alignment.CENTER)
+                lay.set_wrap(Pango.WrapMode.WORD_CHAR)
+                lay.set_text(t or "♪", -1)
+                tw, th = lay.get_pixel_size()
+                cr.save()
+                if clip is not None:      # nur der schon gesungene Teil (von links)
+                    ink, _log = lay.get_pixel_extents()
+                    x0 = 40 + ink.x
+                    cr.rectangle(x0, y - 2, ink.width * clip, th + 4)
+                    cr.clip()
+                cr.set_source_rgba(col.red, col.green, col.blue, alpha)
+                cr.move_to(40, y)
+                PangoCairo.show_layout(cr, lay)
+                cr.restore()
+                return th
+            big = max(22, h / 14)
+            y = h / 2 - big
+            if i > 0:
+                text(lines[i - 1][1], big * 0.55, y - big * 1.6, fg, 0.35)
+            line = cur[1] if cur else "♪ …"
+            th = text(line, big, y, fg, 0.4, True)
+            text(line, big, y, ac, 1.0, True, clip=frac)
+            yy = y + th + big * 0.5
+            for k in (1, 2):
+                if i + k < len(lines):
+                    yy += text(lines[i + k][1], big * (0.65 if k == 1 else 0.55), yy, fg, 0.7 if k == 1 else 0.4) + big * 0.3
+            t = self.p.current or {}
+            text(f"{t.get('title', '')} · {t.get('artist', '')}", 12, 24, fg, 0.5)
+        da.set_draw_func(draw)
+        da.add_tick_callback(lambda w, _c: (w.queue_draw(), True)[1])
+        click = Gtk.GestureClick()
+        click.connect("released", lambda *_: win.close())
+        da.add_controller(click)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", lambda _c, kv, *_: (win.close(), True)[1] if kv in (Gdk.KEY_Escape, Gdk.KEY_k, Gdk.KEY_q) else False)
+        win.add_controller(keys)
+        win.connect("close-request", lambda *_: (setattr(self, "_kara", None), False)[1])
+        self._kara = win
+        win.fullscreen()
+        win.present()
 
     def _lyr_user_scroll(self, *_):
         self.lyr_manual_until = GLib.get_monotonic_time() + 4_000_000  # 4 s selbst scrollen lassen

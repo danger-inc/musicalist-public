@@ -245,6 +245,7 @@ class FriendsMixin:
                          "setzt der server-betreiber das passwort zurück.", "dim", wrap=True))
         nm = tui.Entry("nutzername", text=(getattr(self.fr, "uname", "") if self.fr is not None else "") or "")
         pw = tui.Entry("passwort", password=True)
+        inv = tui.Entry("einladungscode (nur falls der server einen verlangt)")
         status = label("", "dim", wrap=True)
         create = tui.Button("󰐕 konto erstellen")
         login = tui.Button("󰍂 ich habe schon eins")
@@ -260,7 +261,7 @@ class FriendsMixin:
             n, p = nm.get_text(), pw.get_text()
 
             def work():
-                return (ac.create(n, p) or "konto angelegt – deine daten sind gesichert") if make else ac.login(n, p)
+                return (ac.create(n, p, inv.get_text()) or "konto angelegt – deine daten sind gesichert") if make else ac.login(n, p)
 
             def done(res):
                 busy["on"] = False
@@ -279,6 +280,7 @@ class FriendsMixin:
         later.connect("clicked", lambda *_: (setattr(self, "_acct_dlg", None), dlg.destroy()))
         box.append(nm)
         box.append(pw)
+        box.append(inv)
         box.append(hbox(create, login, later, spacing=8))
         box.append(status)
         dlg.set_child(box)
@@ -294,6 +296,16 @@ class FriendsMixin:
     def _fr_changed(self):
         if self.friends_visible():
             self.fill_friends()
+        if hasattr(self, "st_live_box"):
+            self.st_fill_live()            # Startseite: „freund·innen hören“ aktuell halten
+        f, cur = self.fr, self.p.current
+        if f is not None and cur:          # „hört gerade dasselbe wie du“: einmal je Person und Titel
+            seen = self.__dict__.setdefault("_same_seen", set())
+            for x in f.friends:
+                k = (x["secret"], cur.get("videoId"))
+                if k not in seen and f.same_as_me(x, cur):
+                    seen.add(k)
+                    self.say(f"󰓃 {x['name']} hört gerade dasselbe wie du")
         return False
 
     @property
@@ -391,32 +403,15 @@ class FriendsMixin:
         if view and view[0] == "profile":
             return self._fill_profile(x)
         rc = getattr(f, "recaps", None)
-        top = hbox(label("", hexpand=True), *([tui.Button("󰄨 rückblicke", lambda: self._fr_goto(("recaps", "-")),
-                                                         tooltip="Wochen-, Monats- und Jahresbild")] if rc is not None else []),
+        adding = getattr(self, "_fr_add", False) or not f.friends
+        top = hbox(label(f"{f.name}{self._crown_tag(f.name, True)}", "accent", ellipsize=True),
+                   label("· so finden dich andere" if f.share else "· teilen ist aus", "dim", hexpand=True, ellipsize=True),
+                   *([tui.Button("󰄨 rückblicke", lambda: self._fr_goto(("recaps", "-")),
+                                 tooltip="Wochen-, Monats- und Jahresbild")] if rc is not None else []),
+                   tui.Button("󰀄 profil", self.open_profile, tooltip="mein profil ansehen und einstellen"),
+                   tui.Button("󰀓 +", lambda: (setattr(self, "_fr_add", not adding), self.fill_friends()), tooltip="freund·in hinzufügen"),
                    tui.Button("󰑐", self.refresh_friends, tooltip="neu abfragen"), spacing=8)
         box.append(top)
-        # --- hinzufügen: per Nutzername ---
-        add = vbox(spacing=6)
-        add.append(label("󰀓 freund hinzufügen", "accent"))
-        e = tui.Entry("nutzername deines freundes")
-
-        def go(*_):
-            txt = e.get_text()
-
-            def done(res):
-                if isinstance(res, Exception):
-                    self.say(str(res), error=True)
-                else:
-                    self.say(f"anfrage an {res} geschickt – sobald die person annimmt, seid ihr befreundet")
-                    e.set_text("")
-                self.fill_friends()
-            tui.background(f.request, txt, done=done)
-        e.connect("activate", go)
-        add.append(hbox(e, tui.Button("anfrage senden", go), spacing=8))
-        for x in f.friends_sent:
-            add.append(hbox(label(f"󰔛 an {x['name']} geschickt – wartet auf bestätigung", "dim", hexpand=True, ellipsize=True),
-                            tui.Button("✕", lambda u=x["uname"]: (f.cancel_sent(u), self.fill_friends()), tooltip="Anfrage zurückziehen"), spacing=8))
-        box.append(add)
         new = rc.unseen[0] if rc is not None and rc.unseen else None
         if new is not None:               # neues Rückblick-Bild: Hinweis ganz oben
             kinds = {"w": "wochenrückblick", "m": "monatsrückblick", "y": "jahresrückblick"}
@@ -428,29 +423,6 @@ class FriendsMixin:
                                   spacing=2), label("›", "accent"), spacing=10))
             b.connect("clicked", lambda *_: self._fr_goto(("recaps", "-")))
             box.append(b)
-        box.append(self._top_list())
-        # --- ich: eigenes Profil (gleiche Ansicht wie bei Freunden, plus Profil-Einstellungen) ---
-        mb = Gtk.Button(hexpand=True)
-        mb.add_css_class("rowhead")
-        mb.set_child(hbox(vbox(label("󰀄 mein profil", "accent"),
-                               label(f"{f.name}{self._crown_tag(f.name, True)} · " + ("teilen an" if f.share else "teilen aus") + " – ansehen und einstellen", "dim", wrap=True),
-                               spacing=2), label("›", "accent"), spacing=10))
-        mb.connect("clicked", lambda *_: self.open_profile())
-        box.append(mb)
-        # --- Eingang: direkt geschickte Empfehlungen ---
-        ib = f.inbox
-        if ib:
-            inbox = vbox(spacing=2)
-            inbox.append(label("󰋑 für dich empfohlen", "accent"))
-            for i, e in enumerate(ib):
-                inbox.append(label(f"von {e['from']}", "dim"))
-                if self._album_row(e) is not None:
-                    inbox.append(self._album_row(e))
-                    continue
-                t = fr.to_track(e, e["from"])
-                inbox.append(track_row(t, lambda t=t: self.p.play_tracks([t]),
-                                       [("✕", "Ausblenden", lambda i=i: (f.dismiss(i), self.fill_friends()))], menus=self.songs))
-            box.append(inbox)
         # --- Anfragen an mich ---
         reqs = f.requests
         if reqs:
@@ -468,13 +440,52 @@ class FriendsMixin:
                 line.append(tui.Button("ablehnen", lambda r=r: (f.decline(r), self.fill_friends()), danger=True))
                 rb.append(line)
             box.append(rb)
-        # --- Freunde ---
+        # --- hinzufügen (eingeklappt, „󰀓 +“ oben; ohne Freunde immer offen) ---
+        if adding:
+            add = vbox(spacing=6)
+            add.append(label("󰀓 freund·in hinzufügen", "accent"))
+            e = tui.Entry("nutzername der person")
+
+            def go(*_):
+                txt = e.get_text()
+
+                def done(res):
+                    if isinstance(res, Exception):
+                        self.say(str(res), error=True)
+                    else:
+                        self.say(f"anfrage an {res} geschickt – sobald die person annimmt, seid ihr befreundet")
+                        e.set_text("")
+                    self.fill_friends()
+                tui.background(f.request, txt, done=done)
+            e.connect("activate", go)
+            add.append(hbox(e, tui.Button("anfrage senden", go), spacing=8))
+            box.append(add)
+        for x in f.friends_sent:          # offene Anfragen bleiben sichtbar, auch eingeklappt
+            box.append(hbox(label(f"󰔛 an {x['name']} geschickt – wartet auf bestätigung", "dim", hexpand=True, ellipsize=True),
+                            tui.Button("✕", lambda u=x["uname"]: (f.cancel_sent(u), self.fill_friends()), tooltip="Anfrage zurückziehen"), spacing=8))
+        # --- Freunde: wer gerade hört oben, dann nach letzter Meldung ---
         if not f.friends:
             box.append(label("noch niemand – oben einen nutzernamen eintragen und „anfrage senden“.", "dim"))
         else:
-            box.append(label(f"󰡉 deine freunde · {len(f.friends)}", "accent"))
-        for x in f.friends:
+            box.append(label(f"󰡉 deine freund·innen · {len(f.friends)}", "accent"))
+        for x in sorted(f.friends, key=lambda x: (not self._now_text(x, f)[1], -(x.get("at") or 0))):
             box.append(self._friend_row(x))
+        # --- Eingang: direkt geschickte Empfehlungen ---
+        ib = f.inbox
+        if ib:
+            inbox = vbox(spacing=2)
+            inbox.append(label("󰋑 für dich empfohlen", "accent"))
+            for i, e in enumerate(ib):
+                inbox.append(label(f"von {e['from']}", "dim"))
+                if self._album_row(e) is not None:
+                    inbox.append(self._album_row(e))
+                    continue
+                t = fr.to_track(e, e["from"])
+                inbox.append(track_row(t, lambda t=t: self.p.play_tracks([t]),
+                                       [("✕", "Ausblenden", lambda i=i: (f.dismiss(i), self.fill_friends()))], menus=self.songs))
+            box.append(inbox)
+        if f.friends:
+            box.append(self._top_list())
         if f.recs:
             mine = vbox(spacing=2)
             mine.append(label("󰋑 meine empfehlungen", "accent"))
@@ -545,6 +556,8 @@ class FriendsMixin:
         song = label(txt, "dim", ellipsize=True, hexpand=True, xalign=0)
         jt, with_me = self._jam_text(x, f)
         col = vbox(name, song, spacing=1)
+        if f.same_as_me(x, self.p.current):
+            col.append(label("󰓃 hört gerade dasselbe wie du", "accent", ellipsize=True, xalign=0))
         if jt:
             col.append(label(jt, "accent" if with_me else "dim", ellipsize=True, xalign=0))
         inner = hbox(label("󰍡", "glyph"), col, spacing=10)
@@ -1145,9 +1158,11 @@ class FriendsMixin:
             box.append(label("kein konto. mit einem konto bleiben freunde, chats und hörprotokoll beim gerätewechsel erhalten und "
                              "sind auf pc und handy gleich.", "dim", wrap=True))
             nm, pw = tui.Entry("nutzername"), tui.Entry("passwort (mind. 10 zeichen)", password=True)
+            inv = tui.Entry("einladungscode (nur falls der server einen verlangt)")
             box.append(nm)
             box.append(pw)
-            box.append(hbox(tui.Button("neu anlegen", lambda: run(lambda: (ac.create(nm.get_text(), pw.get_text()), "konto angelegt")[1])),
+            box.append(inv)
+            box.append(hbox(tui.Button("neu anlegen", lambda: run(lambda: (ac.create(nm.get_text(), pw.get_text(), inv.get_text()), "konto angelegt")[1])),
                             tui.Button("ich habe schon eins – anmelden", lambda: run(lambda: ac.login(nm.get_text(), pw.get_text()))), spacing=8))
         srv = tui.Entry("server-adresse", text=ac.st.get("server") or "")
         srv.set_placeholder_text("server-adresse (leer = standard)")
@@ -1156,8 +1171,7 @@ class FriendsMixin:
         box.append(info)
 
     def _top_list(self):
-        """Wochen-Topliste aus den geteilten Hörprofilen (ich + Freunde). Rubrik per Dropdown wählen: in der Auswahl steht je
-        Rubrik rechts die Person auf Platz 1; gewählt wird die ganze Rangliste gezeigt."""
+        """Wochen-Topliste aus den geteilten Hörprofilen (ich + Freunde): alle Rubriken mit Platz 1, eine Rubrik anklicken = alle Teilnehmenden."""
         f = self.fr
         cat = getattr(self, "_fr_cat", "") or "h"
         menu = getattr(self, "_fr_menu", False)
@@ -1172,33 +1186,34 @@ class FriendsMixin:
             # Profil-Stand ist ein Schnappschuss vom letzten Senden: älter als diese Woche = noch nichts gehört → nicht die Stunden der Vorwoche zeigen
             fresh = (x.get("at") or 0) >= week
             entries.append((x["name"], (x.get("prof") or {}).get("pf") if fresh else None, False))
-        names = {k: n for k, n, _f, _d in RUBRIKEN}
-        head = Gtk.Button(hexpand=True)
-        head.add_css_class("rowhead")
-        head.add_css_class("on")
-        head.set_child(hbox(label(names[cat], "accent", hexpand=True, xalign=0), label("󰅃" if menu else "󰅀", "dim"), spacing=10))
-        head.connect("clicked", lambda *_: (setattr(self, "_fr_menu", not menu), self.fill_friends()))
-        panel.append(head)
-        if menu:
-            for key, name, _fn, _d in RUBRIKEN:
-                r = top_rows(entries, key)
-                right = label(f"{r[0][0]} · {r[0][1]}", *(("accent",) if r[0][3] else ())) if r else label("–", "dim")
-                b = Gtk.Button(hexpand=True)
-                b.add_css_class("rowhead")
-                if key == cat:
-                    b.add_css_class("on")
-                b.set_child(hbox(label(name, hexpand=True, xalign=0), right, spacing=10))
-                b.connect("clicked", lambda *_, k=key: (setattr(self, "_fr_cat", k), setattr(self, "_fr_menu", False), self.fill_friends()))
-                panel.append(b)
-        rows = top_rows(entries, cat)
-        if not rows:
+        # alle Rubriken untereinander, je nur Platz 1; anklicken klappt die ganze Rangliste dieser Rubrik auf
+        if not any(top_rows(entries, k) for k, *_ in RUBRIKEN):
             panel.append(label("noch keine Angaben – Freunde müssen teilen (umfang normal/mehr für alles außer hörzeit; vielfalt, entdecker, serie nur bei „mehr“).", "dim", wrap=True))
-        for i, (n, t, z, me) in enumerate(rows, 1):
-            cls = ("accent",) if me else ()
-            panel.append(hbox(label(f"{i}.", "accent" if me else "dim"), label(n + self._crown_tag(n, me), *cls, hexpand=True, ellipsize=True),
-                              label(t, *cls), spacing=8))
-            if z:
-                panel.append(label("    " + z, "dim", wrap=True))
+        for key, name, _fn, _d in RUBRIKEN:
+            rows = top_rows(entries, key)
+            is_open = menu and key == cat
+            b = Gtk.Button(hexpand=True)
+            b.add_css_class("rowhead")
+            if is_open:
+                b.add_css_class("on")
+            if rows:
+                n, t, _z, me = rows[0]
+                right = hbox(label(f"󰆥 {n}{self._crown_tag(n, me)} · {t}", *(("accent",) if me else ())), label("󰅃" if is_open else "󰅀", "dim"), spacing=8)
+            else:
+                right = label("–", "dim")
+                b.set_sensitive(False)
+            b.set_child(hbox(label(name, "dim", hexpand=True, xalign=0), right, spacing=10))
+            b.connect("clicked", lambda *_, k=key, o=is_open: (setattr(self, "_fr_cat", k), setattr(self, "_fr_menu", not o), self.fill_friends()))
+            panel.append(b)
+            if is_open:
+                for i, (n, t, z, me) in enumerate(rows, 1):
+                    cls = ("accent",) if me else ()
+                    line = hbox(label(f"{i}.", "accent" if me else "dim"), label(n + self._crown_tag(n, me), *cls, hexpand=True, ellipsize=True),
+                                label(t, *cls), spacing=8)
+                    line.set_margin_start(16)
+                    panel.append(line)
+                    if z:
+                        panel.append(label("        " + z, "dim", wrap=True))
         absent = [n for n, pf, _m in entries if not pf]
         if absent:
             panel.append(label("ohne Angabe: " + ", ".join(absent), "dim", wrap=True))

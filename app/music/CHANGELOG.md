@@ -2,6 +2,14 @@
 
 <!-- Regeln: nur, was Nutzende in der App sehen oder tun können. Nicht hinein: Server-Seite (Verwaltung, Admin, was der Betreiber tun kann, stille Uploads/Kürzungen), Fehlersuche/Diagnose für den Entwickler, interne Umbauten. -->
 
+## 2.10.0 (2026-11-17)
+- **Startseite aufgeräumt:** das 3×3-Raster ist kleiner und steht links, rechts daneben siehst du, was deine Freund·innen gerade hören (anklicken = mithören). Nur noch zwei Regale zum seitlichen Wischen, der Rest als kurze Listen in zwei Spalten. Über dem Raster scrollt das Mausrad die Seite, seitlich scrollen blättert die Kacheln.
+- **Gemeinsame Playlists:** in der Bibliothek eine Liste anlegen und den Code an Freund·innen schicken – alle mit dem Code können Titel dazulegen und entfernen (Rechtsklick auf einen Titel → „zu … (gemeinsam)“). Geht auch zusammen mit der Handy-App.
+- **Karaoke:** im Lyrics-Reiter oben „karaoke“ oder Taste `k` – Vollbild, die aktuelle Zeile füllt sich passend zum Gesang.
+- **Freund·innen-Mix der Woche** als neues Regal auf der Startseite.
+- **„hört gerade dasselbe wie du“** steht bei der Person in der Freundesliste, dazu einmal ein Hinweis.
+- **Top-Liste:** alle Rubriken auf einen Blick mit der besten Person; anklicken zeigt alle anderen.
+
 ## 2.9.1 (2026-11-16)
 - Kleine Verbesserungen im Hintergrund.
 

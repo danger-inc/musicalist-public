@@ -1,5 +1,6 @@
 # musicalist – Bibliothek: Konto, Playlists, Künstler, Detailseiten, Rückblick, lokale Musik (Teil von MusicWindow, siehe ui.py). Methoden greifen auf self (das Hauptfenster) zu.
-import os, random
+import os
+import time, random
 
 from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Graphene, Gtk, Pango, PangoCairo
 
@@ -56,6 +57,12 @@ class LibraryMixin:
         self.sam_panel.body.append(self.sam_box)
         home.insert_child_after(self.sam_panel, self.ll_panel)
         self.update_sammlung()
+        # gemeinsame Playlists: wer den Code hat, kann Titel dazulegen (Freund·innen)
+        self.shl_panel = tui.Panel("󰡉 gemeinsame playlists")
+        self.shl_box = vbox(spacing=0)
+        self.shl_panel.body.append(self.shl_box)
+        home.insert_child_after(self.shl_panel, self.sam_panel)
+        self.update_shared()
         self.lib_stack.add_named(home, "home")
 
         detail = vbox(spacing=8)
@@ -134,9 +141,9 @@ class LibraryMixin:
     def account_done(self, res):
         if isinstance(res, Exception):
             self.account = None
-            if not self.login_expired and not getattr(self, "_relogin_tried", False):
+            if not self.login_expired and time.time() - getattr(self, "_relogin_tried", 0) > 600:
                 # abgelaufen: leise im Browser-Profil nachsehen – ist man dort noch angemeldet, geht es von allein weiter
-                self._relogin_tried = True
+                self._relogin_tried = time.time()
                 self.login_expired = True
                 tui.background(engine._login_once, done=lambda r: self.account_done(r))
                 return
@@ -146,7 +153,7 @@ class LibraryMixin:
         else:
             self.account = res
             self.login_expired = False
-            self._relogin_tried = False
+            self._relogin_tried = 0
         self.fill_login()
         self.update_local_likes()
         if self.account:
@@ -154,6 +161,22 @@ class LibraryMixin:
                 tui.background(engine.push_local_likes, self.p.music,
                                done=lambda n: isinstance(n, int) and n and self.say(f"{n} lokale herzen zu youtube music übernommen"))
             self.load_library()
+
+    def auto_relogin(self):
+        """Alle 30 min: hat der Browser neuere YouTube-Cookies, still übernehmen (keine Meldung, kein Browserfenster)."""
+        if os.path.exists(engine.BROWSER_JSON) or self.login_expired:
+            def work():
+                if not (self.login_expired or engine.browser_login_newer()):
+                    return None
+                return engine._login_once()
+
+            def done(r):
+                if r is not None and not isinstance(r, Exception):
+                    self.p.music.reset()
+                    self.p.resolver.reset()
+                    self.account_done(r)
+            tui.background(work, done=done)
+        return True
 
     def fill_login(self):
         self.fill_settings_account()
@@ -439,6 +462,31 @@ class LibraryMixin:
             self.detail_tools.append(w)
         self.detail_tools.set_visible(bool(widgets))
 
+    def update_shared(self):
+        import sharedlist
+        box = self.shl_box
+        tui.clear(box)
+        for x in sharedlist.mine():
+            box.append(coll_row("󰡉", x["name"], "code " + x["code"], lambda c=x["code"]: self.open_detail("shared", c)))
+        name = tui.Entry("name für eine neue liste")
+        code = tui.Entry("code einer freundin / eines freundes", width=14)
+
+        def mk(*_):
+            me = (self.fr.name if self.fr is not None else "") or "ich"
+            tui.background(sharedlist.create, name.get_text() or "gemeinsame playlist", me,
+                           done=lambda r: (self.say(str(r), error=True) if isinstance(r, Exception) else
+                                           (self.copy_text(r), self.say(f"liste angelegt – code {r} kopiert, schick ihn deinen freund·innen"),
+                                            self.update_shared())))
+
+        def jn(*_):
+            tui.background(sharedlist.join, code.get_text(),
+                           done=lambda r: (self.say(str(r), error=True) if isinstance(r, Exception) else
+                                           (self.say(f"„{r[1]}“ beigetreten"), self.update_shared())))
+        name.connect("activate", mk)
+        code.connect("activate", jn)
+        box.append(hbox(name, tui.Button("󰐕 neu", mk), spacing=8))
+        box.append(hbox(code, tui.Button("beitreten", jn), spacing=8))
+
     def open_detail(self, kind, ident):
         if kind == "stats":            # alter Rückblick (z. B. aus dem 2fz-Verlauf) → jetzt Tab „analyse“
             return self.show_tab("stats")
@@ -462,7 +510,8 @@ class LibraryMixin:
               "new": lambda _i: self.p.music.new_releases(),
               "m_album": lambda _i: self._merged("album"), "m_playlist": lambda _i: self._merged("playlist"),
               "m_artist": lambda _i: self._merged("artist"),
-              "locallikes": lambda _i: ("lieblingssongs (nur hier)", engine.local_likes())}[kind]
+              "locallikes": lambda _i: ("lieblingssongs (nur hier)", engine.local_likes()),
+              "shared": lambda i: (lambda r: ("󰡉 " + (r[0] or "gemeinsame playlist"), r[1]))(__import__("sharedlist").load(i))}[kind]
 
         def done(res):
             if self.detail_key != (kind, ident):     # inzwischen woanders hin
@@ -501,11 +550,22 @@ class LibraryMixin:
                 tools.append(self.heart_tool(kind, ident, title, ""))
             if tracks and kind != "history":
                 tools.append(self.offline_tool(tracks))
+            if kind == "shared":
+                import sharedlist
+                tools += [tui.Button("󰆏 code", lambda: (self.copy_text(ident), self.say(f"code {ident} kopiert"))),
+                          tui.Button("verlassen", lambda: (sharedlist.forget(ident), self.update_shared(), self.lib_home()), danger=True,
+                                     tooltip="Liste hier ausblenden (die anderen behalten sie)")]
             self.set_tools(*tools)
             def make(i, t):
                 acts = [("+", "An Warteschlange anhängen", lambda t=t: self.p.add(t)),
                         ("»", "Als nächstes spielen", lambda t=t: self.p.add(t, next_=True))]
                 holder = []
+                if kind == "shared":
+                    import sharedlist
+                    me = (self.fr.name if self.fr is not None else "") or "ich"
+                    acts.append(("✕", f"Aus der gemeinsamen Playlist entfernen (hinzugefügt von {t.get('by') or '?'})",
+                                 lambda t=t: tui.background(sharedlist.remove, ident, t["videoId"], me,
+                                                            done=lambda _r: self.open_detail("shared", ident))))
                 if editable and t.get("setVideoId"):
                     acts.append(("✕", "Aus der Playlist entfernen",
                                  lambda t=t, h=holder: self.remove_from_playlist(ident, t, h[0])))

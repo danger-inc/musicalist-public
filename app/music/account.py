@@ -159,14 +159,15 @@ class Account:
                 429: x.args[0] if x.args and x.args[0] else "zu viele versuche – kurz warten"}.get(x.code, str(x) or what)
 
     # ---------- Konto ----------
-    def create(self, name, password):
+    def create(self, name, password, invite=""):
         name = (name or "").strip().lower()
         if len(password) < 10:
             raise ValueError("das passwort braucht mindestens 10 zeichen")
         try:
             c = self._call("GET", "/v1/challenge")
             nonce = solve(_b64d(c["challenge"])[:24].ljust(24, b"\0"), name, int(c["bits"]))
-            res = self._call("POST", "/v1/account", {"name": name, "password": password, "challenge": c["challenge"], "nonce": nonce, "label": self._label()})
+            res = self._call("POST", "/v1/account", {"name": name, "password": password, "challenge": c["challenge"], "nonce": nonce, "label": self._label(),
+                                                      **({"invite": invite.strip().upper()} if invite.strip() else {})})   # Server lässt neue Konten evtl. nur mit Einladung zu
         except ServerError as x:
             raise ValueError(self._explain(x, "anlegen geht nicht")) from None
         self._store(name, res["token"])
